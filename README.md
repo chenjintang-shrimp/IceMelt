@@ -21,7 +21,10 @@ src/main.cpp                  TUI 前端（FTXUI），首屏为前置条件自�
 third_party/WinDisk/          内核驱动（独立 xmake 工程）
   ├── xmake.lua               驱动构建脚本（wdk.env.wdm + wdk.driver 规则）
   └── *.cpp/*.h               驱动源码 —— 直发 SCSI 到 miniport（绕过文件系统）
-third_party/ntfs-3g/          改造版 ntfs-3g —— 含 handle: 设备协议与 ntfs-3g-cli
+third_party/ntfs-3g/          改造版 ntfs-3g（独立 xmake 工程，msys/cygwin 目标）
+  ├── xmake.lua               构建脚本（-p msys + cygwin gcc）
+  ├── config.h                configure 产物，构建必需（故纳入版本控制）
+  └── libntfs-3g/ src/ ntfsprogs/
 third_party/KDU/              git submodule（hfiref0x/KDU）—— 关闭 DSE
 ```
 
@@ -68,6 +71,34 @@ xmake build -P .
 
 产出的 `WinDisk.sys` 与原 MSVC 产物对照：machine `0x8664`、subsystem NATIVE、导入
 `ntoskrnl.exe`(45) + `HAL.dll`(`HalReturnToFirmware`) 完全一致。
+
+### 构建 ntfs-3g
+
+ntfs-3g 也走独立 xmake 工程，但目标平台是 **MSYS2 的 msys 子系统（Cygwin 兼容环境）**，
+**不是** ucrt64 / mingw64 / clang64：
+
+```sh
+cd third_party/ntfs-3g
+xmake f -P . --yes -p msys -a x86_64 --toolchain=gcc \
+    --cc=D:/msys64/usr/bin/gcc.exe  --cxx=D:/msys64/usr/bin/g++.exe \
+    --ld=D:/msys64/usr/bin/g++.exe --ar=D:/msys64/usr/bin/ar.exe
+xmake build -P .
+# -> build/msys/x86_64/release/{libntfs-3g.a, ntfsfix.exe, ntfscp.exe, ntfs-3g-cli.exe}
+```
+
+两个容易踩的点：
+
+1. **必须显式指定 `--cc/--cxx/--ld/--ar`。** 否则 xmake 会用 PATH 里搜到的 gcc；若 PATH 中
+   `ucrt64` 先于 `msys64/usr/bin`，就会静默选到 **ucrt64 的 mingw 版 gcc**，编出来的不是
+   Cygwin 目标。`D:/msys64/usr/bin/gcc.exe` 的 target 是 `x86_64-pc-cygwin`。
+2. **调用时 PATH 需包含 `D:\msys64\usr\bin`。** 否则 gcc 驱动 spawn 的 `cc1.exe` 找不到
+   `msys-2.0.dll`，报 `error while loading shared libraries`，并连带使 `-fPIC` / `-MMD`
+   等 flag 探测全部失败。在 MSYS 控制台里直接跑则无此问题。
+
+产出物依赖 `msys-2.0.dll`（可在 dumpbin 的 dependents 里看到），这也反证目标是 Cygwin。
+
+另外 `-std` 被钉到 **gnu17**：上游没指定 `-std`，而 gcc 15 默认 gnu23，C23 取消了隐式函数
+声明等宽松规则，2022 年的老代码会大面积报错。
 
 ### 运行
 

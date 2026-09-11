@@ -15,12 +15,13 @@ Release/
 *.obj
 
 # ---- ntfs-3g (autotools + cygwin) 构建产物 ----
-# 保留输入（configure / Makefile.in / configure.ac / m4 等），忽略输出
+# 保留输入（configure / Makefile.in / configure.ac / m4 等），忽略输出。
+# config.h 例外：它是本工程构建必需的（-DHAVE_CONFIG_H），且不含主机相关绝对路径，
+# 因此纳入版本控制，使新克隆无需 autotools 即可构建。
 third_party/ntfs-3g/libtool
 third_party/ntfs-3g/config.log
 third_party/ntfs-3g/config.status
 third_party/ntfs-3g/stamp-h1
-third_party/ntfs-3g/config.h
 third_party/ntfs-3g/Makefile
 third_party/ntfs-3g/**/Makefile
 third_party/ntfs-3g/.libs/

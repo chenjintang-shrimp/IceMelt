@@ -8,6 +8,15 @@
 #include <wchar.h>
 #include "ntfs-3g-fuse.h"
 #include "ntfs-3g-cli.h"
+/* ntfs_malloc/ntfs_free 声明在 misc.h。 */
+#include "misc.h"
+/* ntfs_ucstombs/ntfs_mbstoucs 本应来自 unistr.h，但那个头会带入 layout.h，
+   而 layout.h 无条件定义 GUID / SID_IDENTIFIER_AUTHORITY，与本文件已包含的
+   <windows.h> 冲突。这里只取这两个原型（types.h 自带 <windef.h> 适配）。 */
+#include "types.h"
+extern int ntfs_ucstombs(const ntfschar *ins, const int ins_len, char **outs,
+                         int outs_len);
+extern int ntfs_mbstoucs(const char *ins, ntfschar **outs);
 
 const char *EXEC_NAME = "ntfs-3g";
 
@@ -297,7 +306,7 @@ int list_dir_filler(void *buf, char *name, struct stat *st, int unused) {
 		wcscpy(res, tmp);
 		ntfs_free(tmp);
 		DWORD dwWrite;
-		MyFileOP(WriteFile, pipewrite, res, sizeof(res), &dwWrite);
+		MyFileOP((LPFN_FILE_OP_FUNC)WriteFile, pipewrite, res, sizeof(res), &dwWrite);
 	}
 	return 0;
 }
@@ -657,7 +666,7 @@ int main(int argc, char **argv) {
 		while (1) {
 			COMMAND_PARAMS params;
 			DWORD dwRead;
-			if (!MyFileOP(ReadFile, piperead, &params, sizeof(params), &dwRead) || dwRead != sizeof(params))
+			if (!MyFileOP((LPFN_FILE_OP_FUNC)ReadFile, piperead, &params, sizeof(params), &dwRead) || dwRead != sizeof(params))
 				break;
 			char *file1 = wstrconv(params.szFile1);
 			char *file2 = wstrconv(params.szFile2);
@@ -834,7 +843,7 @@ int main(int argc, char **argv) {
 			wcscpy(resp.curdir, wcurdir);
 			ntfs_free(wcurdir);
 			DWORD dwWrite;
-			MyFileOP(WriteFile, pipewrite, &resp, sizeof(resp), &dwWrite);
+			MyFileOP((LPFN_FILE_OP_FUNC)WriteFile, pipewrite, &resp, sizeof(resp), &dwWrite);
 			if (resp.ret == 0) {
 				if (params.nCmd == CMD_LS) {
 					char *pth = gen_path(file1);
@@ -848,12 +857,12 @@ int main(int argc, char **argv) {
 						int sz = sizeof(wchar_t) * 512 * (resp.ls_res - file_count);
 						wchar_t *tmp = malloc(sz);
 						memset(tmp, 0, sz);
-						MyFileOP(WriteFile, pipewrite, tmp, sz, &dwWrite);
+						MyFileOP((LPFN_FILE_OP_FUNC)WriteFile, pipewrite, tmp, sz, &dwWrite);
 					}
 					free(pth);
 				} else if (params.nCmd == CMD_READLINK) {
 					DWORD dwWrite;
-					MyFileOP(WriteFile, pipewrite, retpth, sizeof(retpth), &dwWrite);
+					MyFileOP((LPFN_FILE_OP_FUNC)WriteFile, pipewrite, retpth, sizeof(retpth), &dwWrite);
 				}
 			}
 			ntfs_free(file1);
