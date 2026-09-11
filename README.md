@@ -22,8 +22,7 @@ third_party/WinDisk/          内核驱动（独立 xmake 工程）
   ├── xmake.lua               驱动构建脚本（wdk.env.wdm + wdk.driver 规则）
   └── *.cpp/*.h               驱动源码 —— 直发 SCSI 到 miniport（绕过文件系统）
 third_party/ntfs-3g/          改造版 ntfs-3g（独立 xmake 工程，msys/cygwin 目标）
-  ├── xmake.lua               构建脚本（-p msys + cygwin gcc）
-  ├── config.h                configure 产物，构建必需（故纳入版本控制）
+  ├── xmake.lua               构建脚本（-p msys + cygwin gcc，含 config.h 自动生成）
   └── libntfs-3g/ src/ ntfsprogs/
 third_party/KDU/              git submodule（hfiref0x/KDU）—— 关闭 DSE
 ```
@@ -99,6 +98,31 @@ xmake build -P .
 
 另外 `-std` 被钉到 **gnu17**：上游没指定 `-std`，而 gcc 15 默认 gnu23，C23 取消了隐式函数
 声明等宽松规则，2022 年的老代码会大面积报错。
+
+#### config.h 由 xmake 自动生成
+
+`config.h` 是 autoconf 产物、构建必需（`-DHAVE_CONFIG_H`），但**不入库**：缺失时
+`xmake.lua` 里的 `ntfs3g.config` 规则会自动调用 configure 把它生成出来，无需手工步骤。
+
+生成用的命令**不能简化**，必须分两步：
+
+```sh
+./configure --disable-ntfs-3g --no-create --no-recursion
+./config.status config.h
+```
+
+原因：直接跑 `./configure` 会在 `AC_OUTPUT` 阶段触发 `config.status --recheck`（把 configure
+整个重跑一遍），而那种情况下产出的 `config.h` **与它自己的探测结果不一致** —— 实测日志里
+`ac_cv_c_bigendian=no`，生成的 `config.h` 里 `WORDS_LITTLEENDIAN` 却是 `#undef`。这会打乱
+`libntfs-3g/dir.c` 里 `index_union` 的类型定义，编译直接报 “incompatible type for argument 5
+of `ntfs_filldir`”。用 `--no-create` 阻止 `AC_OUTPUT` 自动执行 config.status，再显式只生成
+`config.h`，就绕开了这条路径。
+
+在 MSYS 控制台里手工执行同样两步即可重建（想强制重建就先删掉 `config.h`）。
+
+MSYS 的 msys 子系统未装 diffutils 时，configure 会打印 `cmp`/`diff: command not found`，
+导致少数探测（如 `LSTAT_FOLLOWS_SLASHED_SYMLINK`、`HAVE_STDBOOL_H`）落空；这两个宏在本工程
+编译的任何源码里都**未被使用**（全树 grep 无命中），可直接忽略。
 
 ### 运行
 
