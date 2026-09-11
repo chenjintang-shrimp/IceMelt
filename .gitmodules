@@ -1,0 +1,3 @@
+[submodule "third_party/KDU"]
+	path = third_party/KDU
+	url = https://github.com/hfiref0x/KDU.git

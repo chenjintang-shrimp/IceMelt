@@ -1,0 +1,43 @@
+# ---- xmake ----
+.xmake/
+build/
+*.xmake
+
+# ---- MSVC / VS ----
+.vs/
+x64/
+Debug/
+Release/
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.obj
+
+# ---- ntfs-3g (autotools + cygwin) 构建产物 ----
+# 保留输入（configure / Makefile.in / configure.ac / m4 等），忽略输出
+third_party/ntfs-3g/libtool
+third_party/ntfs-3g/config.log
+third_party/ntfs-3g/config.status
+third_party/ntfs-3g/stamp-h1
+third_party/ntfs-3g/config.h
+third_party/ntfs-3g/Makefile
+third_party/ntfs-3g/**/Makefile
+third_party/ntfs-3g/.libs/
+third_party/ntfs-3g/.deps/
+third_party/ntfs-3g/**/.libs/
+third_party/ntfs-3g/**/.deps/
+*.o
+*.lo
+*.la
+*.so
+*.a
+*.dll
+*.exe
+
+# ---- 杂项 ----
+__pycache__/
+*.swp
+.idea/
+.clangd/
+compile_commands.json
