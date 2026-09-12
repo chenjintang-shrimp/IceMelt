@@ -33,10 +33,36 @@ end
 -- FTXUI v7.0.3（xmake-repo，MIT）
 add_requires("ftxui v7.0.3")
 
+-- ============================================================================
+-- 一键构建：third_party 下的三个子工程各有自己的工具链，无法并进同一个 xmake
+-- 工程（内核 WDK 规则 / msys-cygwin 的 gcc / clang-cl 用户态程序），因此这里在
+-- secmelt 链接完成后依次驱动它们，再把产物搬到 exe 旁边。
+--
+--   xmake build            构建全部（本程序 + 驱动 + ntfs-3g 工具 + KDU）
+--   xmake build -P .       同上；子工程不可用时跳过并打印原因，不静默
+-- ============================================================================
+local XMAKE = os.programfile()
+local BUILD_MODE = get_config("mode") or "release"
+local ROOT = os.projectdir()
+-- MSYS2 安装根：ntfs-3g 子工程与（生成 config.h 用的）bash 都在这里。可用 MSYS_ROOT 覆盖。
+local MSYS_ROOT = os.getenv("MSYS_ROOT") or "D:/msys64"
+local MSYS_BIN = path.join(MSYS_ROOT, "usr/bin")
+-- mingw-w64 工具链：ntfs-3g 的目标平台（详见该子工程的 xmake.lua）
+local MINGW_BIN = path.join(MSYS_ROOT, "mingw64/bin")
+-- Windows Kits 10 根：xmake 的 wdk 规则就是从这里取内核头/库的
+local WIN_KITS = os.getenv("WindowsSdkDir") or "C:/Program Files (x86)/Windows Kits/10"
+
+
 target("secmelt")
     set_kind("binary")
-    add_files("src/*.cpp")
+    -- 递归收集 src 下的源文件（reg/ raw/ melt/ 三个子目录）
+    add_files("src/**.cpp")
+
     add_packages("ftxui")
+
+    -- 源码按 reg/ raw/ melt/ 分目录，内部一律用 "目录/头文件.h" 形式互相引用，
+    -- 因此 src 本身要在搜索路径上。
+    add_includedirs("src", "third_party")
 
     -- clang-cl 需要 /utf-8 才能正确解析源码中的 UTF-8 字面量
     if using_clang_cl() then
@@ -45,5 +71,124 @@ target("secmelt")
 
     if is_plat("windows") then
         add_defines("UNICODE", "_UNICODE", "NOMINMAX", "WIN32_LEAN_AND_MEAN")
-        add_syslinks("advapi32", "shell32", "user32")
+        add_syslinks("advapi32", "shell32", "user32", "rpcrt4")
     end
+
+    after_build(function (target)
+        -- 注意：xmake 的沙箱按 chunk 分配权限 —— 顶层 chunk 里没有 os.execv，
+        -- 只有回调（如 after_build）内部才有。所以这个 helper 必须定义在这里。
+        local function sub_build(spec)
+            local dir = path.join(ROOT, spec.dir)
+            if not os.isdir(dir) then
+                print("SecMelt: skip " .. spec.label .. " (" .. spec.dir .. " is missing)")
+                return
+            end
+            -- 前置缺失时打印原因并跳过，而不是让整个 xmake build 失败：
+            -- 这些产物各自服务于链路的一小段，缺了会在运行日志里明确报出来。
+            for _, need in ipairs(spec.needs or {}) do
+                local file = need.path
+                if not path.is_absolute(file) then file = path.join(ROOT, file) end
+                -- 前置可以是文件或目录（如 WDK 的 Include）
+                if not (os.isfile(file) or os.isdir(file)) then
+                    print("SecMelt: skip " .. spec.label .. " (" .. need.what .. " missing: " .. file .. ")")
+                    return
+                end
+            end
+            local configure = {"f", "-P", dir, "--yes", "-m", BUILD_MODE}
+            os.execv(XMAKE, table.join(configure, spec.configure), {curdir = dir})
+            os.execv(XMAKE, {"build", "-P", dir}, {curdir = dir, addenvs = spec.envs,
+                                                   setenvs = spec.setenvs})
+        end
+
+        -- 先构建第三方产物，再把它们搬到 exe 旁边
+        sub_build({
+            label = "WinDisk driver",
+            dir = "third_party/WinDisk",
+            needs = {
+                {path = "third_party/WinDisk/xmake.lua", what = "driver project"},
+                -- WDK 只能探测到本机 Windows Kits 10；没有就跳过（驱动是裸盘功能的硬前提）
+                {path = path.join(WIN_KITS, "Include"), what = "Windows Driver Kit"},
+            },
+            configure = {"-p", "windows", "-a", "x64", "--toolchain=" .. tostring(get_config("toolchain") or DEFAULT_TOOLCHAIN)},
+            -- 驱动的目标系统版本：默认 win7（产出的 .sys 最低子系统版本 6.01，Win7 SP1 →
+            -- Win11 都能加载）。只面向 Win10+ 时用 SECMELT_WDK_WINVER=win10。
+            -- 这里显式转发而不是依赖环境继承，使"构建出的是哪个目标版本"在脚本里可见。
+            setenvs = {SECMELT_WDK_WINVER = os.getenv("SECMELT_WDK_WINVER") or "win7"},
+        })
+        sub_build({
+            label = "ntfs-3g tools",
+            dir = "third_party/ntfs-3g",
+            -- 目标平台是 mingw-w64（不是 msys/cygwin）：cygwin 产物依赖 msys-2.0.dll，
+            -- 而 Cygwin 3.5 起不再支持 Win7 —— 那样 ntfscp 在 Win7 上起不来，而它
+            -- 正是把 hive 写回磁盘的唯一手段。mingw-w64 静态链接后只依赖
+            -- kernel32/msvcrt，Win7 自带。
+            needs = {{path = path.join(MINGW_BIN, "gcc.exe"), what = "mingw-w64 gcc"}},
+            configure = {
+                "-p", "mingw", "-a", "x86_64", "--toolchain=gcc",
+                "--cc=" .. path.join(MINGW_BIN, "gcc.exe"),
+                "--cxx=" .. path.join(MINGW_BIN, "g++.exe"),
+                "--ld=" .. path.join(MINGW_BIN, "g++.exe"),
+                "--ar=" .. path.join(MINGW_BIN, "ar.exe"),
+            },
+            -- 构建期 mingw 工具链要从 PATH 找到自己的 DLL；生成 config.h 那一步
+            -- 还需要 msys 的 bash（子工程脚本会自己带上 /usr/bin）。
+            envs = {PATH = MINGW_BIN},
+            setenvs = {MSYS_ROOT = MSYS_ROOT},
+        })
+        sub_build({
+            label = "KDU",
+            dir = "third_party/KDU.build",
+            -- 构建脚本由父仓库跟踪（源码是 submodule）；缺失即跳过
+            needs = {{path = "third_party/KDU.build/xmake.lua", what = "KDU build script"}},
+            configure = {"-p", "windows", "-a", "x64"},
+        })
+
+        -- ---- 产物落位：让输出目录自成一套可直接运行的组合 --------------------
+        local outdir = target:targetdir()
+
+        -- 目标名单：复制到输出目录，使运行时紧邻 exe（LoadTargets 先查 <exeDir>/targets.txt）
+        os.cp(path.join(ROOT, "config/targets.txt"), path.join(outdir, "targets.txt"))
+
+        local sys = path.join(ROOT, "third_party/WinDisk/build/windows/x64", BUILD_MODE, "WinDisk.sys")
+        if os.isfile(sys) then
+            os.cp(sys, path.join(outdir, "WinDisk_x64.sys"))
+        else
+            print("SecMelt: WARNING driver not found at " .. sys .. " (raw disk features will be unavailable)")
+        end
+
+        local tools = {"ntfsfix.exe", "ntfscp.exe", "ntfs-3g-cli.exe"}
+        local toolsdir = path.join(outdir, "tools")
+        for _, name in ipairs(tools) do
+            -- mingw-w64 产物（原来是 msys/x86_64——那是 cygwin 目标，Win7 用不了）
+            local tool = path.join(ROOT, "third_party/ntfs-3g/build/mingw/x86_64", BUILD_MODE, name)
+            if os.isfile(tool) then
+                os.mkdir(toolsdir)
+                os.cp(tool, path.join(toolsdir, name))
+            else
+                print("SecMelt: WARNING ntfs-3g tool not found at " .. tool ..
+                      " (raw NTFS write-back will be unavailable)")
+            end
+        end
+        -- 不再需要随包分发 msys-2.0.dll：mingw 产物静态链接，只依赖 Win7 自带的
+        -- kernel32.dll + msvcrt.dll（可用 dumpbin /dependents 复核）。
+        local stale = path.join(toolsdir, "msys-2.0.dll")
+        if os.isfile(stale) then
+            os.rm(stale)
+        end
+
+        local kdu = path.join(ROOT, "third_party/KDU.build/build/windows/x64", BUILD_MODE, "kdu.exe")
+        if os.isfile(kdu) then
+            os.cp(kdu, path.join(outdir, "kdu.exe"))
+        end
+        -- drv64.dll 必须与 kdu.exe 同目录：它是 KDU 的 provider 数据库（含全部 provider
+        -- 驱动）。缺了它 kdu 会用那份空的内嵌表，表现为 "Provider: (null)" +
+        -- "Driver resource id cannot be found"，然后**静默地什么都不做**（-dse 也不会生效）。
+        local drv64 = path.join(ROOT, "third_party/KDU.build/build/windows/x64", BUILD_MODE,
+                                "drv64.dll")
+        if os.isfile(drv64) then
+            os.cp(drv64, path.join(outdir, "drv64.dll"))
+        else
+            print("SecMelt: WARNING drv64.dll not found at " .. drv64 ..
+                  " -- kdu will not be able to load any provider")
+        end
+    end)
