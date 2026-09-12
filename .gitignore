@@ -43,6 +43,13 @@ third_party/ntfs-3g/**/.deps/
 *.dll
 *.exe
 
+# 产物规则不能误伤许可文件：Windows 下 git 默认大小写不敏感，`*.lib` 会命中
+# third_party/ntfs-3g/COPYING.LIB（GPL 项目里这个文件必须入库）。
+!COPYING
+!COPYING.*
+!LICENSE*
+!NOTICE*
+
 # ---- 杂项 ----
 __pycache__/
 *.swp
