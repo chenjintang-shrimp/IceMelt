@@ -44,11 +44,13 @@ add_requires("ftxui v7.0.3")
 local XMAKE = os.programfile()
 local BUILD_MODE = get_config("mode") or "release"
 local ROOT = os.projectdir()
--- MSYS2 安装根：ntfs-3g 子工程与（生成 config.h 用的）bash 都在这里。可用 MSYS_ROOT 覆盖。
+-- MSYS2 安装根：只在生成 ntfs-3g 的 config.h 时用到它的 bash（Git for Windows 的也行）。
+-- 可用 MSYS_ROOT 覆盖。
 local MSYS_ROOT = os.getenv("MSYS_ROOT") or "D:/msys64"
-local MSYS_BIN = path.join(MSYS_ROOT, "usr/bin")
--- mingw-w64 工具链：ntfs-3g 的目标平台（详见该子工程的 xmake.lua）
-local MINGW_BIN = path.join(MSYS_ROOT, "mingw64/bin")
+-- mingw-w64 工具链根：默认取 MSYS2 的 mingw64，任意发行版都可以（WinLibs、w64devkit…）。
+-- 它是原生 Windows 工具链，不依赖 msys-2.0.dll；要选 msvcrt 变体而不是 ucrt64。
+local MINGW_ROOT = os.getenv("MINGW_ROOT") or path.join(MSYS_ROOT, "mingw64")
+local MINGW_BIN = path.join(MINGW_ROOT, "bin")
 -- Windows Kits 10 根：xmake 的 wdk 规则就是从这里取内核头/库的
 local WIN_KITS = os.getenv("WindowsSdkDir") or "C:/Program Files (x86)/Windows Kits/10"
 
@@ -130,10 +132,10 @@ target("secmelt")
                 "--ld=" .. path.join(MINGW_BIN, "g++.exe"),
                 "--ar=" .. path.join(MINGW_BIN, "ar.exe"),
             },
-            -- 构建期 mingw 工具链要从 PATH 找到自己的 DLL；生成 config.h 那一步
-            -- 还需要 msys 的 bash（子工程脚本会自己带上 /usr/bin）。
+            -- 构建期 mingw 工具链要从 PATH 找到自己的 DLL；config.h 那一步还需要一个
+            -- POSIX shell（子工程会自己找 MSYS2 或 Git for Windows 的 bash）。
             envs = {PATH = MINGW_BIN},
-            setenvs = {MSYS_ROOT = MSYS_ROOT},
+            setenvs = {MSYS_ROOT = MSYS_ROOT, MINGW_ROOT = MINGW_ROOT},
         })
         sub_build({
             label = "KDU",

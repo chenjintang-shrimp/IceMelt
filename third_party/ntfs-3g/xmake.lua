@@ -31,11 +31,30 @@ set_languages("gnu17")
 
 add_rules("mode.debug", "mode.release")
 
--- MSYS2 安装根：mingw-w64 工具链与（生成 config.h 用的）bash 都在这里。
--- 可用 MSYS_ROOT 覆盖。
+-- mingw-w64 工具链：任意发行版都行。它是原生 Windows 程序（只依赖系统 DLL 与自己的
+-- libwinpthread-1.dll / libgcc_s_seh-1.dll），不依赖 msys-2.0.dll，所以 MSYS2 的
+-- mingw64、WinLibs、w64devkit 等等都一样用；把 MINGW_ROOT 指过去即可。
+-- 注意要选 **msvcrt** 变体（MSYS2 的 mingw64），不要 ucrt64：UCRT 在 Win7 上需要额外运行库。
 local MSYS_ROOT = os.getenv("MSYS_ROOT") or "D:/msys64"
-local MSYS_BASH = MSYS_ROOT .. "/usr/bin/bash.exe"
-local MINGW_BIN = MSYS_ROOT .. "/mingw64/bin"
+local MINGW_ROOT = os.getenv("MINGW_ROOT") or (MSYS_ROOT .. "/mingw64")
+local MINGW_BIN = MINGW_ROOT .. "/bin"
+
+-- config.h 的生成（autoconf）需要一个 POSIX shell + coreutils，但**不挑发行版**：
+-- MSYS2 的 bash 与 Git for Windows 的 bash 产出的 config.h 逐字节一致（实测）。
+-- config.h 已存在时，这一步完全跳过，连 shell 都不需要。
+local function find_shell()
+    local candidates = {
+        MSYS_ROOT .. "/usr/bin/bash.exe",
+        os.getenv("ProgramFiles") .. "/Git/bin/bash.exe",
+        os.getenv("ProgramFiles") .. "/Git/usr/bin/bash.exe",
+        "C:/Program Files/Git/bin/bash.exe",
+        "C:/Program Files/Git/usr/bin/bash.exe",
+    }
+    for _, sh in ipairs(candidates) do
+        if sh and os.isfile(sh) then return sh end
+    end
+    return nil
+end
 
 -- D:/foo -> /d/foo（msys 形式）
 local function to_msys(p)
@@ -83,16 +102,20 @@ rule("ntfs3g.mingw.config")
             return
         end
 
-        if not os.isfile(MSYS_BASH) then
-            raise("ntfs-3g: bash not found at " .. MSYS_BASH ..
-                  " -- set MSYS_ROOT to your MSYS2 install root")
-        end
         if not os.isfile(MINGW_BIN .. "/gcc.exe") then
             raise("ntfs-3g: mingw-w64 gcc not found at " .. MINGW_BIN ..
-                  "/gcc.exe -- install it with: pacman -S mingw-w64-x86_64-gcc")
+                  "/gcc.exe -- install it with: pacman -S mingw-w64-x86_64-gcc, "
+                  .. "or point MINGW_ROOT at any mingw-w64 toolchain")
         end
 
-        print("[ntfs-3g] generating a mingw-w64 config.h (one-time)")
+        local shell = find_shell()
+        if not shell then
+            raise("ntfs-3g: no POSIX shell found for generating config.h (looked at " ..
+                  MSYS_ROOT .. "/usr/bin/bash.exe and Git for Windows). " ..
+                  "Set MSYS_ROOT, or delete nothing and keep the existing config.h.")
+        end
+
+        print("[ntfs-3g] generating a mingw-w64 config.h (one-time, via " .. shell .. ")")
         local scratch = PROJECT_DIR .. "/build/mingw-src"
         local cmd = table.concat({
             "export PATH=" .. to_msys(MINGW_BIN) .. ":$PATH",
@@ -114,7 +137,7 @@ rule("ntfs3g.mingw.config")
             "cd " .. to_msys(PROJECT_DIR) .. " && rm -rf " .. to_msys(scratch),
         }, " && ")
 
-        local code = os.execv(MSYS_BASH, {"-lc", cmd})
+        local code = os.execv(shell, {"-lc", cmd})
         assert(code == 0, "ntfs-3g: mingw configure failed, exit code " .. tostring(code))
         assert(os.isfile(config_h), "ntfs-3g: configure did not produce config.h")
     end)
@@ -138,15 +161,9 @@ end
 target("ntfs-3g")
     set_kind("static")
     add_rules("ntfs3g.mingw.config")
-    -- 源集合照抄 configure 生成的 Makefile：31 个核心源（含 WINDOWS 分支的
-    -- win32_io.c），**不含 unix_io.c**。
-    --
-    -- 这里显式列出而不是用 `add_files("libntfs-3g/*.c", {excludes = ...})`：
-    -- xmake 的 excludes 是 Lua 模式，且比对的是内部路径字符串，实测
-    -- "unix_io.c" 与 "libntfs-3g/unix_io.c" 都没能命中（"libntfs-3g/unix_io.c"
-    -- 里的 `-` 还会被当成量词）。之前 cygwin 那份 xmake.lua 就是这么写的，
-    -- 于是 unix_io.c 一直被编进归档却无人察觉（cygwin 有 fsync/fcntl/flock，
-    -- 编得过；mingw 编不过才暴露）。枚举没有这层歧义。
+    -- 显式枚举而不是 `add_files("libntfs-3g/*.c", {excludes = ...})`：
+    -- xmake 的 excludes 是 Lua 模式、比对的是内部路径字符串，实测 "unix_io.c" 与
+    -- "libntfs-3g/unix_io.c" 都命中不了（后者里的 `-` 还会被当成量词）。
     add_files(
         "libntfs-3g/acls.c", "libntfs-3g/attrib.c", "libntfs-3g/attrlist.c",
         "libntfs-3g/bitmap.c", "libntfs-3g/bootsect.c", "libntfs-3g/cache.c",
