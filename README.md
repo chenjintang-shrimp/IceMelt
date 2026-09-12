@@ -26,6 +26,7 @@
 装好 xmake 和下面这些编译工具，一行 `xmake build` 一把梭：
 
 ```sh
+pwsh -File configure.ps1                               # 检查依赖（可选，退出码可用于 CI）
 xmake f --yes -p windows -a x64 --toolchain=clang-cl   # 只需一次
 xmake build
 ```
@@ -34,10 +35,13 @@ xmake build
 |---|---|
 | Visual Studio + LLVM（clang-cl） | secmelt.exe |
 | Windows Driver Kit | WinDisk.sys |
-| MSYS2，默认 `D:\msys64`（可用 `MSYS_ROOT` 覆盖） | ntfs-3g 工具，需要 `mingw-w64-x86_64-gcc` |
+| mingw-w64 工具链（默认取 MSYS2 的 `D:\msys64\mingw64`，`MINGW_ROOT` 可指向任意发行版） | ntfs-3g 工具。需要 **msvcrt** 变体，不要 ucrt64 |
+| 一个 POSIX shell（MSYS2 或 Git for Windows 的 bash 均可） | 仅首次生成 ntfs-3g 的 config.h 时用到 |
 | `third_party/KDU` submodule | kdu.exe + drv64.dll；克隆后 `git submodule update --init --recursive` |
 
-缺 WDK / MSYS2 / KDU 时构建会打印 `skip ...` 并继续，子工程各自独立。
+缺 WDK / mingw-w64 / KDU 时构建会打印 `skip ...` 并继续，子工程各自独立。
+`configure.ps1` 把每一项实际探测一遍（包括 mingw 用的是 msvcrt 还是 UCRT 变体），
+缺什么、怎么补都直接给出。
 
 面向 Win7 时驱动要注意工程的目标平台：`Desktop` 可选 Windows7，新的 `Windows Driver` 平台强制 Win10+。
 （微软 WDK 支持矩阵里只有 10.0.19041.5738 标注支持 Win7/8/8.1 驱动开发。）
@@ -114,7 +118,8 @@ Win7 上 ConEmu 切不了备用屏幕，界面不依赖它 —— 退出后内�
 ### 构建时
 
 **`skip KDU ...` / `skip ntfs-3g tools ...`？**
-KDU 需要 `git submodule update --init --recursive`，ntfs-3g 需要 `pacman -S mingw-w64-x86_64-gcc`。
+KDU 需要 `git submodule update --init --recursive`；ntfs-3g 需要 mingw-w64 工具链 ——
+MSYS2 里是 `pacman -S mingw-w64-x86_64-gcc`，或者用 `MINGW_ROOT` 指向别的发行版。
 
 **只删了某个子工程的产物，`xmake build` 不补建？**
 子工程挂在 secmelt 的链接步骤后面。用 `xmake build -r`，或进子目录单独构建。
