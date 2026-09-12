@@ -289,9 +289,9 @@ static int file_count = 0;
 int list_dir_filler(void *buf, char *name, struct stat *st, int unused) {
 	file_count++;
 	if (!nocli) {
-		if (st->st_mode & S_IFDIR) printf("<DIR> ");
-		else if (st->st_mode & S_IFREG) printf("<FILE> ");
-		else if (st->st_mode & S_IFLNK) printf("<LINK> ");
+		if (S_ISDIR(st->st_mode)) printf("<DIR> ");
+		else if (S_ISREG(st->st_mode)) printf("<FILE> ");
+		else if (S_ISLNK(st->st_mode)) printf("<LINK> ");
 		else printf("<UNKNOWN> ");
 		printf("%s\n", name);
 		if (interrupt) {
@@ -517,7 +517,15 @@ void ntfs_cpdir(const char *src, const char *dest) {
 		if (!strcmp(ptr->d_name, ".") || !strcmp(ptr->d_name, "..")) continue;
 		char fn[512];
 		sprintf(fn, "%s/%s", src, ptr->d_name);
-		if (ptr->d_type == DT_DIR) ntfs_cpdir(fn, ptr->d_name);
+		/*
+		 * Not d_type: mingw's struct dirent has no such member (Cygwin's
+		 * does), and asking the filesystem directly works on both. fn is
+		 * a local path -- the side being read -- so the C library stat is
+		 * the right call.
+		 */
+		struct stat entry_st;
+		if (!stat(fn, &entry_st) && S_ISDIR(entry_st.st_mode))
+			ntfs_cpdir(fn, ptr->d_name);
 		else errno = ntfs_copy(fn, ptr->d_name);
 	}
 	closedir(dir);
@@ -586,7 +594,17 @@ void ntfs_fetchdir(const char *src, const char *dest) {
 	strcpy(curdir, pth);
 	char tmpdir2[MAX_PATH];
 	getcwd(tmpdir2, MAX_PATH);
+#ifdef __MINGW32__
+	/*
+	 * mingw-w64's mkdir() is the CRT's one-argument _mkdir(); the POSIX
+	 * two-argument form with a mode exists only on Cygwin. The mode is
+	 * meaningless on Windows anyway -- a fresh directory gets the default
+	 * ACL -- so there is nothing to emulate.
+	 */
+	mkdir(dest);
+#else
 	mkdir(dest, 0777);
+#endif
 	chdir(dest);
 	if (errno = -ntfs_fuse_readdir(pth, NULL, fetchdir_filler, 0)) perror("fetchdir");
 	strcpy(curdir, tmpdir1);

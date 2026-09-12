@@ -66,6 +66,17 @@ int ffs(int x)
 #endif /* HAVE_FFS */
 
 #ifndef HAVE_DAEMON
+/*
+ * The BSD daemon() below needs fork() and setsid(). Cygwin has both; mingw-w64
+ * has neither, and daemonising is meaningless on Windows anyway (there is no
+ * session to detach from). Only src/ntfs-3g.c and src/lowntfs-3g.c -- the FUSE
+ * drivers, not built for Windows -- ever call daemon(), so leaving the
+ * definition out is correct rather than a limitation.
+ *
+ * Guarded on HAVE_FORK (set by configure wherever fork() links) so the
+ * condition states the actual requirement instead of naming an OS.
+ */
+#ifdef HAVE_FORK
 /* ************************************************************
  *  From: src.opensolaris.org
  *  src/lib/libresolv2/common/bsd/daemon.c
@@ -150,6 +161,7 @@ int daemon(int nochdir, int noclose) {
 /* 
  *  End: src/lib/libresolv2/common/bsd/daemon.c
  *************************************************************/
+#endif /* HAVE_FORK */
 #endif /* HAVE_DAEMON */
 
 #ifndef HAVE_STRSEP

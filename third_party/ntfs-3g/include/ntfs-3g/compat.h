@@ -80,7 +80,21 @@ extern char *strsep(char **stringp, const char *delim);
 #define atoll			_atoi64
 #define fdatasync		commit
 #define __inline__		inline
+/*
+ * This block is reached on the mingw build but not on Cygwin: xattrs.h only
+ * includes compat.h when the platform lacks xattr support, and Cygwin's
+ * config.h defines HAVE_SETXATTR.
+ *
+ * Blanking __attribute__ is right for MSVC-style compilers, but GCC (including
+ * mingw-w64) implements it -- and libntfs-3g/dir.c depends on it:
+ * index_union is declared `__attribute__((__transparent_union__))` so that
+ * ntfs_filldir() can be called with either union member. Without the attribute
+ * those calls stop compiling. Keep the macro for non-GCC Windows compilers
+ * only.
+ */
+#ifndef __GNUC__
 #define __attribute__(X)	/*nothing*/
+#endif
 
 #else /* !defined WINDOWS */
 

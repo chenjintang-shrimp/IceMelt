@@ -1,11 +1,17 @@
 #pragma once
-#include <sys/stat.h>
 
-#ifndef _TYPES_DEFINED
-typedef unsigned int mode_t;
-typedef unsigned int uid_t;
-typedef unsigned int gid_t;
-#endif
+/*
+ * POSIX types (mode_t, off_t, dev_t, uid_t, gid_t) come from the platform:
+ * Cygwin's <sys/types.h> has all of them, and the mingw-w64 build gets
+ * mode_t/off_t/dev_t from <sys/types.h> plus uid_t/gid_t from the shim in
+ * mingw-compat/. The previous hardcoded `typedef unsigned int mode_t;` block
+ * was only ever dead code under Cygwin (its headers define _TYPES_DEFINED) and
+ * collides with mingw's `typedef _mode_t mode_t` (unsigned short).
+ */
+#include <stddef.h>
+#include <stdint.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #ifdef HAVE_UTIME
 #include <utime.h>

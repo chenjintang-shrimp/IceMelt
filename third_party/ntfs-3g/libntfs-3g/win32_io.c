@@ -189,7 +189,17 @@ typedef unsigned long long ULONG_PTR; /* an integer the same size as a pointer *
 typedef unsigned long ULONG_PTR; /* an integer the same size as a pointer */
 #endif
 
+/*
+ * _get_osfhandle() lives in msvcrt.dll and is reached through the CRT import
+ * library on Cygwin, which declares it nowhere -- hence this local prototype.
+ * mingw-w64 *does* declare it, in <io.h> (pulled in through <unistd.h>), with
+ * an intptr_t return type; declaring it here as HANDLE would then be a
+ * conflicting declaration. The two call sites below cast the result, so both
+ * signatures work.
+ */
+#ifndef __MINGW32__
 HANDLE _get_osfhandle(int); /* from msvcrt.dll */
+#endif
 
 /*
  *		A few needed definitions not included in <windows.h>
@@ -2121,7 +2131,9 @@ int ntfs_win32_set_sparse(int fd)
 	HANDLE handle;
 	DWORD bytes;   
 
-	handle = _get_osfhandle(fd);
+	/* cast: mingw-w64 declares this as returning intptr_t, Cygwin's import
+	 * library has no declaration at all (see the prototype above) */
+	handle = (HANDLE)_get_osfhandle(fd);
 	if (handle == INVALID_HANDLE_VALUE)
 		ok = FALSE;
 	else
@@ -2185,7 +2197,9 @@ int ntfs_win32_ftruncate(int fd, s64 size)
 	int ret;
 	HANDLE handle;
 
-	handle = _get_osfhandle(fd);
+	/* cast: mingw-w64 declares this as returning intptr_t, Cygwin's import
+	 * library has no declaration at all (see the prototype above) */
+	handle = (HANDLE)_get_osfhandle(fd);
 	ret = win32_ftruncate(handle, size);
 	return (ret);
 }
