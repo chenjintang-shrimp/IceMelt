@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     SecMelt 的 configure 步骤：检测构建依赖，报告缺什么、怎么补。
 
@@ -147,26 +147,18 @@ if ($ok) {
     }
 }
 
-# --- config.h：存在就不需要 shell ---------------------------------------------
+# --- config.h：存在就不需要探测工具链 -----------------------------------------
 $configH = Join-Path $root 'third_party\ntfs-3g\build\mingw\config.h'
 $ok = Test-Path $configH
 Add-Result 'ntfs-3g config.h' $ok `
-    $(if ($ok) { $configH } else { 'not generated yet' }) `
-    'generated automatically on first build; needs a POSIX shell' $false
+    $(if ($ok) { 'present' } else { 'not generated yet' }) `
+    'generated automatically on first build by genconfig.ps1 (needs gcc + PowerShell)' $false
 
-# --- POSIX shell：只在缺 config.h 时需要 --------------------------------------
-$shell = $null
-foreach ($cand in @(
-        (Join-Path $msysRoot 'usr\bin\bash.exe'),
-        (Join-Path $env:ProgramFiles 'Git\bin\bash.exe'),
-        'C:\Program Files\Git\bin\bash.exe')) {
-    if ($cand -and (Test-Path $cand)) { $shell = $cand; break }
-}
-$needed = -not (Test-Path $configH)
-$ok = [bool]$shell
-Add-Result 'POSIX shell' ($ok -or -not $needed) `
-    $(if ($ok) { $shell } elseif ($needed) { 'none found (MSYS2 or Git for Windows)' } else { 'not needed: config.h already exists' }) `
-    'install MSYS2 or Git for Windows, or set MSYS_ROOT' $needed
+# --- PowerShell：首次生成 config.h 时会用到（本脚本自己就跑在里面）-------------
+# 构建脚本优先用 pwsh，找不到就退回 Windows PowerShell 5.1；genconfig.ps1 两者都能跑。
+$pwshPath = Get-Command pwsh -ErrorAction SilentlyContinue
+$picked = if ($pwshPath) { $pwshPath.Source } else { "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" }
+Add-Result 'PowerShell' $true $picked 'used to probe the toolchain and write ntfs-3g config.h' $false
 
 # --- KDU submodule ------------------------------------------------------------
 $kduMarker = Join-Path $root 'third_party\KDU\Source\Hamakaze\kduprov.cpp'

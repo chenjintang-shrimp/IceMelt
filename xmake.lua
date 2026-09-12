@@ -44,11 +44,10 @@ add_requires("ftxui v7.0.3")
 local XMAKE = os.programfile()
 local BUILD_MODE = get_config("mode") or "release"
 local ROOT = os.projectdir()
--- MSYS2 安装根：只在生成 ntfs-3g 的 config.h 时用到它的 bash（Git for Windows 的也行）。
--- 可用 MSYS_ROOT 覆盖。
-local MSYS_ROOT = os.getenv("MSYS_ROOT") or "D:/msys64"
--- mingw-w64 工具链根：默认取 MSYS2 的 mingw64，任意发行版都可以（WinLibs、w64devkit…）。
+-- mingw-w64 工具链根：默认取 MSYS2 的 mingw64 目录，任意发行版都可以（WinLibs、w64devkit…）。
 -- 它是原生 Windows 工具链，不依赖 msys-2.0.dll；要选 msvcrt 变体而不是 ucrt64。
+-- MSYS_ROOT 在这里只是"默认前缀"，配置 ntfs-3g 的 config.h 不再需要 POSIX shell。
+local MSYS_ROOT = os.getenv("MSYS_ROOT") or "D:/msys64"
 local MINGW_ROOT = os.getenv("MINGW_ROOT") or path.join(MSYS_ROOT, "mingw64")
 local MINGW_BIN = path.join(MINGW_ROOT, "bin")
 -- Windows Kits 10 根：xmake 的 wdk 规则就是从这里取内核头/库的

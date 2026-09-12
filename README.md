@@ -36,7 +36,7 @@ xmake build
 | Visual Studio + LLVM（clang-cl） | secmelt.exe |
 | Windows Driver Kit | WinDisk.sys |
 | mingw-w64 工具链（默认取 MSYS2 的 `D:\msys64\mingw64`，`MINGW_ROOT` 可指向任意发行版） | ntfs-3g 工具。需要 **msvcrt** 变体，不要 ucrt64 |
-| 一个 POSIX shell（MSYS2 或 Git for Windows 的 bash 均可） | 仅首次生成 ntfs-3g 的 config.h 时用到 |
+| PowerShell（7 或系统自带的 5.1 都行） | 首次构建时探测工具链、生成 ntfs-3g 的 config.h |
 | `third_party/KDU` submodule | kdu.exe + drv64.dll；克隆后 `git submodule update --init --recursive` |
 
 缺 WDK / mingw-w64 / KDU 时构建会打印 `skip ...` 并继续，子工程各自独立。
