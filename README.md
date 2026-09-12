@@ -23,13 +23,7 @@
 
 ## 构建
 
-装好 xmake 和下面这些编译工具，一行 `xmake build` 一把梭：
-
-```sh
-pwsh -File configure.ps1                               # 检查依赖（可选，退出码可用于 CI）
-xmake f --yes -p windows -a x64 --toolchain=clang-cl   # 只需一次
-xmake build
-```
+本项目使用 xmake 作为构建系统。xmake 是正确的！强大的 lua 脚本让我能方便的实现繁重的各种乱七八糟的东西，以及烦人的驱动编译处理条件。
 
 | 依赖 | 用途 |
 |---|---|
@@ -39,12 +33,15 @@ xmake build
 | PowerShell（7 或系统自带的 5.1 都行） | 首次构建时探测工具链、生成 ntfs-3g 的 config.h |
 | `third_party/KDU` submodule | kdu.exe + drv64.dll；克隆后 `git submodule update --init --recursive` |
 
-缺 WDK / mingw-w64 / KDU 时构建会打印 `skip ...` 并继续，子工程各自独立。
-`configure.ps1` 把每一项实际探测一遍（包括 mingw 用的是 msvcrt 还是 UCRT 变体），
-缺什么、怎么补都直接给出。
+使用以下命令一把梭：
 
-面向 Win7 时驱动要注意工程的目标平台：`Desktop` 可选 Windows7，新的 `Windows Driver` 平台强制 Win10+。
-（微软 WDK 支持矩阵里只有 10.0.19041.5738 标注支持 Win7/8/8.1 驱动开发。）
+```sh
+pwsh -File configure.ps1                               # 检查依赖（可选，退出码可用于 CI）
+xmake f --yes -p windows -a x64 --toolchain=clang-cl   # 只需一次
+xmake build
+```
+
+看输出，缺啥补啥，我自认为写的很清楚。cold & dark （没有任何引人注目的颜色）代表一切正常。
 
 产物是一套可以直接拷到目标机的组合：
 
@@ -97,35 +94,42 @@ PsLFilt|影子系统 PowerShadow
 
 ### 运行时
 
-**kdu 输出 `Provider: "(null)"`，`-dse 0` 却像成功了？**
-`drv64.dll` 没跟 `kdu.exe` 放在一起。缺了它 KDU 用一个空表，一个驱动都不会加载，退出码仍是 0。
+Q：**kdu 输出 `Provider: "(null)"`，`-dse 0` 却像成功了？**
 
-**ConEmu 弹 `Max Real Console size was reached`？**
-ConEmu 能放大的控制台大小 = 显示尺寸 ÷ 真控制台字体的单元格大小。把真控制台字体改小
+A：`drv64.dll` 没跟 `kdu.exe` 放在一起。缺了它 KDU 用一个空表，一个驱动都不会加载，退出码仍是 0。
+
+Q：**ConEmu 弹 `Max Real Console size was reached`？**
+
+A：ConEmu 能放大的控制台大小 = 显示尺寸 ÷ 真控制台字体的单元格大小。把真控制台字体改小
 （Settings → **Features** → "Debugging options" 里 "Show real console" 旁的 **...** → **Real console font**，
 要用 TrueType 字体），或别最大化窗口，或把回滚缓冲设为 `h0`
 （Settings → **Size and Pos** → 取消 "Long console output"）。
 
-**TUI 闪 / 退出后清不干净？**
-Win7 上 ConEmu 切不了备用屏幕，界面不依赖它 —— 退出后内容留在屏幕上属于正常。
+Q：**TUI 闪 / 退出后清不干净？**
+
+A：Win7 上 ConEmu 切不了备用屏幕，界面不依赖它 —— 退出后内容留在屏幕上属于正常。
 把真控制台字体调小（见上一条）会更稳。
 
-**TUI 启动后直接退出，退出码 3？**
-当前控制台不解释 VT 转义序列，故意不启动以免刷屏。用 ConEmu / ANSICON，
+Q：**TUI 启动后直接退出，退出码 3？**
+
+A： 当前控制台不解释 VT 转义序列，故意不启动以免刷屏。用 ConEmu / ANSICON，
 或者走纯文本命令（`--dry-run` / `--melt --yes-i-know` / `--selftest-*` / `--dump`）。
 强行启动：`SECMELT_TUI_FORCE=1`。
 
 ### 构建时
 
-**`skip KDU ...` / `skip ntfs-3g tools ...`？**
-KDU 需要 `git submodule update --init --recursive`；ntfs-3g 需要 mingw-w64 工具链 ——
+Q：**`skip KDU ...` / `skip ntfs-3g tools ...`？**
+
+A：KDU 需要 `git submodule update --init --recursive`；ntfs-3g 需要 mingw-w64 工具链 ——
 MSYS2 里是 `pacman -S mingw-w64-x86_64-gcc`，或者用 `MINGW_ROOT` 指向别的发行版。
 
-**只删了某个子工程的产物，`xmake build` 不补建？**
-子工程挂在 secmelt 的链接步骤后面。用 `xmake build -r`，或进子目录单独构建。
+Q：**只删了某个子工程的产物，`xmake build` 不补建？**
 
-**驱动在 Win7 上不加载？**
-`dumpbin /headers WinDisk_x64.sys` 应为 `6.01 subsystem version`；显示 `10.00` 说明是
+A： 子工程挂在 secmelt 的链接步骤后面。用 `xmake build -r`，或进子目录单独构建。
+
+Q：**驱动在 Win7 上不加载？**
+
+A：`dumpbin /headers WinDisk_x64.sys` 应为 `6.01 subsystem version`；显示 `10.00` 说明是
 `SECMELT_WDK_WINVER=win10` 构建的。
 
 ## 许可
