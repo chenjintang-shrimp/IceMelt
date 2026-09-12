@@ -2,18 +2,15 @@
 #include "DataList.h"
 #include "FileUnlock.h"
 
-typedef enum _FIRMWARE_REENTRY {
-	HalHaltRoutine,
-	HalPowerDownRoutine,
-	HalRestartRoutine,
-	HalRebootRoutine,
-	HalInteractiveModeRoutine,
-	HalMaximumRoutine
-} FIRMWARE_REENTRY, *PFIRMWARE_REENTRY;
-
-EXTERN_C NTKERNELAPI VOID NTAPI HalReturnToFirmware(
-	LONG lReturnType
-);
+// CTL_REBOOT_SYSTEM 直接触发 bugcheck，而不是走 HalReturnToFirmware(HalRebootRoutine)。
+//
+// 两条路都会立刻复位机器，区别在于 bugcheck 之后内核不再有机会把内存里脏的注册表
+// hive 页刷回磁盘 —— SecMelt 在调用前刚用裸盘把导出的 SYSTEM hive 写上去，任何"温和"
+// 的关机/重启路径都可能用内存里的旧 hive 覆盖它。bugcheck 会先写崩溃转储（直写扇区的
+// 崩溃转储栈，落到 pagefile），再按系统设置自动重启。
+//
+// 0x0D000721 是自定义代码：Windows 里 0xDxxxxxxx 段留给第三方，不会与内置代码冲突。
+#define SECMELT_BUGCHECK_CODE   ((ULONG)0x0D000721)
 
 NTSTATUS DriverEntry(IN PDRIVER_OBJECT DriverObject, IN PUNICODE_STRING RegistryPath);
 VOID DriverUnload(IN PDRIVER_OBJECT DriverObject);
@@ -172,7 +169,14 @@ NTSTATUS DeviceIoctl(PDEVICE_OBJECT Device, PIRP pIrp)
 		else LogWarn("Failed to unlock file %ls, error code: 0x%.8X\n", Buffer, status);
 		break;
 	case CTL_REBOOT_SYSTEM:
-		HalReturnToFirmware(HalRebootRoutine);
+		// 不返回：内核在此停住，不刷脏页、不做关机通知
+		KeBugCheckEx(SECMELT_BUGCHECK_CODE,
+			(ULONG_PTR)Device,
+			(ULONG_PTR)ControlCode,
+			0,
+			0);
+		LogWarn("KeBugCheckEx returned, which must never happen!\n");
+		status = STATUS_UNSUCCESSFUL;
 		break;
 	default:
 		LogWarn("Unknown CODE!\n");

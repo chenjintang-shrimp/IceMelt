@@ -19,6 +19,39 @@ add_rules("mode.debug", "mode.release")
 local DEFAULT_TOOLCHAIN = "clang-cl"
 set_toolchains(DEFAULT_TOOLCHAIN)
 
+-- 目标 Windows 版本（对应 MSBuild 工程的 TargetVersion）。xmake 的 wdk 规则在没有这个值时
+-- 会全部落到 Windows 10：_NT_TARGET_VERSION=0x0A00、NTDDI_VERSION=0x0A000000，
+-- 并且把 PE 头写成「最低子系统版本 10.00」—— 那样的 .sys 在 Windows 7 上根本不会加载。
+--
+-- 默认 win7：产出的 .sys 最低子系统版本 6.01，从 Win7 SP1 一直到 Win11 都能加载
+-- （低版本目标对高版本系统是兼容的，反向不成立）。冻结还原类软件大量部署在 Win7 机房，
+-- 因此这个默认值同时覆盖新旧目标机。
+--
+-- 覆盖方式（优先级从高到低）：
+--   1. xmake f --wdk_winver=win10     （子工程自己的 config，会被根工程的 f 重置）
+--   2. SECMELT_WDK_WINVER=win10       （环境变量，根工程重配也保留）
+--   3. 本文件的默认值 win7
+--
+-- WDK 版本：现役的任何一版都还能面向 Win7 —— 逐个查过实际文件，26100、28000.1839、
+-- 28000.2526 都仍然定义 _NT_TARGET_VERSION_WIN7 (0x0601)、把它列在 Valid_NTTARGETVERSIONS 里、
+-- 并且带 km/x64/BufferOverflowK.lib；也都有 `Desktop + _NT_TARGET_VERSION < WIN8` 的专门处理。
+--
+-- 真正会挡住你的是 MSBuild 工程的 DriverTargetPlatform，不是 WDK 版本：
+--   * Desktop（默认，经典 WDM/KMDF 工程）  -> Win7 合法
+--   * Windows Driver（新工程模型）        -> 强制 _NT_TARGET_VERSION >= RS5，只能 Win10+
+-- 本工程不走 MSBuild 那套 props/targets（xmake 直接调 clang-cl/link.exe，自己下发
+-- _NT_TARGET_VERSION 等宏），所以那些校验一次都不跑。
+--
+-- 注意「能用」与「官方支持」的区别：微软的 WDK 支持矩阵里，只有 10.0.19041.5738 标注
+-- "Supported for Windows 7/Windows 8/Windows 8.1 driver development only"。
+--
+-- 构建时可能出现 `linkdir 'Windows Kits\10\Lib\win7\km\x64' not found` 警告 —— 那是 xmake
+-- 按版本名追加的库目录（WDK 8.1 时代的布局），本工程不需要，警告无害。
+local wdk_winver = get_config("wdk_winver") or os.getenv("SECMELT_WDK_WINVER") or "win7"
+if not get_config("wdk_winver") then
+    set_values("wdk.env.winver", wdk_winver)
+end
+
 target("WinDisk")
     -- wdk.env.wdm 注入 WDK 头/库路径与内核模式宏；wdk.driver 负责 .sys 命名、
     -- 链接 ntoskrnl/hal/wmilib/ntstrsafe、/kernel /driver /nodefaultlib 与入口点
