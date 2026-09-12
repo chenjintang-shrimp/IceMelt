@@ -39,62 +39,27 @@ local MSYS_ROOT = os.getenv("MSYS_ROOT") or "D:/msys64"
 local MINGW_ROOT = os.getenv("MINGW_ROOT") or (MSYS_ROOT .. "/mingw64")
 local MINGW_BIN = MINGW_ROOT .. "/bin"
 
--- config.h 的生成（autoconf）需要一个 POSIX shell + coreutils，但**不挑发行版**：
--- MSYS2 的 bash 与 Git for Windows 的 bash 产出的 config.h 逐字节一致（实测）。
--- config.h 已存在时，这一步完全跳过，连 shell 都不需要。
-local function find_shell()
-    local candidates = {
-        MSYS_ROOT .. "/usr/bin/bash.exe",
-        os.getenv("ProgramFiles") .. "/Git/bin/bash.exe",
-        os.getenv("ProgramFiles") .. "/Git/usr/bin/bash.exe",
-        "C:/Program Files/Git/bin/bash.exe",
-        "C:/Program Files/Git/usr/bin/bash.exe",
-    }
-    for _, sh in ipairs(candidates) do
-        if sh and os.isfile(sh) then return sh end
-    end
-    return nil
-end
-
--- D:/foo -> /d/foo（msys 形式）
-local function to_msys(p)
-    local drive, rest = p:match("^(%a):[/\\](.*)$")
-    if drive then
-        return "/" .. drive:lower() .. "/" .. rest:gsub("\\", "/")
-    end
-    return (p:gsub("\\", "/"))
-end
-
 local PROJECT_DIR = os.projectdir()
 local MINGW_CONFIG_DIR = PROJECT_DIR .. "/build/mingw"
 local MINGW_COMPAT_DIR = PROJECT_DIR .. "/mingw-compat"
 
--- config.h 由 autoconf 的 configure 生成，构建必需（-DHAVE_CONFIG_H）。
---
--- 生成方式有两处不能简化，都是实测踩出来的：
---
--- 1. configure 必须在**源码副本**里跑。configure 拒绝在"源目录已就地配置过"的
---    情况下做 out-of-tree 构建（会报 "source directory already configured"），
---    而 in-tree 跑又会把 config.h 写进源码根目录、与构建脚本共享同一份。
---    所以复制一份源码树、在其中生成 config.h，再把它取出来放到 build/mingw/，
---    副本随即删除。产物目录只留一个 config.h。
---
--- 2. 必须 --no-create --no-recursion 之后单独跑 `./config.status config.h`。
---    直接 `./configure` 会在 AC_OUTPUT 阶段触发 config.status --recheck（把
---    configure 重跑一遍），而那次重跑产出的 config.h 与其自身探测结果不一致
---    （实测：日志里 ac_cv_c_bigendian=no，config.h 里 WORDS_LITTLEENDIAN 却是
---    #undef），会让 libntfs-3g/dir.c 的 index_union 类型错乱、编译直接失败。
---
--- 另外三个 configure 参数/覆盖也是必需的：
---   --disable-plugins       插件要 dlopen/libdl，mingw 没有（dlopen 只用在
---                           src/ntfs-3g_common.c，本工程不编译它）
---   ac_cv_c_bigendian=no    交叉编译模式下 AC_C_BIGENDIAN 无法运行测试程序
---   ac_cv_header_libintl_h=no
---                           mingw64 装有 gettext 的 libintl.h，一旦探测到它，
---                           utils.c 就会 include <libintl.h>，而该头会把
---                           printf/setlocale/snprintf 重定向到 libintl_*，
---                           从而凭空多出一个 libintl DLL 依赖。cygwin 那份
---                           config.h 同样没有 HAVE_LIBINTL_H，这里保持一致。
+-- config.h 由 genconfig.ps1 用 gcc 探测生成（复刻 autoconf 的检查，产出与它逐字节一致）。
+-- 这一步**不需要 POSIX shell**：configure 本身是一份 19000 余行的 /bin/sh 脚本，
+-- 没有 shell 跑不起来，所以改成用 PowerShell 直接做探测（PS 5.1 与 pwsh 7 都能跑）。
+-- config.h 已存在时整个跳过。
+local function find_powershell()
+    local candidates = {
+        "pwsh.exe",                                   -- PowerShell 7+（PATH 里）
+        os.getenv("ProgramFiles") .. "/PowerShell/7/pwsh.exe",
+        (os.getenv("SystemRoot") or "C:/Windows") ..
+            "/System32/WindowsPowerShell/v1.0/powershell.exe",  -- 5.1，恒有
+    }
+    for _, ps in ipairs(candidates) do
+        if ps and (os.isfile(ps) or os.isfile(ps .. ".exe")) then return ps end
+    end
+    return nil
+end
+
 rule("ntfs3g.mingw.config")
     on_load(function (target)
         local config_h = MINGW_CONFIG_DIR .. "/config.h"
@@ -102,44 +67,28 @@ rule("ntfs3g.mingw.config")
             return
         end
 
-        if not os.isfile(MINGW_BIN .. "/gcc.exe") then
-            raise("ntfs-3g: mingw-w64 gcc not found at " .. MINGW_BIN ..
-                  "/gcc.exe -- install it with: pacman -S mingw-w64-x86_64-gcc, "
+        local gcc = MINGW_BIN .. "/gcc.exe"
+        if not os.isfile(gcc) then
+            raise("ntfs-3g: mingw-w64 gcc not found at " .. gcc ..
+                  " -- install it with: pacman -S mingw-w64-x86_64-gcc, "
                   .. "or point MINGW_ROOT at any mingw-w64 toolchain")
         end
 
-        local shell = find_shell()
-        if not shell then
-            raise("ntfs-3g: no POSIX shell found for generating config.h (looked at " ..
-                  MSYS_ROOT .. "/usr/bin/bash.exe and Git for Windows). " ..
-                  "Set MSYS_ROOT, or delete nothing and keep the existing config.h.")
+        local ps = find_powershell()
+        if not ps then
+            raise("ntfs-3g: PowerShell not found (looked for pwsh and " ..
+                  "System32/WindowsPowerShell/v1.0/powershell.exe); it is needed to probe " ..
+                  "the toolchain and write config.h")
         end
 
-        print("[ntfs-3g] generating a mingw-w64 config.h (one-time, via " .. shell .. ")")
-        local scratch = PROJECT_DIR .. "/build/mingw-src"
-        local cmd = table.concat({
-            "export PATH=" .. to_msys(MINGW_BIN) .. ":$PATH",
-            "rm -rf " .. to_msys(scratch) .. " && mkdir -p " .. to_msys(scratch),
-            "cd " .. to_msys(PROJECT_DIR),
-            "tar -cf - --exclude=build --exclude=.xmake --exclude=.libs " ..
-                "--exclude=.deps --exclude='*.o' --exclude='*.lo' --exclude='*.a' . " ..
-                "| (cd " .. to_msys(scratch) .. " && tar -xf -)",
-            "rm -f " .. to_msys(scratch) .. "/config.h " .. to_msys(scratch) ..
-                "/config.status " .. to_msys(scratch) .. "/stamp-h1",
-            "cd " .. to_msys(scratch),
-            "ac_cv_c_bigendian=no ac_cv_header_libintl_h=no " ..
-                "CC=x86_64-w64-mingw32-gcc AR=ar RANLIB=ranlib " ..
-                "./configure --host=x86_64-w64-mingw32 --disable-ntfs-3g " ..
-                "--disable-plugins --no-create --no-recursion > configure.log 2>&1",
-            "./config.status config.h >> configure.log 2>&1",
-            "mkdir -p " .. to_msys(MINGW_CONFIG_DIR),
-            "cp config.h " .. to_msys(MINGW_CONFIG_DIR) .. "/config.h",
-            "cd " .. to_msys(PROJECT_DIR) .. " && rm -rf " .. to_msys(scratch),
-        }, " && ")
-
-        local code = os.execv(shell, {"-lc", cmd})
-        assert(code == 0, "ntfs-3g: mingw configure failed, exit code " .. tostring(code))
-        assert(os.isfile(config_h), "ntfs-3g: configure did not produce config.h")
+        print("[ntfs-3g] generating config.h (one-time, via " .. ps .. ")")
+        local script = PROJECT_DIR .. "/genconfig.ps1"
+        local code = os.execv(ps, {"-NoProfile", "-ExecutionPolicy", "Bypass",
+                                   "-File", script,
+                                   "-Gcc", gcc,
+                                   "-Out", config_h})
+        assert(code == 0, "ntfs-3g: genconfig.ps1 failed, exit code " .. tostring(code))
+        assert(os.isfile(config_h), "ntfs-3g: genconfig.ps1 did not produce config.h")
     end)
 
 -- 公共设置：mingw 的 config.h 在 build/mingw/，而**不能**把源码根目录放进
