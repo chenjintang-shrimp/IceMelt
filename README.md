@@ -114,6 +114,9 @@ PsLFilt|影子系统 PowerShadow
 
 ### 运行时
 
+Q：支持哪些系统？有什么条件吗？
+A：Windows 7 SP1 （带 sha 补丁）即可。对于 Windows10和 Windows11这些较新的系统，请确保 VBS 和 HVCI 关闭。内存完整性保护（PatchGuard 也要关闭。在 Windows 安全中心的设置里，就可以将它们全部关闭，这是这一切实施的必要条件。也请关闭一切其他的安全软件和Windows Defender 的实时保护。对 Windows Defender 而言，相关选项可以在病毒和威胁防护里面的保护选项找到。
+
 Q：**kdu 输出 `Provider: "(null)"`，`-dse 0` 却像成功了？**
 
 A：`drv64.dll` 没跟 `kdu.exe` 放在一起。缺了它 KDU 用一个空表，一个驱动都不会加载，退出码仍是 0。
