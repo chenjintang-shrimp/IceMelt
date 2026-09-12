@@ -43,6 +43,26 @@ xmake build
 
 看输出，缺啥补啥，我自认为写的很清楚。cold & dark （没有任何引人注目的颜色）代表一切正常。
 
+---
+
+glibc 动态链接器有一段著名注释：
+
+```
+/* Now life is sane; we can call functions and access global data.
+   Set up to use the operating system facilities, and find out from
+   the operating system's program loader where to find the program
+   header table in core.  Put the rest of _dl_start into a separate
+   function, that way the compiler cannot put accesses to the GOT
+   before ELF_DYNAMIC_RELOCATE.  */
+...
+/* Now life is peachy; we can do all normal operations.
+   On to the real work.  */
+```
+
+你们能享受一把梭，是不知道我当初跟编译几个前置做了多少斗争。😠😡🤬
+
+---
+
 产物是一套可以直接拷到目标机的组合：
 
 ```
@@ -142,3 +162,18 @@ A：`dumpbin /headers WinDisk_x64.sys` 应为 `6.01 subsystem version`；显示 
 涉及内核驱动加载与裸盘写入，误用可导致数据损坏或系统无法启动（BSOD）。仅在你有权操作的机器与
 磁盘上使用。第 8 步之后一旦开始写入就没有回滚路径：出错时程序会立刻触发 bugcheck 复位并报出
 "系统状态未知"。
+
+## 后记
+
+丙午年农历八月初二，项目业已落地。循其本，乃发于 2025，亦可朔至 2024 年八月。期间，承蒙各路大神指点，历经波折，或行时停，亦有巧思，亦遇困难，所幸始得 AI 之力，项目方成。
+
+忆当初，以此发家，理论研究，亦有成果，可惜未成气候，也未出成品，以愚不擅 ui 编程，遂搁置。
+
+几周之前，偶知 ftxui，眼前一亮，跃跃欲试，亦成气候，颇为顺手，遂得动力，重拾旧业，继续开发。高一学业繁忙，只得抽出暇余，断断续续，勉力为之，今日成也。
+
+燕雀安知鸿鹄之志哉？余之志，不在高中一“多媒体管理员”，每日浑浑噩噩，为讲台所绊，为琐事所扰，碌碌无为，虚度光阴。余之志，在星辰大海！底层开发，操作系统，人工智能，网络安全。遂入软件开发之业，苦练竞赛，研工程之技巧，领算法之精髓，攀技术之高峰，潜底层之深海。三年磨一剑，以此，纪念我初中未竟之梦，破开束缚电教自由操作的厚厚坚冰。
+
+也愿，以我之毅力，我之勇气，我之决心，破开附着于我心中的，那层坚冰。破茧成蝶，融冰成雪，IceMelt，由此得名。
+
+chenjintang-shrimp/沧粟虾，
+2026年9月12日
