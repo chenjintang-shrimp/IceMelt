@@ -902,7 +902,13 @@ int main(int argc, char *argv[])
 	}
 	ntfs_log_verbose("New file size: %lld\n", (long long)new_size);
 
-	in = fopen(opts.src_file, "r");
+	/* 必须按**二进制**打开源文件："r"（文本模式）下 CRT 会把 0x1A（Ctrl-Z，DOS EOF）
+	 * 当文件结束 —— fread 在源里第一个 0x1A 处就返回 0 且置 feof，拷贝循环安静结束，
+	 * 只写了头部几百字节、退出码却是 0。盘上的后果：data_size 已被 truncate_solid
+	 * 扩到位、内容只剩开头一段，initialized_size 停在 0x1A 的偏移上（之前无数次
+	 * melt/preflight 出现的 14/133/215/4701 全是这个），其余全是 truncate 填的零，
+	 * 写回 SYSTEM hive 必然起不来。hive 是二进制文件，别想当然。 */
+	in = fopen(opts.src_file, "rb");
 	if (!in) {
 		ntfs_log_perror("ERROR: Couldn't open source file");
 		goto umount;
@@ -1140,7 +1146,7 @@ int main(int argc, char *argv[])
 		}
 		break;
 	}
-	bw = ntfs_attr_pwrite(na, offset, br, buf);
+		bw = ntfs_attr_pwrite(na, offset, br, buf);
 	if (bw != br) {
 		if (bw <= 0)
 			ntfs_log_perror("ERROR: ntfs_attr_pwrite failed");
@@ -1151,6 +1157,16 @@ int main(int argc, char *argv[])
 		break;
 	}
 	offset += bw;
+}
+/* 拷贝循环可以在**任何**提前 EOF 下安静退出（fread 返回 0 且 feof），并且
+ * truncate_solid 已经把 data_size 扩到了目标长度 —— 于是"少写"在盘上看起来
+ * 像一个完整的文件：长度对、开头对、后面是 truncate 填的零。调用方（SecMelt）
+ * 是按退出码放行的，所以这里必须把"写少了"变成硬失败，而不是留给运气。 */
+if (!result && offset != new_size) {
+	ntfs_log_error("ERROR: short copy: wrote %lld of %lld bytes; source ended early "
+		       "(or was truncated while reading)\n",
+		       (long long)offset, (long long)new_size);
+	result = EIO;
 }
 if ((na->data_flags & ATTR_COMPRESSION_MASK) && ntfs_attr_pclose(na)) {
 	ntfs_log_perror("ERROR: ntfs_attr_pclose failed");
