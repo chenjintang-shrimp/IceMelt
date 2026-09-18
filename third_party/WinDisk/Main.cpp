@@ -39,13 +39,51 @@ namespace FSDAntiHook
 		};
 	} LDR_DATA_TABLE_ENTRY64, *PLDR_DATA_TABLE_ENTRY64;
 
+	/* 沿 InLoadOrderLinks 找到容纳 addr 的内核模块（所有已加载驱动都在这条
+	 * 链上；入口就是任意 DriverObject->DriverSection 所指的本模块表项）。
+	 * 找不到返回 NULL —— 指针落在任何模块之外（比如被换表到某个未登记的壳区）。 */
+	PLDR_DATA_TABLE_ENTRY64 FindModuleByAddress(PVOID addr, PLDR_DATA_TABLE_ENTRY64 entry)
+	{
+		PLIST_ENTRY head = &entry->InLoadOrderLinks;
+		for (PLIST_ENTRY p = head->Flink; p != head; p = p->Flink)
+		{
+			PLDR_DATA_TABLE_ENTRY64 e =
+				CONTAINING_RECORD(p, LDR_DATA_TABLE_ENTRY64, InLoadOrderLinks);
+			if ((ULONG_PTR)addr >= (ULONG_PTR)e->DllBase &&
+				(ULONG_PTR)addr < (ULONG_PTR)e->DllBase + e->SizeOfImage)
+				return e;
+		}
+		return NULL;
+	}
+
 	BOOLEAN AntiFSDHookCallback(PVOID Buffer, SIZE_T Size)
 	{
 		PDEVICE_OBJECT device = *((PDEVICE_OBJECT*)Buffer);
 		PDRIVER_OBJECT driver = device->DriverObject;
-		LogInfo("Found device in disk stack: %wZ, path: %wZ\n",
-			driver->DriverName,
-			((PLDR_DATA_TABLE_ENTRY64)driver->DriverSection)->FullDllName);
+		PLDR_DATA_TABLE_ENTRY64 ldr = (PLDR_DATA_TABLE_ENTRY64)driver->DriverSection;
+
+		/* 还原/冻结类软件（DeepFrz 流派）绕开栈底绕行的一条路：不改设备链，
+		 * 直接把端口 PDO 所属驱动的 MajorFunction[IRP_MJ_SCSI] 换成指向自己
+		 * 映像的桩函数。IoCallDriver 本质是查这张表，所以栈底写得再对也照样被
+		 * 拦。判据很简单 —— 分派函数指针应该落在**自己驱动的映像区间**里。 */
+		const PVOID scsiHandler = driver->MajorFunction[IRP_MJ_SCSI];
+		const BOOLEAN ownImage =
+			((ULONG_PTR)scsiHandler >= (ULONG_PTR)ldr->DllBase) &&
+			((ULONG_PTR)scsiHandler < (ULONG_PTR)ldr->DllBase + ldr->SizeOfImage);
+		LogInfo("stack device %p: %wZ (%wZ), scsi_dispatch=%p%s\n",
+			device, driver->DriverName, ldr->FullDllName, scsiHandler,
+			ownImage ? "" : "  << OUTSIDE OWN IMAGE");
+		if (!ownImage)
+		{
+			PLDR_DATA_TABLE_ENTRY64 owner = FindModuleByAddress(scsiHandler, ldr);
+			if (owner)
+				LogWarn("%wZ 的 IRP_MJ_SCSI 被钩: 分派指针落在 %wZ (base=%p size=0x%X) 里\n",
+					driver->DriverName, &owner->FullDllName,
+					owner->DllBase, owner->SizeOfImage);
+			else
+				LogWarn("%wZ 的 IRP_MJ_SCSI 被钩: 分派指针不在任何已加载模块内\n",
+					driver->DriverName);
+		}
 		return TRUE;
 	}
 }
