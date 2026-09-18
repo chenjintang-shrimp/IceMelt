@@ -2,13 +2,18 @@
 
 NTSTATUS ScsiReadWriteDiskCompletion(PDEVICE_OBJECT pDevObj, PIRP pIrp, PVOID Context)
 {
-	pIrp->UserIosb->Information = pIrp->IoStatus.Information;
-	pIrp->UserIosb->Status = pIrp->IoStatus.Status;
+	if (pIrp->UserIosb) {
+		pIrp->UserIosb->Information = pIrp->IoStatus.Information;
+		pIrp->UserIosb->Status = pIrp->IoStatus.Status;
+	}
 
 	if (Context != NULL && pIrp->MdlAddress != NULL)
 	{
+		// 与 ScsiReadWriteDiskInternal 中的 MmProbeAndLockPages 成对。
+		// 若换成 MmBuildMdlForNonPagedPool 就不能在这里解锁（会 0x4E）。
 		MmUnlockPages(pIrp->MdlAddress);
 		IoFreeMdl(pIrp->MdlAddress);
+		pIrp->MdlAddress = NULL;
 	}
 
 	KeSetEvent(pIrp->UserEvent, 0, FALSE);
@@ -26,6 +31,17 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 	PIRP pIrp = NULL;
 	PMDL pMdl = NULL;
 	IO_STATUS_BLOCK IoSB;
+
+	/* IoCallDriver 是按 DeviceObject->DriverObject->MajorFunction[IRP_MJ_SCSI]
+	 * 取函数指针调用的。目标设备为空、或它不处理 IRP_MJ_SCSI，就等价于跳到地址 0，
+	 * 报出来就是 0xD1 (Arg1=0 Arg2=2 Arg3=8 Arg4=0)。在这里拦住并说明原因，
+	 * 比让内核去执行空地址好得多。 */
+	if (pDevObj == NULL || pDevObj->DriverObject == NULL ||
+		pDevObj->DriverObject->MajorFunction[IRP_MJ_SCSI] == NULL)
+	{
+		LogWarn("SCSI target is unusable (dev=%p): no IRP_MJ_SCSI handler\n", pDevObj);
+		return STATUS_DEVICE_NOT_READY;
+	}
 
 	pSrb = (PSCSI_REQUEST_BLOCK)ExAllocatePoolWithTag(NonPagedPool, sizeof(SCSI_REQUEST_BLOCK), 'WK');
 
@@ -54,8 +70,8 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 	pSrb->NextSrb = NULL;
 	pSrb->LinkTimeoutValue = -1;
 	pSrb->SrbStatus = SRB_STATUS_PENDING;
-	pSrb->ScsiStatus = SRB_STATUS_PENDING;
-	pSrb->QueueAction = SRB_FLAGS_DISABLE_AUTOSENSE;
+	pSrb->ScsiStatus = SCSISTAT_GOOD;
+	pSrb->QueueAction = 0;
 
 	pSrb->SenseInfoBuffer = pSenseData;
 	pSrb->SenseInfoBufferLength = sizeof(SENSE_DATA);
@@ -64,12 +80,12 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 	pSrb->DataTransferLength = ulSecCount * g_ulBytesPerSector;
 	pSrb->QueueSortKey = ulSectorPos;
 
-	pSrb->SrbFlags |= SRB_FLAGS_DISABLE_AUTOSENSE;
-	pSrb->SrbFlags |= SRB_FLAGS_NO_QUEUE_FREEZE | SRB_FLAGS_BYPASS_FROZEN_QUEUE;
+	// 方向和自动 sense 选项都属于 SrbFlags。RMW/写后验证不能使用
+	// 适配器缓存，否则读可能返回旧扇区内容，随后把旧数据重新写回去。
+	pSrb->SrbFlags = SRB_FLAGS_DISABLE_AUTOSENSE;
 	if (bIsRead)
 	{
 		pSrb->SrbFlags |= SRB_FLAGS_DATA_IN;
-		pSrb->SrbFlags |= SRB_FLAGS_ADAPTER_CACHE_ENABLE;
 	}
 	else
 	{
@@ -78,7 +94,7 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 
 	pSrb->CdbLength = 0x0A;
 	pSrb->Cdb[0] = bIsRead ? SCSIOP_READ : SCSIOP_WRITE;
-	pSrb->Cdb[1] = pSrb->Cdb[1] & 0x1F | 0x80;
+	pSrb->Cdb[1] = 0;
 	pSrb->Cdb[2] = (UCHAR)(ulSectorPos >> 0x18) & 0xFF;
 	pSrb->Cdb[3] = (UCHAR)(ulSectorPos >> 0x10) & 0xFF;
 	pSrb->Cdb[4] = (UCHAR)(ulSectorPos >> 0x08) & 0xFF;
@@ -86,6 +102,12 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 	pSrb->Cdb[7] = (UCHAR)(ulSecCount >> 0x08);
 	pSrb->Cdb[8] = (UCHAR)ulSecCount;
 
+	LogInfo("SCSI %s request: LBA=%lu sectors=%lu bytes=%lu buffer=%p flags=0x%.8X CDB=%02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n",
+		bIsRead ? "READ" : "WRITE", ulSectorPos, ulSecCount,
+		(unsigned long)(ulSecCount * g_ulBytesPerSector), lpDataBuff,
+		(unsigned long)pSrb->SrbFlags, pSrb->Cdb[0], pSrb->Cdb[1],
+		pSrb->Cdb[2], pSrb->Cdb[3], pSrb->Cdb[4], pSrb->Cdb[5],
+		pSrb->Cdb[6], pSrb->Cdb[7], pSrb->Cdb[8], pSrb->Cdb[9]);
 	KeInitializeEvent(&Event, NotificationEvent, FALSE);
 	pIrp = IoAllocateIrp(pDevObj->StackSize, FALSE);
 
@@ -107,7 +129,12 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 		goto Cleanup;
 	}
 
-	MmProbeAndLockPages(pMdl, KernelMode, bIsRead ? IoReadAccess : IoWriteAccess);
+	/* lpDataBuff 来自非分页池，但 MDL 必须与完成例程中的 MmUnlockPages 成对：
+	 * MmBuildMdlForNonPagedPool 生成的 MDL 一旦被 MmUnlockPages 处理就会破坏 PFN
+	 * 数据库（0x4E PFN_LIST_CORRUPT），所以这里两处必须同进同出。
+	 * 访问方向按 CPU 侧行为表达：读盘时数据写入调用方缓冲区（IoWriteAccess），
+	 * 写盘时从缓冲区读出（IoReadAccess）。原代码这两者正好写反了。 */
+	MmProbeAndLockPages(pMdl, KernelMode, bIsRead ? IoWriteAccess : IoReadAccess);
 
 	RtlZeroMemory(&IoSB, sizeof(IO_STATUS_BLOCK));
 	pIrp->UserIosb = &IoSB;
@@ -128,42 +155,48 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 	pIrpSp->DeviceObject = pDevObj;
 	pIrpSp->MajorFunction = IRP_MJ_SCSI;
 	pIrpSp->Parameters.Scsi.Srb = pSrb;
-	pIrpSp->Control = SL_INVOKE_ON_CANCEL | SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR;
 
+	/* 必须注册完成例程。pIrpSp 是自建 IRP 的目标栈单元：IoSetCompletionRoutine 会把
+	 * SL_INVOKE_ON_* 与 CompletionRoutine 一起写在这里，而 IRP 完成时 I/O 管理器正是
+	 * 按这两个字段回调。只写 Control 不写函数指针 = 完成时调用地址 0，
+	 * 即 0xD1 (Arg1=0 Arg2=2 Arg3=8 Arg4=0)。注意注册之后不能再用 pIrpSp->Control
+	 * 覆盖这些标志位。 */
 	IoSetCompletionRoutine(pIrp, ScsiReadWriteDiskCompletion, pSrb, TRUE, TRUE, TRUE);
 
 	ntStatus = IoCallDriver(pDevObj, pIrp);
-
 	if (ntStatus == STATUS_PENDING)
 	{
 		KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
-		ntStatus = STATUS_SUCCESS;
+		ntStatus = IoSB.Status;
 	}
 	LogInfo("IoCallDriverStatus: 0x%.8x\n", ntStatus);
 	LogInfo("SrbStatus: 0x%.8x\n", pSrb->SrbStatus);
 	LogInfo("ScsiStatus: 0x%.8x\n", pSrb->ScsiStatus);
-	LogInfo("IoSB.Status: 0x%.8x\n", IoSB.Status);
-	if (NT_SUCCESS(ntStatus))
+	LogInfo("IoSB.Status: 0x%.8x Information=%llu Expected=%lu\n",
+		IoSB.Status, (unsigned long long)IoSB.Information,
+		(unsigned long)(ulSecCount * g_ulBytesPerSector));
+	if (!NT_SUCCESS(ntStatus))
+		goto Cleanup;
+	if (pSrb->SrbStatus != SRB_STATUS_SUCCESS)
 	{
-		if (pSrb->SrbStatus == SRB_STATUS_SUCCESS)
-		{
-			if (pSrb->ScsiStatus == SCSISTAT_GOOD)
-			{
-				ntStatus = STATUS_SUCCESS;
-			}
-			else
-			{
-				ntStatus = 0xC2000001L + pSrb->ScsiStatus;
-			}
-		}
-		else
-		{
-			ntStatus = 0xC1000001L + pSrb->SrbStatus;
-		}
+		ntStatus = 0xC1000001L + pSrb->SrbStatus;
+		goto Cleanup;
+	}
+	if (pSrb->ScsiStatus != SCSISTAT_GOOD)
+	{
+		ntStatus = 0xC2000001L + pSrb->ScsiStatus;
+		goto Cleanup;
+	}
+	if (IoSB.Information != ulSecCount * g_ulBytesPerSector)
+	{
+		LogWarn("Short SCSI transfer: %llu/%lu bytes\n",
+			(unsigned long long)IoSB.Information,
+			(unsigned long)(ulSecCount * g_ulBytesPerSector));
+		ntStatus = STATUS_DEVICE_DATA_ERROR;
 	}
 
 Cleanup:
-	if (pSrb->SenseInfoBuffer && pSrb->SenseInfoBuffer != pSenseData)
+	if (pSrb != NULL && pSrb->SenseInfoBuffer && pSrb->SenseInfoBuffer != pSenseData)
 	{
 		ExFreePool(pSrb->SenseInfoBuffer);
 	}
@@ -213,19 +246,21 @@ NTSTATUS ScsiWriteDisk(PDEVICE_OBJECT pDevObj, ULONG ulSectorPos, PVOID lpDataBu
 
 NTSTATUS ScsiWriteDisk(PDATA_LIST_ENTRY pDevObjs, ULONG ulSectorPos, PVOID lpDataBuff, ULONG ulSecCount, int nRetryCount)
 {
-	NTSTATUS WriteStatus = STATUS_UNSUCCESSFUL;
-	if (!IsListEmpty(&pDevObjs->DataList))
+	if (IsListEmpty(&pDevObjs->DataList))
+		return STATUS_DEVICE_NOT_READY;
+
+	PLIST_ENTRY pTarget = pDevObjs->DataList.Flink;
+	while (pTarget != &pDevObjs->DataList)
 	{
-		PLIST_ENTRY pTarget = pDevObjs->DataList.Flink;
-		PDATA_LIST pDataTarget = NULL;
-		while (pTarget != &pDevObjs->DataList)
+		PDATA_LIST pDataTarget = CONTAINING_RECORD(pTarget, DATA_LIST, ListEntry);
+		PDEVICE_OBJECT pDevObj = *((PDEVICE_OBJECT*)pDataTarget->Buffer);
+		const NTSTATUS status = ScsiWriteDisk(pDevObj, ulSectorPos, lpDataBuff, ulSecCount, nRetryCount);
+		if (!NT_SUCCESS(status))
 		{
-			pDataTarget = CONTAINING_RECORD(pTarget, DATA_LIST, ListEntry);
-			PDEVICE_OBJECT pDevObj = *((PDEVICE_OBJECT*)pDataTarget->Buffer);
-			if (NT_SUCCESS(ScsiWriteDisk(pDevObj, ulSectorPos, lpDataBuff, ulSecCount, nRetryCount)))
-				WriteStatus = STATUS_SUCCESS;
-			pTarget = pTarget->Flink;
+			LogWarn("Write failed on one target device: 0x%.8X\\n", status);
+			return status;
 		}
+		pTarget = pTarget->Flink;
 	}
-	return WriteStatus;
+	return STATUS_SUCCESS;
 }

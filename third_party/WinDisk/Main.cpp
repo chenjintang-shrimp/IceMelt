@@ -41,14 +41,11 @@ namespace FSDAntiHook
 
 	BOOLEAN AntiFSDHookCallback(PVOID Buffer, SIZE_T Size)
 	{
-		PDEVICE_OBJECT pDevObj = *((PDEVICE_OBJECT*)Buffer);
-		PDRIVER_OBJECT pDrvObj = pDevObj->DriverObject;
-		LogInfo("Disk DriverName: %wZ, DriverPath: %wZ\n", pDrvObj->DriverName, ((PLDR_DATA_TABLE_ENTRY64)pDrvObj->DriverSection)->FullDllName);
-		NTSTATUS stat = STATUS_UNSUCCESSFUL;
-		if (!NT_SUCCESS(stat))
-		{
-			LogWarn("Restore original SCSI failed! ErrorCode: 0x%.8X\n", stat);
-		}
+		PDEVICE_OBJECT device = *((PDEVICE_OBJECT*)Buffer);
+		PDRIVER_OBJECT driver = device->DriverObject;
+		LogInfo("Found device in disk stack: %wZ, path: %wZ\n",
+			driver->DriverName,
+			((PLDR_DATA_TABLE_ENTRY64)driver->DriverSection)->FullDllName);
 		return TRUE;
 	}
 }
@@ -218,46 +215,70 @@ NTSTATUS DeviceWrite(
 	IN PDEVICE_OBJECT pDeviceObject,
 	IN PIRP pIrp
 ) {
-	PIO_STACK_LOCATION StackLocation = IoGetCurrentIrpStackLocation(pIrp);
-	PVOID SystemBuffer = pIrp->AssociatedIrp.SystemBuffer;
-	ULONG InBufferLength = StackLocation->Parameters.Write.Length;
-	IO_STATUS_BLOCK StatusBlock = { 0 };
-
-	LONGLONG OldOffset = StackLocation->Parameters.Write.ByteOffset.QuadPart;
-	ULONG Offset = OldOffset / g_ulBytesPerSector;
-	ULONG Sectors = InBufferLength / g_ulBytesPerSector + (InBufferLength % g_ulBytesPerSector == 0 ? 0 : 1);
-
-	LogInfo("Write disk request: Offset=%lld, OffsetSector=%lu, Sectors=%lu, Size=%lu\n", OldOffset, Offset, Sectors, InBufferLength);
-
+	PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(pIrp);
+	PVOID input = pIrp->AssociatedIrp.SystemBuffer;
+	ULONG length = stack->Parameters.Write.Length;
+	LONGLONG byteOffset = stack->Parameters.Write.ByteOffset.QuadPart;
+	ULONG sector = (ULONG)(byteOffset / g_ulBytesPerSector);
+	ULONG inSector = (ULONG)(byteOffset % g_ulBytesPerSector);
+	ULONG sectors = (inSector + length + g_ulBytesPerSector - 1) /
+		g_ulBytesPerSector;
 	NTSTATUS status = STATUS_SUCCESS;
-	PVOID Buffer = (PVOID)ExAllocatePool(NonPagedPool, Sectors * g_ulBytesPerSector);
-	if (!Buffer)
-		status = STATUS_INSUFFICIENT_RESOURCES;
+	PVOID rmwBuffer = NULL;
+	PVOID verifyBuffer = NULL;
 
-	if (NT_SUCCESS(status))
-	{
-		status = ScsiReadDisk(TargetDisk, Offset, Buffer, Sectors);
-		if (NT_SUCCESS(status))
-		{
-			ULONG NewOffset = OldOffset - Offset * g_ulBytesPerSector;
-			RtlCopyMemory((*(PUCHAR*)&Buffer) + NewOffset, SystemBuffer, InBufferLength);
-			status = ScsiWriteDisk(&TargetDisks, Offset, Buffer, Sectors);
-		}
+	LogInfo("Write request: offset=%lld sector=%lu in_sector=%lu sectors=%lu length=%lu\n",
+		byteOffset, sector, inSector, sectors, length);
+	if (length == 0) {
+		pIrp->IoStatus.Information = 0;
+		pIrp->IoStatus.Status = STATUS_SUCCESS;
+		IoCompleteRequest(pIrp, IO_NO_INCREMENT);
+		return STATUS_SUCCESS;
 	}
 
-	pIrp->IoStatus.Information = InBufferLength;
+	/* 当前上层通常提交扇区对齐的请求。对齐请求直接写，不先读再写整扇区；
+	 * 只有非对齐请求才使用 RMW。这样不会用一次旧的扇区读取覆盖另一次更新。 */
+	if (inSector != 0 || (length % g_ulBytesPerSector) != 0) {
+		rmwBuffer = ExAllocatePool(NonPagedPool, sectors * g_ulBytesPerSector);
+		if (!rmwBuffer) status = STATUS_INSUFFICIENT_RESOURCES;
+		if (NT_SUCCESS(status)) {
+			status = ScsiReadDisk(TargetDisk, sector, rmwBuffer, sectors);
+			if (NT_SUCCESS(status)) {
+				RtlCopyMemory((PUCHAR)rmwBuffer + inSector, input, length);
+				status = ScsiWriteDisk(TargetDisk, sector, rmwBuffer, sectors);
+			}
+		}
+	} else {
+		status = ScsiWriteDisk(TargetDisk, sector, input, sectors);
+	}
+
+	if (NT_SUCCESS(status)) {
+		verifyBuffer = ExAllocatePool(NonPagedPool, sectors * g_ulBytesPerSector);
+		if (!verifyBuffer) status = STATUS_INSUFFICIENT_RESOURCES;
+		else {
+			status = ScsiReadDisk(TargetDisk, sector, verifyBuffer, sectors);
+			if (NT_SUCCESS(status)) {
+				const PUCHAR expected = rmwBuffer ? (PUCHAR)rmwBuffer + inSector : (PUCHAR)input;
+				const PUCHAR actual = (PUCHAR)verifyBuffer + inSector;
+				ULONG i;
+				for (i = 0; i < length && expected[i] == actual[i]; ++i) {}
+				if (i != length) {
+					LogWarn("Write verification failed: byte=%lu length=%lu disk_offset=%lld expected=0x%.2X actual=0x%.2X\n",
+						i, length, byteOffset + i, expected[i], actual[i]);
+					status = STATUS_DEVICE_DATA_ERROR;
+				}
+			}
+		}
+	}
+	if (verifyBuffer) ExFreePool(verifyBuffer);
+	if (rmwBuffer) ExFreePool(rmwBuffer);
+	pIrp->IoStatus.Information = NT_SUCCESS(status) ? length : 0;
 	pIrp->IoStatus.Status = status;
-	
-	if (!NT_SUCCESS(status)) LogWarn("Write disk failed, error code: 0x%.8X\n", status);
-	else LogInfo("Write disk success!\n");
-
-	if (Buffer)
-		ExFreePool(Buffer);
-
+	if (!NT_SUCCESS(status)) LogWarn("Write failed: status=0x%.8X\n", status);
+	else LogInfo("Write completed: offset=%lld length=%lu\n", byteOffset, length);
 	IoCompleteRequest(pIrp, IO_NO_INCREMENT);
-	return pIrp->IoStatus.Status;
+	return status;
 }
-
 NTSTATUS DeviceRead(
 	IN PDEVICE_OBJECT pDeviceObject,
 	IN PIRP pIrp
@@ -269,7 +290,10 @@ NTSTATUS DeviceRead(
 
 	LONGLONG OldOffset = StackLocation->Parameters.Read.ByteOffset.QuadPart;
 	ULONG Offset = OldOffset / g_ulBytesPerSector;
-	ULONG Sectors = OutBufferLength / g_ulBytesPerSector + (OutBufferLength % g_ulBytesPerSector == 0 ? 0 : 1);
+	/* 与 DeviceWrite 同理：扇区数要覆盖含起始偏移的整段，否则不对齐跨界读
+	 * 会读出 Buffer 末尾（把非分页池邻接数据当文件内容交给调用方）。 */
+	ULONG NewOffset = (ULONG)(OldOffset - Offset * g_ulBytesPerSector);
+	ULONG Sectors = (NewOffset + OutBufferLength + g_ulBytesPerSector - 1) / g_ulBytesPerSector;
 
 	LogInfo("Read disk request: Offset=%lld, OffsetSector=%lu, Sectors=%lu, Size=%lu\n", OldOffset, Offset, Sectors, OutBufferLength);
 
@@ -283,12 +307,11 @@ NTSTATUS DeviceRead(
 		status = ScsiReadDisk(TargetDisk, Offset, Buffer, Sectors);
 		if (NT_SUCCESS(status))
 		{
-			ULONG NewOffset = OldOffset - Offset * g_ulBytesPerSector;
 			RtlCopyMemory(SystemBuffer, (*(PUCHAR*)&Buffer) + NewOffset, OutBufferLength);
 		}
 	}
 
-	pIrp->IoStatus.Information = OutBufferLength;
+	pIrp->IoStatus.Information = NT_SUCCESS(status) ? OutBufferLength : 0;
 	pIrp->IoStatus.Status = status;
 
 	if (!NT_SUCCESS(status)) LogWarn("Read disk failed, error code: 0x%.8X\n", status);
@@ -300,8 +323,7 @@ NTSTATUS DeviceRead(
 
 NTSTATUS DriverEntry(IN PDRIVER_OBJECT DriverObject, IN PUNICODE_STRING RegistryPath)
 {
-	//DriverObject->DriverUnload = &DriverUnload;
-
+	DriverObject->DriverUnload = &DriverUnload;
 	NTSTATUS status;
 
 	for (int i = 0; i < IRP_MJ_MAXIMUM_FUNCTION; i++)
