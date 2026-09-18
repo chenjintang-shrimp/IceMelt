@@ -61,4 +61,17 @@ std::wstring FormatW(const wchar_t* fmt, ...);
 // 本地时间 HH:MM:SS，ASCII
 std::wstring Timestamp();
 
+// ---- CLI 输出的着色（cold & dark）------------------------------------------
+//
+// 与 TUI 同一原则：一切正常时几乎不着色，只有真的需要人处理的东西才醒目。CLI 模式
+// （--melt / --dry-run / --selftest-*）按行首标记分层：
+//
+//   [x] / FAIL...  -> 醒目的红色加粗（出错必定高亮）
+//   [!]            -> 琥珀色（需要留意，但不致命）
+//   其余（[*] [+] …）-> 白色
+//
+// 只在 stdout 是支持 VT 转义的控制台上启用：重定向到文件/管道时不着色（否则日志里全是
+// 转义序列），Windows 7 的原生 conhost 上也不着色（它不解释这些序列，会打出一堆乱码）。
+std::wstring CliPaint(const std::wstring& line);
+
 }  // namespace secmelt

@@ -145,6 +145,71 @@ std::wstring FormatW(const wchar_t* fmt, ...) {
     return out;
 }
 
+namespace {
+
+// stdout 该不该着色。
+//
+// 两种情况都要认，因为它们是两套不同的机制：
+//   1. conhost 自己能解释 VT 转义（Windows 10 起才有 ENABLE_VIRTUAL_TERMINAL_PROCESSING）；
+//   2. **终端程序自己解析 ANSI** —— ConEmu / ANSICON / Windows Terminal 都属此类。
+//      Windows 7 的 conhost 没有 VT 支持，但 ConEmu 会自己解析这些序列，所以**不能只看
+//      conhost 的能力**（这是之前颜色不生效的原因：Win7 上 SetConsoleMode 那个标志必然失败）。
+//
+// 拿不到真控制台（被重定向到文件/管道）就一律不着色，免得日志里混进转义序列。
+bool CliColorsEnabled() {
+    static const bool enabled = [] {
+        const HANDLE out = ::GetStdHandle(STD_OUTPUT_HANDLE);
+        if (out == INVALID_HANDLE_VALUE || out == nullptr) return false;
+        DWORD mode = 0;
+        if (!::GetConsoleMode(out, &mode)) return false;  // 重定向：不是控制台
+
+        // 1) conhost 原生 VT（Win10+）
+        if ((mode & 0x0004 /* ENABLE_VIRTUAL_TERMINAL_PROCESSING */) != 0) return true;
+        if (::SetConsoleMode(out, mode | 0x0004)) return true;
+
+        // 2) 终端自己解析 ANSI
+        const auto envIs = [](const wchar_t* name, const wchar_t* value) {
+            wchar_t buf[32] = {};
+            const DWORD got = ::GetEnvironmentVariableW(name, buf, 32);
+            if (got == 0 || got >= 32) return false;
+            return _wcsicmp(buf, value) == 0;
+        };
+        const auto envAny = [](const wchar_t* name) {
+            return ::GetEnvironmentVariableW(name, nullptr, 0) > 0;
+        };
+        // ConEmu 只在真的开了 ANSI 时才设 ConEmuANSI=ON —— 单看 ConEmuPID 会在关闭 ANSI
+        // 的 ConEmu 里打出乱码。
+        if (envIs(L"ConEmuANSI", L"ON")) return true;
+        if (envAny(L"ANSICON")) return true;      // ANSICON 注入器
+        if (envAny(L"WT_SESSION")) return true;   // Windows Terminal：原生 VT
+        if (envAny(L"TERM_PROGRAM")) return true; // VS Code 等
+        return false;
+    }();
+    return enabled;
+}
+
+enum class CliTier { Normal, Warning, Error };
+
+CliTier ClassifyCliLine(const std::wstring& line) {
+    if (line.rfind(L"[x]", 0) == 0) return CliTier::Error;
+    if (line.rfind(L"FAIL", 0) == 0) return CliTier::Error;  // FAIL / FAILED: ...
+    if (line.rfind(L"[!]", 0) == 0) return CliTier::Warning;
+    return CliTier::Normal;
+}
+
+}  // namespace
+
+std::wstring CliPaint(const std::wstring& line) {
+    if (!CliColorsEnabled()) return line;
+    const wchar_t* code = L"\x1b[97m";  // 白色
+    switch (ClassifyCliLine(line)) {
+        case CliTier::Error: code = L"\x1b[1;91m"; break;   // 加粗亮红
+        case CliTier::Warning: code = L"\x1b[93m"; break;   // 亮黄
+        case CliTier::Normal: break;
+    }
+    return std::wstring(code) + line + L"\x1b[0m";
+}
+
 std::wstring Timestamp() {
     const std::time_t now = std::time(nullptr);
     std::tm local{};
