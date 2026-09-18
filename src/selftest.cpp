@@ -19,9 +19,11 @@
 namespace secmelt {
 namespace {
 
-void Print(const std::wstring& line) { std::printf("%s\n", Narrow(line).c_str()); }
+// 所有 CLI 输出都从这里走：cold & dark 着色（出错醒目红色、[!] 琥珀、其余白色）在同一处
+// 决定。重定向/不支持 VT 时 CliPaint 原样返回，日志里不会混入转义序列。
+void Print(const std::wstring& line) { std::printf("%s\n", Narrow(CliPaint(line)).c_str()); }
 
-void Print(const char* line) { std::printf("%s\n", line); }
+void Print(const char* line) { Print(Widen(line)); }
 
 std::filesystem::path TempFile(const wchar_t* name) {
     std::vector<wchar_t> temp(MAX_PATH);
@@ -30,6 +32,70 @@ std::filesystem::path TempFile(const wchar_t* name) {
                                           ? std::filesystem::path(temp.data())
                                           : std::filesystem::path(L"C:\\Windows\\Temp");
     return dir / name;
+}
+
+// --selftest-raw 用的图案：文件先写成 A，再经裸盘通路改成 B。
+constexpr unsigned char kPatternA = 0xA5;
+constexpr unsigned char kPatternB = 0x5A;
+
+// 一次读回的图案统计。把"读到了什么"讲成数字，而不是只报第一个不符的字节 ——
+// 判断"是旧内容还是别的"靠的就是这两个计数。
+struct Readback {
+    size_t bytesA = 0;
+    size_t bytesB = 0;
+    size_t other = 0;
+    size_t firstDivergentFromB = 0;
+    unsigned char divergentValue = 0;
+    bool hasDivergence = false;
+
+    std::wstring Describe() const {
+        std::wstring out = FormatW(L"0xA5 x%zu, 0x5A x%zu, other x%zu", bytesA, bytesB, other);
+        if (hasDivergence) {
+            out += FormatW(L"; first byte that is not 0x5A: #%zu = 0x%02X", firstDivergentFromB,
+                           divergentValue);
+        }
+        return out;
+    }
+};
+
+Readback Summarize(const unsigned char* bytes, size_t size) {
+    Readback out;
+    for (size_t i = 0; i < size; ++i) {
+        if (bytes[i] == kPatternA) {
+            ++out.bytesA;
+        } else if (bytes[i] == kPatternB) {
+            ++out.bytesB;
+        } else {
+            ++out.other;
+        }
+        if (!out.hasDivergence && bytes[i] != kPatternB) {
+            out.hasDivergence = true;
+            out.firstDivergentFromB = i;
+            out.divergentValue = bytes[i];
+        }
+    }
+    return out;
+}
+
+// 按区段拼读一段物理区域（底层通路：驱动直达磁盘）。区段总长不足时返回 false ——
+// 那说明 FSCTL 给出的映射覆盖不了这个文件，后面的判据都不成立。
+bool ReadExtentsRaw(WinDiskDevice& device, const std::vector<Extent>& extents, size_t want,
+                    std::vector<unsigned char>& out, std::wstring& error) {
+    out.assign(want, 0);
+    size_t read = 0;
+    for (const auto& extent : extents) {
+        if (read >= want) break;
+        const size_t chunk = static_cast<size_t>((extent.length < want - read) ? extent.length
+                                                                              : want - read);
+        if (chunk == 0) continue;
+        if (!device.ReadAt(extent.physicalOffset, out.data() + read, chunk, error)) return false;
+        read += chunk;
+    }
+    if (read < want) {
+        error = FormatW(L"the extents cover only %zu of %zu bytes", read, want);
+        return false;
+    }
+    return true;
 }
 
 }  // namespace
@@ -226,13 +292,17 @@ int RawSelfTest(const std::filesystem::path& exeDir) {
 
     const std::filesystem::path scratch = L"C:\\secmelt-selftest.bin";
     constexpr size_t kScratchSize = 64 * 1024;
-    constexpr unsigned char kPatternA = 0xA5;
-    constexpr unsigned char kPatternB = 0x5A;
 
     std::wstring error;
     const std::filesystem::path sysPath = exeDir / L"WinDisk_x64.sys";
-    if (!LoadDriver(sysPath, L"WinDisk", error)) {
+    const DriverLoad load = LoadDriver(sysPath, L"WinDisk", error);
+    if (load != DriverLoad::Loaded) {
         Print(FormatW(L"FAIL load driver: %ls", error.c_str()));
+        if (load == DriverLoad::SignatureRejected) {
+            Print(L"     the load was rejected with 577 (ERROR_INVALID_IMAGE_HASH): run "
+                  L"'kdu -dse 0' first, then retry -- a positive DSE state read out of "
+                  L"NtQuerySystemInformation does not mean the load will be allowed");
+        }
         return 1;
     }
     Print(L"driver loaded");
@@ -294,6 +364,39 @@ int RawSelfTest(const std::filesystem::path& exeDir) {
     ok = !extents.empty();
     if (!ok) Print(L"FAIL no extents");
 
+    // 读回分两条路，判据完全不同 —— 报告里必须讲清每条走的是哪条路：
+    //   (1) 底层读回：经 WinDisk 驱动直达磁盘 miniport。它证明的是"写确实落到了这些
+    //       物理偏移上"，与文件系统看到的无关。
+    //   (2) OS 读回：经文件系统（FILE_FLAG_NO_BUFFERING 绕开缓存，但**不绕过滤器**）。
+    //       它证明的是"这台机器上文件系统看到的文件内容"。
+    // 冻结状态（冰点/影子系统这类卷过滤器）下两者**必然**不一致：文件系统的写被过滤器
+    // 留在上层，驱动却能直接改磁盘，于是底层读到 B、OS 侧仍读到 A。这不是失败，恰恰是
+    // 过滤器在工作 —— 所以 (1) 是硬断言，(2) 只做分类报告（见下面 classify）。
+    Readback preRead;
+    if (ok) {
+        // 先读一次基准：这些区段在裸写之前是什么。它决定"OS 侧读到 A"该如何解读 ——
+        // 若基准不是 A，说明文件系统的写根本没到磁盘（被上层过滤器截住了），
+        // 那么 OS 侧读回 A 就完全在预期之内。
+        std::vector<unsigned char> before;
+        if (!ReadExtentsRaw(device, extents, kScratchSize, before, error)) {
+            Print(FormatW(L"FAIL raw pre-read: %ls", error.c_str()));
+            ok = false;
+        } else {
+            preRead = Summarize(before.data(), before.size());
+            Print(FormatW(L"raw pre-read (before any raw write): %ls", preRead.Describe().c_str()));
+            if (preRead.bytesA == before.size()) {
+                Print(L"  -> the file-system write reached the disk; the extent mapping is exact");
+            } else if (preRead.bytesB == before.size()) {
+                Print(L"  -> these extents still hold 0x5A, i.e. what a previous run of this "
+                      L"self-test wrote over the raw disk; the file's own content (0xA5) never "
+                      L"reached them");
+            } else {
+                Print(L"  -> the file-system write did NOT reach the disk (a volume filter above "
+                      L"the FS is holding it; a freeze/restore product does exactly this)");
+            }
+        }
+    }
+
     std::vector<unsigned char> patternB(kScratchSize, kPatternB);
     size_t offset = 0;
     for (const auto& extent : extents) {
@@ -313,43 +416,30 @@ int RawSelfTest(const std::filesystem::path& exeDir) {
         ok = false;
     }
 
-    // 读回校验必须绕开文件系统缓存 —— 这是第一次跑这条自检时踩的坑：
-    // 裸写是直达设备（不经过 FS 缓存），而普通 ReadFile 会命中缓存里的旧页，
-    // 于是"写成功、读回还是旧图案"，看起来像驱动没写，其实写对了。
     if (ok) {
-        // (1) 用同一条裸盘通路读回：证明写确实落在这些物理偏移上。
-        std::vector<unsigned char> rawRead(kScratchSize, 0);
-        size_t read = 0;
-        for (const auto& extent : extents) {
-            if (read >= rawRead.size()) break;
-            const size_t chunk =
-                static_cast<size_t>((extent.length < rawRead.size() - read) ? extent.length
-                                                                           : rawRead.size() - read);
-            if (chunk == 0) continue;
-            if (!device.ReadAt(extent.physicalOffset, rawRead.data() + read, chunk, error)) {
-                Print(FormatW(L"FAIL raw read-back: %ls", error.c_str()));
+        // (1) 底层读回：必须读到 B —— 这是"驱动按这些物理偏移写进去了"的唯一判据。
+        // （普通 ReadFile 会命中 FS 缓存里的旧页，看出"写了没生效"，其实写对了。）
+        std::vector<unsigned char> rawRead;
+        if (!ReadExtentsRaw(device, extents, kScratchSize, rawRead, error)) {
+            Print(FormatW(L"FAIL raw read-back: %ls", error.c_str()));
+            ok = false;
+        } else {
+            const Readback raw = Summarize(rawRead.data(), rawRead.size());
+            if (raw.bytesB == rawRead.size()) {
+                Print(L"raw read-back (driver path) matches pattern 0x5A: the write landed on disk");
+            } else {
+                Print(FormatW(L"FAIL raw read-back (driver path) does not match pattern 0x5A: %ls",
+                              raw.Describe().c_str()));
+                Print(L"     the driver path itself is broken (target disk, offsets or the write "
+                      L"path) - this is a real failure, not a filter");
                 ok = false;
-                break;
             }
-            read += chunk;
-        }
-        if (ok) {
-            for (size_t i = 0; i < rawRead.size(); ++i) {
-                if (rawRead[i] != kPatternB) {
-                    Print(FormatW(L"FAIL raw read-back mismatch at byte %zu: 0x%02X", i, rawRead[i]));
-                    ok = false;
-                    break;
-                }
-            }
-            if (ok) Print(L"raw read-back matches pattern 0x5A");
         }
     }
 
     if (ok) {
-        // (2) 再从文件系统侧读一次，但用 FILE_FLAG_NO_BUFFERING 绕过缓存：
-        // 证明这些物理区段确实就是这个文件的数据（FSCTL 的映射没算错）。
-        // 无缓冲 I/O 要求缓冲区按扇区对齐（VirtualAlloc 给的是 64 KiB 对齐）且
-        // 长度是扇区整数倍（64 KiB ✓）。
+        // (2) OS 读回，非硬断言：见本节开头的两条通路说明。FILE_FLAG_NO_BUFFERING 要求
+        // 缓冲区按扇区对齐（VirtualAlloc 给的是 64 KiB 对齐）且长度是扇区整数倍（64 KiB ✓）。
         const DWORD sector = vol.bytesPerSector ? vol.bytesPerSector : 512;
         void* aligned = ::VirtualAlloc(nullptr, kScratchSize, MEM_COMMIT | MEM_RESERVE,
                                        PAGE_READWRITE);
@@ -361,22 +451,30 @@ int RawSelfTest(const std::filesystem::path& exeDir) {
             ok = false;
         } else {
             DWORD got = 0;
-            ok = ::ReadFile(file, aligned, static_cast<DWORD>(kScratchSize), &got, nullptr) &&
-                 got == kScratchSize;
+            const bool readOk =
+                ::ReadFile(file, aligned, static_cast<DWORD>(kScratchSize), &got, nullptr) &&
+                got == kScratchSize;
             ::CloseHandle(file);
-            if (ok) {
-                const auto* bytes = static_cast<const unsigned char*>(aligned);
-                for (size_t i = 0; i < kScratchSize; ++i) {
-                    if (bytes[i] != kPatternB) {
-                        Print(FormatW(L"FAIL uncached FS read-back mismatch at byte %zu: 0x%02X", i,
-                                      bytes[i]));
-                        ok = false;
-                        break;
-                    }
-                }
-                if (ok) Print(L"uncached file-system read-back matches pattern 0x5A");
-            } else {
+            if (!readOk) {
                 Print(FormatW(L"FAIL uncached read (sector=%u): %u", sector, ::GetLastError()));
+                ok = false;
+            } else {
+                const auto* bytes = static_cast<const unsigned char*>(aligned);
+                const Readback os = Summarize(bytes, kScratchSize);
+                Print(FormatW(L"OS read-back (file-system path, uncached): %ls", os.Describe().c_str()));
+                if (os.bytesB == kScratchSize) {
+                    Print(L"  -> the file system sees what the driver wrote: nothing between the FS "
+                          L"and the disk is shadowing this file");
+                } else if (os.bytesA == kScratchSize) {
+                    Print(L"  -> the file system still sees 0xA5: a volume filter is holding the "
+                          L"original blocks. Expected on a frozen machine - the raw write below it "
+                          L"succeeded anyway, which is exactly what melt relies on.");
+                } else {
+                    Print(L"FAIL the OS read-back is a mix (see the counts above), not a clean "
+                          L"all-A or all-B result: the file's extents are shared with other data, "
+                          L"or something modified the file while the test ran");
+                    ok = false;
+                }
             }
         }
         if (aligned) ::VirtualFree(aligned, 0, MEM_RELEASE);
@@ -396,11 +494,20 @@ int MeltApply(const std::filesystem::path& exeDir, bool runNtfsFix) {
     opt.exeDir = exeDir;
     opt.runNtfsFix = runNtfsFix;
     opt.winDiskSysPath = exeDir / L"WinDisk_x64.sys";
+    // CLI 模式：复位由人按回车触发，不自动打下去。自动复位会让人来不及看日志、也来不及用别的
+    // 工具核对现场（"--melt 跑完就黑屏，不知道发生了什么"正是这个问题）。代价是这段时间里内存
+    // 中的注册表可能被懒写回覆盖我们刚写进磁盘的 hive —— 所以提示语里明确要求"尽快"。
+    opt.manualBugcheck = true;
     opt.confirm = [](const MeltResult&) { return true; };
 
     Print(L"SecMelt melt (non-interactive; --yes-i-know was given)");
-    Print(L"WARNING: this writes the SYSTEM hive to the raw disk, zeroes the transaction");
-    Print(L"         logs and then resets the machine by bugcheck. There is no rollback.");
+    Print(L"WARNING: this overwrites the SYSTEM hive on the raw disk and also its RegBack copy,");
+    Print(L"         so no earlier hive generation survives on this machine; then it resets the");
+    Print(L"         machine by bugcheck. There is no rollback: System Restore cannot undo it -");
+    Print(L"         only a VM snapshot taken beforehand can.");
+    Print(L"The reset is MANUAL in this mode: after the writes you will be asked to press Enter, so");
+    Print(L"you can read the log first. Until you press it, the registry in memory can overwrite the");
+    Print(L"hive on disk - do not walk away.");
     const MeltResult result = RunMelt(opt, [](const std::wstring& line) { Print(line); });
     if (!result.pending.empty()) {
         Print(L"--- planned actions ---");
@@ -431,6 +538,28 @@ int MeltDryRun(const std::filesystem::path& exeDir, bool runNtfsFix) {
     Print(L"--- planned actions (no raw disk write happened) ---");
     for (const auto& item : result.pending) Print(L"  " + item);
     Print(result.ok ? L"PASS" : L"FAIL");
+    return result.ok ? 0 : 1;
+}
+
+int PreflightScan(const std::filesystem::path& exeDir) {
+    // --preflight: melt 的自动位置扫描入口。参数形状与 --melt 相同：不走 TUI
+    // 的注册表编辑/hive 写回，不触发复位；唯一共享的粘合是：
+    //   A) 驱动装载（可能 kdu -dse 0）
+    //   B) 打开 handle: 设备做 raw I/O。
+    // 输出与 melt 相同的行级日志，方便与 melt 同一番话术。
+    MeltOptions opt;
+    opt.dryRun = false;
+    opt.exeDir = exeDir;
+    opt.runNtfsFix = false;  // 这个入口里不走 ntfsfix：判读本来就围绕它的副作用展开
+    opt.winDiskSysPath = exeDir / L"WinDisk_x64.sys";
+
+    Print(L"SecMelt preflight scan (non-interactive)");
+    Print(L"WARNING: this does raw disk I/O to the same system volume a melt would use;");
+    Print(L"         it does NOT write SYSTEM/RegBack or reset, but it does load an unsigned");
+    Print(L"         driver. Only meaningful on a VM with a snapshot.");
+    const MeltResult result = RunPreflightScan(
+        opt, [](const std::wstring& line) { Print(line); });
+    Print(result.ok ? L"PREFLIGHT PASS" : L"PREFLIGHT FAIL (see scan lines above)");
     return result.ok ? 0 : 1;
 }
 
