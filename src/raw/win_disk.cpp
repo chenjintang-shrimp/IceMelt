@@ -34,21 +34,15 @@ bool Ioctl(HANDLE device, DWORD code, const std::vector<unsigned char>& input,
     return true;
 }
 
-// 内核里的系统信息类（winternl.h 未导出 SYSTEM_CODEINTEGRITY_INFORMATION 的完整定义）
-constexpr int kSystemCodeIntegrityInformation = 103;
-constexpr ULONG kCodeIntegrityOptionEnabled = 0x00000001;
-
-struct CodeIntegrityInformation {
-    ULONG Length;
-    ULONG CodeIntegrityOptions;
-};
-
-using NtQuerySystemInformationFn = LONG(WINAPI*)(int, PVOID, ULONG, PULONG);
-
 }  // namespace
 
-WinDiskDevice::~WinDiskDevice() {
-    if (handle_ != INVALID_HANDLE_VALUE) ::CloseHandle(handle_);
+WinDiskDevice::~WinDiskDevice() { Close(); }
+
+void WinDiskDevice::Close() {
+    if (handle_ != INVALID_HANDLE_VALUE) {
+        ::CloseHandle(handle_);
+        handle_ = INVALID_HANDLE_VALUE;
+    }
 }
 
 const wchar_t* DeviceSymbolicLink() { return SYMBOLIC_LINK_NAME; }
@@ -141,18 +135,17 @@ bool WinDiskDevice::RebootNow(std::wstring& error) {
     return false;
 }
 
-bool LoadDriver(const std::filesystem::path& sysPath, const std::wstring& serviceName,
-                std::wstring& error) {
-    std::error_code ec;
+DriverLoad LoadDriver(const std::filesystem::path& sysPath, const std::wstring& serviceName,
+                      std::wstring& error) {
     if (!secmelt::PathIsRegularFile(sysPath)) {
         error = FormatW(L"driver file not found: %ls", sysPath.c_str());
-        return false;
+        return DriverLoad::Failed;
     }
 
     SC_HANDLE manager = ::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
     if (!manager) {
         error = FormatW(L"OpenSCManagerW failed: %u", ::GetLastError());
-        return false;
+        return DriverLoad::Failed;
     }
 
     SC_HANDLE service = ::CreateServiceW(
@@ -166,14 +159,14 @@ bool LoadDriver(const std::filesystem::path& sysPath, const std::wstring& servic
         if (createError != ERROR_SERVICE_EXISTS) {
             error = FormatW(L"CreateServiceW(%ls) failed: %u", serviceName.c_str(), createError);
             ::CloseServiceHandle(manager);
-            return false;
+            return DriverLoad::Failed;
         }
 
         service = ::OpenServiceW(manager, serviceName.c_str(), SERVICE_ALL_ACCESS);
         if (!service) {
             error = FormatW(L"OpenServiceW(%ls) failed: %u", serviceName.c_str(), ::GetLastError());
             ::CloseServiceHandle(manager);
-            return false;
+            return DriverLoad::Failed;
         }
         // 已存在的服务可能指向别处的旧驱动文件（本机实测就有指向 D:\新建文件夹 (3)\... 的残留），
         // 必须纠正，否则启动的是另一个二进制。
@@ -184,27 +177,32 @@ bool LoadDriver(const std::filesystem::path& sysPath, const std::wstring& servic
                             ::GetLastError());
             ::CloseServiceHandle(service);
             ::CloseServiceHandle(manager);
-            return false;
+            return DriverLoad::Failed;
         }
     }
 
-    bool ok = true;
+    bool loaded = true;
+    bool signatureRejected = false;
     if (!::StartServiceW(service, 0, nullptr)) {
         const DWORD startError = ::GetLastError();
         if (startError != ERROR_SERVICE_ALREADY_RUNNING) {
+            loaded = false;
+            // 577 就是"签名强制还在拦"。调用方拿它当 DSE 判据：先 kdu -dse 0，再重新
+            // 装载一次 —— 能装上了才算真的关掉（查询 CI 状态只是侧面推测）。
+            signatureRejected = startError == ERROR_INVALID_IMAGE_HASH;
             error = FormatW(L"StartServiceW(%ls) failed: %u%s", serviceName.c_str(), startError,
-                            startError == ERROR_INVALID_IMAGE_HASH
-                                ? L" (driver signature enforcement rejects this driver; SecMelt "
-                                  L"turns DSE off automatically via kdu before loading it)"
+                            signatureRejected
+                                ? L" (ERROR_INVALID_IMAGE_HASH: signature enforcement rejected "
+                                  L"this unsigned driver)"
                                 : L"");
-            ok = false;
         }
     }
 
 
     ::CloseServiceHandle(service);
     ::CloseServiceHandle(manager);
-    return ok;
+    if (loaded) return DriverLoad::Loaded;
+    return signatureRejected ? DriverLoad::SignatureRejected : DriverLoad::Failed;
 }
 
 bool UnloadDriver(const std::wstring& serviceName) {
@@ -277,33 +275,6 @@ bool QueryVolumeInfo(const std::wstring& volumePath, VolumeInfo& out, std::wstri
     out.bytesPerSector = bytesPerSector;
     out.sectorsPerCluster = sectorsPerCluster;
     out.volumeLength = numberSectors * bytesPerSector;
-    return true;
-}
-
-bool DseDisabled(bool& disabled, std::wstring& error) {
-    const HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
-    if (!ntdll) {
-        error = L"ntdll.dll is not loaded";
-        return false;
-    }
-    const auto query = reinterpret_cast<NtQuerySystemInformationFn>(
-        ::GetProcAddress(ntdll, "NtQuerySystemInformation"));
-    if (!query) {
-        error = L"NtQuerySystemInformation is not exported by ntdll.dll";
-        return false;
-    }
-
-    CodeIntegrityInformation info{};
-    info.Length = sizeof(info);
-    ULONG returned = 0;
-    const LONG status =
-        query(kSystemCodeIntegrityInformation, &info, sizeof(info), &returned);
-    if (status < 0) {
-        error = FormatW(L"NtQuerySystemInformation(SystemCodeIntegrityInformation) failed: 0x%08lX",
-                        static_cast<unsigned long>(status));
-        return false;
-    }
-    disabled = (info.CodeIntegrityOptions & kCodeIntegrityOptionEnabled) == 0;
     return true;
 }
 

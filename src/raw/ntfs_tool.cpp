@@ -286,4 +286,215 @@ bool NtfsCopyIn(HANDLE rawDevice, const VolumeInfo& vol, const std::filesystem::
     return true;
 }
 
+bool SetNtfsVolumeDirty(HANDLE rawDevice, const VolumeInfo& vol, int& exitCode,
+                        std::wstring& output, std::wstring& error) {
+    const std::filesystem::path tool = ResolveTool(L"ntfs-3g-cli.exe");
+    if (tool.empty()) {
+        error = L"ntfs-3g-cli.exe not found (looked in <exeDir>/tools, <exeDir>, PATH)";
+        return false;
+    }
+    // 设备必须写成 argv[1] 单独一个参数：该工具的 *ro*exclusive 选项就写在设备串里，
+    // 而 setdirty 是 argv[2]（见 ntfs-3g-cli.c 的一次性命令分支）。
+    const std::wstring args = L"\"" + HandleSpec(rawDevice, vol) + L"\" setdirty";
+    if (!RunTool(tool, args, exitCode, output)) {
+        error = output;
+        return false;
+    }
+    return true;
+}
+
+bool NtfsReadFile(HANDLE rawDevice, const VolumeInfo& vol, const std::wstring& ntfsPath,
+                  const std::filesystem::path& localOut, uint64_t bytes, int& exitCode,
+                  std::wstring& output, std::wstring& error, uint64_t* fileSize) {
+    if (fileSize) *fileSize = 0;
+    const std::filesystem::path tool = ResolveTool(L"ntfs-3g-cli.exe");
+    if (tool.empty()) {
+        error = L"ntfs-3g-cli.exe not found (looked in <exeDir>/tools, <exeDir>, PATH)";
+        return false;
+    }
+    secmelt::RemoveFile(localOut);  // 免得失败时读到上一次的残留
+    // 与 NtfsCopyIn 一样走 ToNtfsPath：ntfs_pathname_to_inode 只把 '/' 当分隔符，传反斜杠
+    // 会把整串当成一个文件名，读回 0 字节（这个坑踩过一次）。
+    const std::wstring args = L"\"" + HandleSpec(rawDevice, vol) + L"\" readhead " +
+                              QuoteArg(ToNtfsPath(ntfsPath)) + L" " +
+                              QuoteArg(localOut.wstring()) + L" " + std::to_wstring(bytes);
+    if (!RunTool(tool, args, exitCode, output)) {
+        error = output;
+        return false;
+    }
+    // 工具会报 "(file size N)"：调用方靠它区分"只读了前 N 字节"与"整份都读到了"，
+    // 并且在解析 base block 时有正确的文件长度可用。
+    if (fileSize) {
+        const std::wstring marker = L"(file size ";
+        const size_t at = output.find(marker);
+        if (at != std::wstring::npos) {
+            *fileSize = _wcstoui64(output.c_str() + at + marker.size(), nullptr, 10);
+        }
+    }
+    return true;
+}
+
+bool NtfsStatPath(HANDLE rawDevice, const VolumeInfo& vol, const std::wstring& ntfsPath,
+                  std::wstring& out) {
+    const std::filesystem::path tool = ResolveTool(L"ntfs-3g-cli.exe");
+    if (tool.empty()) {
+        out = L"ntfs-3g-cli.exe not found";
+        return false;
+    }
+    const std::wstring args = L"\"" + HandleSpec(rawDevice, vol) + L"\" stat:" +
+                              QuoteArg(ToNtfsPath(ntfsPath));
+    int exitCode = -1;
+    std::wstring output;
+    if (!RunTool(tool, args, exitCode, output)) {
+        out = output;
+        return false;
+    }
+    // 工具的 stderr 与 stdout 被合并捕获；失败时 errno 原因就在 output 里
+    out = output;
+    // 去掉行尾空白，便于直接拼进日志
+    while (!out.empty() && (out.back() == L'\n' || out.back() == L'\r' || out.back() == L' ')) {
+        out.pop_back();
+    }
+    return exitCode == 0;
+}
+
+bool NtfsListDir(HANDLE rawDevice, const VolumeInfo& vol, const std::wstring& ntfsPath,
+                 std::wstring& out) {
+    const std::filesystem::path tool = ResolveTool(L"ntfs-3g-cli.exe");
+    if (tool.empty()) {
+        out = L"ntfs-3g-cli.exe not found";
+        return false;
+    }
+    const std::wstring args = L"\"" + HandleSpec(rawDevice, vol) + L"\" list:" +
+                              QuoteArg(ToNtfsPath(ntfsPath));
+    int exitCode = -1;
+    std::wstring output;
+    if (!RunTool(tool, args, exitCode, output)) {
+        out = output;
+        return false;
+    }
+    out = output;
+    while (!out.empty() && (out.back() == L'\n' || out.back() == L'\r' || out.back() == L' ')) {
+        out.pop_back();
+    }
+    return exitCode == 0;
+}
+
+bool NtfsDeleteFile(HANDLE rawDevice, const VolumeInfo& vol, const std::wstring& ntfsPath,
+                    std::wstring& out) {
+    const std::filesystem::path tool = ResolveTool(L"ntfs-3g-cli.exe");
+    if (tool.empty()) {
+        out = L"ntfs-3g-cli.exe not found";
+        return false;
+    }
+    const std::wstring args = L"\"" + HandleSpec(rawDevice, vol) + L"\" rm:" +
+                              QuoteArg(ToNtfsPath(ntfsPath));
+    int exitCode = -1;
+    std::wstring output;
+    if (!RunTool(tool, args, exitCode, output)) {
+        out = output;
+        return false;
+    }
+    out = output;
+    while (!out.empty() && (out.back() == L'\n' || out.back() == L'\r' || out.back() == L' ')) {
+        out.pop_back();
+    }
+    return exitCode == 0;
+}
+
+bool NtfsAttrInfo(HANDLE rawDevice, const VolumeInfo& vol, const std::wstring& ntfsPath,
+                  std::wstring& out) {
+    const std::filesystem::path tool = ResolveTool(L"ntfs-3g-cli.exe");
+    if (tool.empty()) {
+        out = L"ntfs-3g-cli.exe not found";
+        return false;
+    }
+    const std::wstring args = L"\"" + HandleSpec(rawDevice, vol) + L"\" info:" +
+                              QuoteArg(ToNtfsPath(ntfsPath));
+    int exitCode = -1;
+    std::wstring output;
+    if (!RunTool(tool, args, exitCode, output)) {
+        out = output;
+        return false;
+    }
+    out = output;
+    while (!out.empty() && (out.back() == L'\n' || out.back() == L'\r' || out.back() == L' ')) {
+        out.pop_back();
+    }
+    return exitCode == 0;
+}
+
+bool NtfsRecordDump(HANDLE rawDevice, const VolumeInfo& vol, const std::wstring& ntfsPath,
+                    std::wstring& out) {
+    const std::filesystem::path tool = ResolveTool(L"ntfs-3g-cli.exe");
+    if (tool.empty()) {
+        out = L"ntfs-3g-cli.exe not found";
+        return false;
+    }
+    const std::wstring args = L"\"" + HandleSpec(rawDevice, vol) + L"\" record:" +
+                              QuoteArg(ToNtfsPath(ntfsPath));
+    int exitCode = -1;
+    std::wstring output;
+    if (!RunTool(tool, args, exitCode, output)) {
+        out = output;
+        return false;
+    }
+    out = output;
+    while (!out.empty() && (out.back() == L'\n' || out.back() == L'\r' || out.back() == L' ')) {
+        out.pop_back();
+    }
+    return exitCode == 0;
+}
+
+bool NtfsLogState(HANDLE rawDevice, const VolumeInfo& vol, std::wstring& out) {
+    const std::filesystem::path tool = ResolveTool(L"ntfs-3g-cli.exe");
+    if (tool.empty()) {
+        out = L"ntfs-3g-cli.exe not found";
+        return false;
+    }
+    const std::wstring args = L"\"" + HandleSpec(rawDevice, vol) + L"\" logstate";
+    int exitCode = -1;
+    std::wstring output;
+    if (!RunTool(tool, args, exitCode, output)) {
+        out = output;
+        return false;
+    }
+    out = output;
+    while (!out.empty() && (out.back() == L'\n' || out.back() == L'\r' || out.back() == L' ')) {
+        out.pop_back();
+    }
+    // exit 1 且 stderr 带原因 = 探测失败（卷挂不上）；exit 0 = 状态已取出
+    return exitCode == 0;
+}
+
+bool NtfsResolvePath(HANDLE rawDevice, const VolumeInfo& vol, const std::wstring& ntfsPath,
+                     std::wstring& canonical, bool* ambiguous) {
+    canonical.clear();
+    if (ambiguous) *ambiguous = false;
+    const std::filesystem::path tool = ResolveTool(L"ntfs-3g-cli.exe");
+    if (tool.empty()) return false;
+    const std::wstring args = L"\"" + HandleSpec(rawDevice, vol) + L"\" resolve:" +
+                              QuoteArg(ToNtfsPath(ntfsPath));
+    int exitCode = -1;
+    std::wstring output;
+    if (!RunTool(tool, args, exitCode, output) || exitCode != 0) return false;
+
+    // 工具把 AMBIGUOUS 标记打在 stderr（与 stdout 合并捕获）：多于一个大写不敏感匹配 =
+    // 目录里已经有"只有大小写不同"的重名文件，NTFS 按设计不允许 —— 说明这个卷已经被写坏过。
+    if (ambiguous && output.find(L"AMBIGUOUS") != std::wstring::npos) *ambiguous = true;
+
+    // 输出形如 "resolve: <input> -> <canonical>"
+    const std::wstring marker = L" -> ";
+    const size_t at = output.find(marker);
+    if (at == std::wstring::npos) return false;
+    canonical = output.substr(at + marker.size());
+    const size_t nl = canonical.find(L'\n');
+    if (nl != std::wstring::npos) canonical.resize(nl);
+    while (!canonical.empty() &&
+           (canonical.back() == L'\n' || canonical.back() == L'\r' || canonical.back() == L' ')) {
+        canonical.pop_back();
+    }
+    return !canonical.empty();
+}
+
 }  // namespace secmelt

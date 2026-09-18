@@ -44,8 +44,11 @@ public:
     bool WriteAt(uint64_t byteOffset, const void* data, size_t len, std::wstring& error);
     bool ReadAt(uint64_t byteOffset, void* data, size_t len, std::wstring& error);
 
+    // 关闭用户态设备句柄；调用方随后可删除 WinDisk 的 SCM 服务项。
+    void Close();
+
     // CTL_REBOOT_SYSTEM：硬重启。调用后不返回（若发生中止即为失败）。
-    bool RebootNow(std::wstring& error);
+    bool RebootNow(std::wstring &error);
 
     HANDLE raw() const { return handle_; }
     bool valid() const;
@@ -58,20 +61,24 @@ private:
 // 与 CreateFile，但不必因此包含三方头文件。
 const wchar_t* DeviceSymbolicLink();
 
+// 装载内核驱动服务的结果。判据就是 StartServiceW 的返回码本身：未签名的 WinDisk
+// 只有驱动签名强制（DSE）真被解开才装得上，除非去装载，否则"CI 开着没有"都只是侧面推测。
+enum class DriverLoad {
+    Loaded,             // 已启动，或本来就是运行中
+    SignatureRejected,  // StartServiceW 返回 577(ERROR_INVALID_IMAGE_HASH)：签名强制拦下了
+    Failed,             // 其它错误（服务注册/启动失败、文件不存在…）
+};
+
 // 创建/更新内核驱动服务并启动。
 // 服务已存在（ERROR_SERVICE_EXISTS）或已运行（ERROR_SERVICE_ALREADY_RUNNING）视为成功；
 // ImagePath 与 sysPath 不一致时用 ChangeServiceConfigW 纠正。
-bool LoadDriver(const std::filesystem::path& sysPath, const std::wstring& serviceName,
-                std::wstring& error);
+DriverLoad LoadDriver(const std::filesystem::path& sysPath, const std::wstring& serviceName,
+                      std::wstring& error);
 
 // 停止并删除服务（尽力而为，用于清理）
 bool UnloadDriver(const std::wstring& serviceName);
 
 // 读卷的引导扇区与磁盘范围（如 L"\\\\.\\C:"）
 bool QueryVolumeInfo(const std::wstring& volumePath, VolumeInfo& out, std::wstring& error);
-
-// 查询 DSE（驱动签名强制）状态。
-// disabled = CodeIntegrityOptions 中 CODEINTEGRITY_OPTION_ENABLED 未置位。
-bool DseDisabled(bool& disabled, std::wstring& error);
 
 }  // namespace secmelt
