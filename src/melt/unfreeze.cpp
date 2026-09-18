@@ -817,6 +817,22 @@ bool VerifyHiveWrite(WinDiskDevice& device, const VolumeInfo& vol, const std::ws
         return false;
     }
 
+    // 结构性关卡只对**内容确实是 hive**的写回生效：--preflight 的分层探针在本地没有
+    // 导出文件时是合成字节（(i*31+17)&0xFF 的重复模式，根本不是 regf）——对它要求
+    // base block 有效等于把"写通道完全没问题"误报成失败。melt 写回的导出总是 regf，
+    // 该走的检查一步不少。
+    {
+        HiveBaseBlock expectedBlock;
+        const bool contentIsHive =
+            ParseBaseBlock(expected.data(), expected.size(), expected.size(), expectedBlock) &&
+            expectedBlock.signatureOk;
+        if (!contentIsHive) {
+            log.ok(L"ntfs-3g reads back the exact bytes we wrote; the probe content is not a "
+                   L"regf hive, so structure-level checks do not apply to it");
+            return true;
+        }
+    }
+
     // base block 直接用读回来的那份解析 —— 它才是下次启动时内核会看到的东西。
     HiveBaseBlock onDisk;
     if (!ParseBaseBlock(actual.data(), actual.size(), actual.size(), onDisk)) {
