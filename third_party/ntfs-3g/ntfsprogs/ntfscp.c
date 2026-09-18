@@ -1125,30 +1125,39 @@ int main(int argc, char *argv[])
 
 	ntfs_log_verbose("Starting write.\n");
 	offset = 0;
+	result = 0;
 	while (!feof(in)) {
 		if (caught_terminate) {
-			ntfs_log_error("SIGTERM or SIGINT received.  "
-					"Aborting write.\n");
+			ntfs_log_error("SIGTERM or SIGINT received.  Aborting write.\n");
+			result = EINTR;
 			break;
 		}
-		br = fread(buf, 1, NTFS_BUF_SIZE, in);
-		if (!br) {
-			if (!feof(in)) ntfs_log_perror("ERROR: fread failed");
-			break;
+	br = fread(buf, 1, NTFS_BUF_SIZE, in);
+	if (!br) {
+		if (!feof(in)) {
+			ntfs_log_perror("ERROR: fread failed");
+			result = errno ? errno : EIO;
 		}
-		bw = ntfs_attr_pwrite(na, offset, br, buf);
-		if (bw != br) {
-			ntfs_log_perror("ERROR: ntfs_attr_pwrite failed");
-			break;
-		}
-		offset += bw;
+		break;
 	}
-	if ((na->data_flags & ATTR_COMPRESSION_MASK)
-	    && ntfs_attr_pclose(na))
-		ntfs_log_perror("ERROR: ntfs_attr_pclose failed");
-	ntfs_log_verbose("Syncing.\n");
-	result = 0;
-	free(buf);
+	bw = ntfs_attr_pwrite(na, offset, br, buf);
+	if (bw != br) {
+		if (bw <= 0)
+			ntfs_log_perror("ERROR: ntfs_attr_pwrite failed");
+		else
+			ntfs_log_error("ERROR: ntfs_attr_pwrite short write: %lld of %zu bytes.\n",
+				(long long)bw, br);
+		result = (bw <= 0 && errno) ? errno : EIO;
+		break;
+	}
+	offset += bw;
+}
+if ((na->data_flags & ATTR_COMPRESSION_MASK) && ntfs_attr_pclose(na)) {
+	ntfs_log_perror("ERROR: ntfs_attr_pclose failed");
+	if (!result) result = errno ? errno : EIO;
+}
+ntfs_log_verbose("Syncing.\n");
+free(buf);
 close_attr:
 	ntfs_attr_close(na);
 	if (opts.timestamp) {
@@ -1162,14 +1171,15 @@ close_attr:
 		}
 	}
 close_dst:
-	while (ntfs_inode_close(out) && !opts.noaction) {
-		if (errno != EBUSY) {
-			ntfs_log_error("Sync failed. Run chkdsk.\n");
-			break;
-		}
-		ntfs_log_error("Device busy.  Will retry sync in 3 seconds.\n");
-		sleep(3);
-	}
+    while (ntfs_inode_close(out) && !opts.noaction) {
+        if (errno != EBUSY) {
+            ntfs_log_error("ERROR: Sync failed. Run chkdsk.\n");
+            if (!result) result = errno ? errno : EIO;
+            break;
+        }
+        ntfs_log_error("Device busy. Will retry sync in 3 seconds.\n");
+        sleep(3);
+    }
 close_src:
 	fclose(in);
 umount:

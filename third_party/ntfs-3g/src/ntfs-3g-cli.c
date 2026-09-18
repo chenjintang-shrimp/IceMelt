@@ -220,6 +220,18 @@ BOOL MyFileOP(LPFN_FILE_OP_FUNC lpOpFunc, HANDLE hFile, LPVOID lpBuffer, DWORD d
 	return TRUE;
 }
 
+/* 与 ntfscp 的 ntfs_utils_unix_path() 同义：只把 '\\' 换成 '/'。
+ * ntfs_pathname_to_inode 只认 '/' 作分隔符，反斜杠会被当成文件名字符（踩过一次：
+ * 传 "\Windows\System32\config\SYSTEM" 进去，整串被当成一个文件名 → 读到 0 字节）。 */
+static char *unix_path(const char *in) {
+	char *out = strdup(in);
+	int i;
+	if (!out) return NULL;
+	for (i = 0; out[i]; i++)
+		if (out[i] == '\\') out[i] = '/';
+	return out;
+}
+
 char *gen_path(const char *origpath) {
 	char *pth = malloc(2048);
 	memset(pth, 0, sizeof(pth));
@@ -646,11 +658,277 @@ void sighldr(int sig) {
 }
 
 int main(int argc, char **argv) {
-	if (argc != 2 && argc != 4) {
-		fprintf(stderr, "usage: %s <device>[*option1*option2*...] [control pipe]\n", EXEC_NAME);
+	if (argc != 2 && argc != 3 && argc != 4 && argc != 6) {
+		fprintf(stderr, "usage: %s <device>[*option1*option2*...] [command | control pipe]\n", EXEC_NAME);
+		fprintf(stderr, "commands: setdirty | stat:<path> | readhead <ntfsPath> <localOut> <bytes>\n");
 		return 1;
 	}
 	signal(SIGINT, sighldr);
+	/* ---- 一次性命令：自己直接挂载，不经过 FUSE 层 -----------------------------
+	 *
+	 * 放在 ntfs_fuse_init/ntfs_open **之前**，因为：
+	 *   * ntfsfix / ntfscp 用的就是直接挂载这条路（utils_mount_volume → ntfs_mount），
+	 *     它在这个 handle: 卷上被证明可用；而 FUSE 层会附加 EXCLUSIVE / IGNORE_HIBERFILE、
+	 *     读 $Bitmap 与 $MFT 位图、甚至处理 hiberfil.sys —— 对"读一下这个路径装的是什么"
+	 *     既没必要，还多出改动卷的机会。
+	 *   * 只读探针用 NTFS_MNT_RDONLY 挂载：**不重放日志、不清 dirty 标记，一个字节都不写**。
+	 *     （这正是之前用 ntfs_open 探测时最大的问题 —— 那个挂载本身可能改卷。）
+	 */
+	if (argc == 3 || (argc == 6 && !strcmp(argv[2], "readhead"))) {
+		/* setdirty：置卷的 VOLUME_IS_DIRTY 标记 —— chkdsk /f 对在用卷做的就是这件事。
+		 * 复用 libntfs-3g 的 ntfs_volume_write_flags()，不手搓 $Volume 的 MFT 偏移。 */
+		if (argc == 3 && !strcmp(argv[2], "setdirty")) {
+			unsigned short before = 0, after = 0;
+			int rs = ntfs_set_volume_dirty_direct(argv[1], &before, &after);
+			if (rs < 0) {
+				fprintf(stderr, "setdirty failed: %s\n", strerror(-rs));
+				return 1;
+			}
+			printf("volume flags: 0x%04X -> 0x%04X (VOLUME_IS_DIRTY set)\n", before, after);
+			return 0;
+		}
+
+		/* stat:<ntfsPath>：解析路径到 inode。给"读不到"当诊断用 ——
+		 * ntfs_pathname_to_inode 逐层查找，任一层缺失都只报 ENOENT；逐层 stat 一遍就能
+		 * 看出是**哪一层**断的（是 /Windows 不在，还是最末一层 SYSTEM 不在）。 */
+		if (argc == 3 && !strncmp(argv[2], "stat:", 5)) {
+			char *pth = unix_path(argv[2] + 5);
+			const char *paths[1];
+			long long size = -1;
+			int found;
+			paths[0] = pth;
+			found = ntfs_stat_paths_direct(argv[1], paths, 1, &size);
+			if (found < 0) {
+				fprintf(stderr, "stat: mount failed: %s\n", strerror(-found));
+				free(pth);
+				return 1;
+			}
+			if (size == -1) {
+				fprintf(stderr, "stat: %s: No such file or directory\n", pth);
+				free(pth);
+				return 1;
+			}
+			printf("stat: %s size=%lld%s\n", pth, size,
+			       size == -2 ? " (directory)" : "");
+			free(pth);
+			return 0;
+		}
+
+		/* readhead <ntfsPath> <localOut> <bytes>：把 ntfs-3g 看到的文件开头若干字节抄到
+		 * 本地文件。存在的理由：活动 SYSTEM hive 被内核独占持有（按 Win32 路径
+		 * CreateFileW 会得到 ERROR_SHARING_VIOLATION=32），所以没法用普通 API 打开它
+		 * 校验；而校验**必须**看 ntfs-3g 的视图 —— ntfscp 就是按这个视图写盘的。
+		 *
+		 * 后两个参数**两种顺序都接受**（哪个是纯数字就当字节数）：文档里写错过一次顺序，
+		 * 与其让人记住，不如让它容错。 */
+		if (argc == 6 && !strcmp(argv[2], "readhead")) {
+			const char *outPath = NULL;
+			const char *countStr = NULL;
+			long long want = 0;
+			long long total = -1;
+			char *pth;
+			char *buf;
+			FILE *out;
+			int rs;
+
+			{
+				char *endA = NULL, *endB = NULL;
+				const long long a = strtoll(argv[4], &endA, 10);
+				const long long b = strtoll(argv[5], &endB, 10);
+				if (endA && *endA == 0 && argv[4][0] != 0) {
+					countStr = argv[4];
+					outPath = argv[5];
+					want = a;
+				} else if (endB && *endB == 0 && argv[5][0] != 0) {
+					countStr = argv[5];
+					outPath = argv[4];
+					want = b;
+				}
+				(void)countStr;
+			}
+			if (want <= 0) {
+				fprintf(stderr, "readhead: bad byte count (got '%s' and '%s'; need one number and "
+				                "one output path)\n", argv[4], argv[5]);
+				return 1;
+			}
+			pth = unix_path(argv[3]);
+			buf = malloc((size_t)want);
+			if (!buf) {
+				perror("malloc");
+				free(pth);
+				return 1;
+			}
+			rs = ntfs_read_file_direct(argv[1], pth, buf, (size_t)want, &total);
+			if (rs < 0) {
+				/* 读不到**不等于**"内容不是 hive"：调用方要靠这个区分"读失败"与
+				 * "读到了别的东西"，否则会给出错误诊断。 */
+				fprintf(stderr, "readhead: %s: %s\n", pth, strerror(-rs));
+				free(pth);
+				free(buf);
+				return 1;
+			}
+			out = fopen(outPath, "wb");
+			if (!out) {
+				perror("fopen");
+				free(pth);
+				free(buf);
+				return 1;
+			}
+			fwrite(buf, 1, (size_t)rs, out);
+			fclose(out);
+			/* 顺带报文件总长：调用方要用它判断"我们只读了前 N 字节"还是"整份都读到了"，
+			 * 以及解析 base block 时才有正确的文件长度可用（否则 root cell 校验没意义）。 */
+			printf("readhead: %d of %lld bytes from %s (file size %lld)\n", rs, want, pth,
+			       total);
+			free(pth);
+			free(buf);
+			return rs == (int)want ? 0 : 1;
+		}
+
+		/* list:<ntfsPath>：列目录（只读直接挂载）。给"路径查不到"当诊断用 ——
+		 * ntfs_pathname_to_inode 只报 ENOENT，看不出**父目录里到底有什么**；
+		 * 列一遍就知道目标是"索引里根本没这个名字"还是"查找本身有问题"。 */
+		if (argc == 3 && !strncmp(argv[2], "list:", 5)) {
+			char *pth = unix_path(argv[2] + 5);
+			char *buf = malloc(65536);
+			int n;
+			if (!buf) {
+				perror("malloc");
+				free(pth);
+				return 1;
+			}
+			n = ntfs_list_dir_direct(argv[1], pth, buf, 65536);
+			if (n < 0) {
+				fprintf(stderr, "list: %s: %s\n", pth, strerror(-n));
+				free(pth);
+				free(buf);
+				return 1;
+			}
+			printf("%s (%d entries):\n%s", pth, n, buf);
+			free(pth);
+			free(buf);
+			return 0;
+		}
+
+		/* resolve:<ntfsPath>：回填**卷上真实的名字**（大小写不敏感回退）。
+		 * 用途：大写 SYSTEM 查不到而真实名字是小写 system 时，把真名报出来 ——
+		 * 也让调用方知道 ntfscp 该往哪个名字写。 */
+		if (argc == 3 && !strncmp(argv[2], "resolve:", 8)) {
+			char *pth = unix_path(argv[2] + 8);
+			char *canon = malloc(2048);
+			int rs;
+			if (!canon) {
+				perror("malloc");
+				free(pth);
+				return 1;
+			}
+			rs = ntfs_resolve_path_direct(argv[1], pth, canon, 2048);
+			if (rs < 0) {
+				fprintf(stderr, "resolve: %s: %s\n", pth, strerror(-rs));
+				free(pth);
+				free(canon);
+				return 1;
+			}
+			printf("resolve: %s -> %s\n", pth, canon);
+			free(pth);
+			free(canon);
+			return 0;
+		}
+
+		/* info:<ntfsPath>：把磁盘上那个 inode 的 data_size / initialized_size / runlist 打出来。
+		 * 用来分辨"读回一大片零"到底是"写没落上"还是"读到了洞/未初始化区"——
+		 * 读到 initialized_size 之外返回零，runlist 的 hole 也返回零。 */
+		if (argc == 3 && !strncmp(argv[2], "info:", 5)) {
+			char *pth = unix_path(argv[2] + 5);
+			char *buf = malloc(65536);
+			int rs;
+			if (!buf) {
+				perror("malloc");
+				free(pth);
+				return 1;
+			}
+			rs = ntfs_attr_info_direct(argv[1], pth, buf, 65536);
+			if (rs < 0) {
+				fprintf(stderr, "info: %s: %s\n", pth, strerror(-rs));
+				free(pth);
+				free(buf);
+				return 1;
+			}
+			printf("info: %s\n%s", pth, buf);
+			free(pth);
+			free(buf);
+			return 0;
+		}
+
+		/* record:<ntfsPath>：把磁盘上那个 inode 的 MFT 记录**原始字节/布局**倾倒出来。
+		 * info: 报的是解析后的字段；当 initialized_size 出现任何合法写入者都产生不了的
+		 * 值（例如 4701）时，只有看字节本身才能定案 —— 属性布局、记录序号、
+		 * $STANDARD_INFORMATION 的四个时间戳都是"最后写入者"的笔迹。 */
+		if (argc == 3 && !strncmp(argv[2], "record:", 7)) {
+			char *pth = unix_path(argv[2] + 7);
+			char *buf = malloc(65536);
+			int rs;
+			if (!buf) {
+				perror("malloc");
+				free(pth);
+				return 1;
+			}
+			rs = ntfs_record_dump_direct(argv[1], pth, buf, 65536);
+			if (rs < 0) {
+				fprintf(stderr, "record: %s: %s\n", pth, strerror(-rs));
+				free(pth);
+				free(buf);
+				return 1;
+			}
+			printf("record: %s\n%s", pth, buf);
+			free(pth);
+			free(buf);
+			return 0;
+		}
+
+		/* logstate：只读探测 $LogFile 重启页版本与卷 dirty 位。
+		 * RW 挂载（ntfscp -f / setdirty）在重启页 v2.0 时被 libntfs-3g 无条件拒绝
+		 * （"Windows 持有缓存元数据"：fast startup / 休眠 / 掉电状态）。
+		 * melt 在写回前先跑这个探针，把状态显式报给操作者。 */
+		if (argc == 3 && !strcmp(argv[2], "logstate")) {
+			char *buf = malloc(65536);
+			int rs;
+			if (!buf) {
+				perror("malloc");
+				return 1;
+			}
+			rs = ntfs_logstate_direct(argv[1], buf, 65536);
+			if (rs < 0) {
+				fprintf(stderr, "logstate: %s\n", strerror(-rs));
+				free(buf);
+				return 1;
+			}
+			printf("%s", buf);
+			free(buf);
+			return 0;
+		}
+
+		/* rm:<ntfsPath>：删一个文件（直接挂载，可写）。只给"写路径自检"清理那卷上的临时
+		 * 文件用 —— 那是我们自己在卷根建的，删掉它是收尾，不是对系统文件动手。
+		 * 实现放在 ntfs-3g-fuse.c（本文件不能包含 ntfs 头：layout.h 的 GUID 与
+		 * <windows.h> 冲突，见文件开头的说明）。 */
+		if (argc == 3 && !strncmp(argv[2], "rm:", 3)) {
+			char *pth = unix_path(argv[2] + 3);
+			int rs = ntfs_delete_direct(argv[1], pth);
+			if (rs < 0) {
+				fprintf(stderr, "rm: %s: %s\n", pth, strerror(-rs));
+				free(pth);
+				return 1;
+			}
+			printf("rm: deleted %s\n", pth);
+			free(pth);
+			return 0;
+		}
+
+		fprintf(stderr, "unknown command '%s' (known: setdirty, logstate, stat:<path>, list:<path>, "
+		                "resolve:<path>, info:<path>, record:<path>, rm:<path>, readhead)\n", argv[2]);
+	}
+
 	if (ntfs_fuse_init()) {
 		perror("failed to init the NTFS library");
 		return 1;

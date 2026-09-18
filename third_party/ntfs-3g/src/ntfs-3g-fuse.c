@@ -35,6 +35,7 @@
 #include <stdlib.h>
 #include <locale.h>
 #include <limits.h>
+#include <ctype.h>
 #include <sys/stat.h>
 #include <utime.h>
 
@@ -45,6 +46,7 @@
 #include "dir.h"
 #include "unistr.h"
 #include "layout.h"
+#include "logfile.h"
 #include "index.h"
 #include "ntfstime.h"
 #include "security.h"
@@ -1200,6 +1202,757 @@ close_inode:
 	if (ntfs_inode_close(ni))
 		set_fuse_error(&ret);
 	return ret;
+}
+
+/* ---- 直接挂载的探针/写入（不经过 FUSE 层）---------------------------------
+ *
+ * 见 ntfs-3g-fuse.h 的说明：只读探针用 NTFS_MNT_RDONLY，不重放日志、不清 dirty 标记，
+ * 一个字节都不写；这正是"写之前先确认目标是什么"该有的性质。 */
+
+/* libntfs-3g 默认是**区分大小写**的（volume.c:531 "Default with no locase table and case
+ * sensitive file names"），唯一解除它的是 ntfs_set_ignore_case()，而全项目只有 lowntfs-3g
+ * （FUSE 低层驱动）会调用它。ntfsfix / ntfscp / 我们这些直接挂载因此都是**区分大小写**的 ——
+ * 与 Windows（NTFS 大小写不敏感）不一致。
+ *
+ * 这个不一致是要命的：ntfscp 在目标查不到时会 ntfs_new_file **新建一个文件**。卷上真实名字
+ * 是 `system` 而传 `SYSTEM` 时，它就会在同一个目录里造出一个只有大小写不同的重名文件，真正的
+ * hive 一个字节都没改，而它报成功。
+ *
+ * 所以我们的直接挂载一律先打开 ignore_case，行为向 Windows 看齐。 */
+static void ntfs_direct_enable_ignore_case(ntfs_volume *vol)
+{
+	if (vol && !ntfs_set_ignore_case(vol))
+		return;	/* 成功：lookup 按 $UpCase 表做大小写不敏感匹配 */
+	/* 失败（locase 表建不出来）时保持区分大小写，但至少不是静默的 */
+	ntfs_log_error("could not enable ignore_case; file name lookups stay case-sensitive\n");
+}
+
+int ntfs_read_file_direct(const char *device, const char *path, char *buf, size_t size,
+			  long long *total_size)
+{
+	ntfs_volume *vol;
+	ntfs_inode *ni;
+	ntfs_attr *na;
+	s64 want, got;
+	int res;
+
+	if (!device || !path || !buf || !size)
+		return -EINVAL;
+	if (total_size)
+		*total_size = -1;
+
+	vol = ntfs_mount(device, NTFS_MNT_RDONLY);
+	if (!vol)
+		return -errno;
+	ntfs_direct_enable_ignore_case(vol);
+
+	ni = ntfs_pathname_to_inode(vol, NULL, path);
+	if (!ni) {
+		res = -errno;
+		goto out;
+	}
+	na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
+	if (!na) {
+		res = -errno;
+		ntfs_inode_close(ni);
+		goto out;
+	}
+
+	want = (s64)size;
+	if (na->data_size < want)
+		want = na->data_size;
+	if (total_size)
+		*total_size = (long long)na->data_size;
+	got = ntfs_attr_pread(na, 0, want, buf);
+	if (got < 0)
+		res = -errno;
+	else if (got != want)
+		res = -EIO;
+	else
+		res = (int)got;
+
+	ntfs_attr_close(na);
+	ntfs_inode_close(ni);
+out:
+	ntfs_umount(vol, FALSE);
+	return res;
+}
+
+int ntfs_stat_paths_direct(const char *device, const char *const *paths, int count,
+			   long long *sizes)
+{
+	ntfs_volume *vol;
+	int i, found = 0;
+
+	if (!device || !paths || count <= 0 || !sizes)
+		return -EINVAL;
+
+	vol = ntfs_mount(device, NTFS_MNT_RDONLY);
+	if (!vol)
+		return -errno;
+	ntfs_direct_enable_ignore_case(vol);
+
+	for (i = 0; i < count; ++i) {
+		ntfs_inode *ni;
+		ntfs_attr *na;
+		sizes[i] = -1;
+		if (!paths[i])
+			continue;
+		ni = ntfs_pathname_to_inode(vol, NULL, paths[i]);
+		if (!ni)
+			continue;
+		na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
+		if (na) {
+			sizes[i] = (long long)na->data_size;
+			ntfs_attr_close(na);
+		} else if (ni->mrec->flags & MFT_RECORD_IS_DIRECTORY) {
+			sizes[i] = -2;	/* 存在，是个目录 */
+			++found;
+			ntfs_inode_close(ni);
+			continue;
+		}
+		ntfs_inode_close(ni);
+		if (sizes[i] >= 0)
+			++found;
+	}
+	ntfs_umount(vol, FALSE);
+	return found;
+}
+
+int ntfs_set_volume_dirty_direct(const char *device, unsigned short *flags_before,
+				 unsigned short *flags_after)
+{
+	ntfs_volume *vol;
+	VOLUME_FLAGS flags;
+	int res;
+
+	if (!device)
+		return -EINVAL;
+
+	/* 要写 $Volume，所以不能只读挂载；RECOVER 与 ntfscp -f / ntfsfix 一致 —— 它们在
+	 * 这个卷上都能正常挂载。 */
+	vol = ntfs_mount(device, NTFS_MNT_RECOVER);
+	if (!vol)
+		return -errno;
+	ntfs_direct_enable_ignore_case(vol);
+
+	if (flags_before)
+		*flags_before = le16_to_cpu(vol->flags);
+	flags = vol->flags | VOLUME_IS_DIRTY;
+	res = ntfs_volume_write_flags(vol, flags);
+	if (!res && flags_after)
+		*flags_after = le16_to_cpu(vol->flags);
+	else if (res)
+		res = -errno;
+
+	ntfs_umount(vol, FALSE);
+	return res;
+}
+
+/* logstate: 的实现 —— 只读探测 $LogFile 的重启页版本与卷 dirty 位。
+ *
+ * 为什么需要：RW 挂载（ntfscp -f / setdirty）在重启页为 v2.0 时被 libntfs-3g
+ * 无条件拒绝（volume.c 的 ntfs_volume_check_logfile → EPERM，连 RECOVER 都
+ * 绕不过）：v2.0 意味着"Windows 持有该卷的缓存元数据"（fast startup / 休眠 /
+ * 掉电后的状态），此时绕过文件系统写盘等于和 OS 缓存赛跑。把这个状态在写回
+ * 之前显式报出来，操作者先做一次真关机（shutdown /s）或 powercfg /h off，
+ * 而不是让 ntfscp 在 preflight 里摔死。只读挂载，一个字节都不写。 */
+int ntfs_logstate_direct(const char *device, char *out, size_t cap)
+{
+	ntfs_volume *vol;
+	ntfs_inode *ni;
+	ntfs_attr *na;
+	s64 pos, size;
+	u8 *kaddr = NULL;
+	RESTART_PAGE_HEADER *rph = NULL;
+	size_t used = 0;
+	int res = 0;
+
+	if (!device || !out || cap < 2)
+		return -EINVAL;
+	out[0] = 0;
+
+	vol = ntfs_mount(device, NTFS_MNT_RDONLY);
+	if (!vol)
+		return -errno;
+	ntfs_direct_enable_ignore_case(vol);
+
+#define LS(...) do { \
+		int _n = snprintf(out + used, used < cap ? cap - used : 0, __VA_ARGS__); \
+		if (_n > 0) used += (size_t)_n; \
+		if (used >= cap) { used = cap - 1; out[used] = 0; goto done; } \
+	} while (0)
+
+	LS("volume_flags=0x%04x dirty=%s\n",
+		(unsigned)le16_to_cpu(vol->flags),
+		(vol->flags & VOLUME_IS_DIRTY) ? "yes" : "no");
+
+	ni = ntfs_inode_open(vol, FILE_LogFile);
+	if (!ni) {
+		LS("$LogFile: cannot open (inode %d): %s\n", FILE_LogFile, strerror(errno));
+		res = 0;  /* 状态不明确但不是拒绝：留给 ntfscp 自己去撞 */
+		goto done;
+	}
+	na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
+	if (!na) {
+		LS("$LogFile: cannot open $DATA\n");
+		ntfs_inode_close(ni);
+		goto done;
+	}
+	kaddr = ntfs_malloc(NTFS_BLOCK_SIZE);
+	if (!kaddr) {
+		LS("$LogFile: out of memory\n");
+		ntfs_attr_close(na);
+		ntfs_inode_close(ni);
+		goto done;
+	}
+	/* 与 ntfs_check_logfile 同法：只在可能是重启页起点的位置上找。
+	 * $LogFile 被清空（全 0xFF）时找不到任何 RSTR/CHKD → empty。 */
+	size = na->data_size;
+	rph = NULL;
+	for (pos = 0; pos < size && pos < (s64)MaxLogFileSize; pos = pos ? pos << 1 : (NTFS_BLOCK_SIZE >> 1)) {
+		if (ntfs_attr_pread(na, pos, NTFS_BLOCK_SIZE, kaddr) != NTFS_BLOCK_SIZE)
+			break;
+		if (ntfs_is_empty_recordp((le32*)kaddr))
+			continue;
+		if (ntfs_is_rcrd_recordp((le32*)kaddr))
+			break;
+		if (ntfs_is_rstr_recordp((le32*)kaddr) || ntfs_is_chkd_recordp((le32*)kaddr)) {
+			rph = (RESTART_PAGE_HEADER*)kaddr;
+			break;
+		}
+	}
+	if (!rph) {
+		LS("logfile: EMPTY (no restart page -- emptied by ntfsfix)\n");
+	} else {
+		const int major = (int)sle16_to_cpu(rph->major_ver);
+		const int minor = (int)sle16_to_cpu(rph->minor_ver);
+		LS("logfile: magic=%c%c%c%c major=%d minor=%d system_page=%u\n",
+			((const char*)&rph->magic)[0], ((const char*)&rph->magic)[1],
+			((const char*)&rph->magic)[2], ((const char*)&rph->magic)[3],
+			major, minor, (unsigned)le32_to_cpu(rph->system_page_size));
+		if (major == 2 && minor == 0)
+			LS("cached_metadata=YES -- libntfs-3g refuses RW mount of this volume\n"
+			   "(fast startup / hibernation / power-cut state; do a real shutdown\n"
+			   "(shutdown /s) or powercfg /h off, then retry the melt)\n");
+		else
+			LS("cached_metadata=no (version %d.%d is mountable)\n", major, minor);
+	}
+	free(kaddr);
+	ntfs_attr_close(na);
+	ntfs_inode_close(ni);
+
+done:
+	ntfs_umount(vol, FALSE);
+	return res;
+}
+
+typedef struct {
+	char *buf;
+	size_t cap;
+	size_t used;
+	int count;
+	int truncated;
+} list_ctx_t;
+
+static int list_ctx_filler(list_ctx_t *ctx, const ntfschar *name, const int name_len,
+			   const int name_type, const s64 pos __attribute__((unused)),
+			   const MFT_REF mref __attribute__((unused)),
+			   const unsigned dt_type)
+{
+	char *mbs = NULL;
+	int len;
+	size_t need;
+
+	if (name_type == FILE_NAME_DOS)
+		return 0;
+	len = ntfs_ucstombs(name, name_len, &mbs, 0);
+	if (len < 0)
+		return -1;
+
+	++ctx->count;
+	need = (size_t)len + 12;	/* 名字 + 制表符 + 类型 + 换行 */
+	if (ctx->used + need >= ctx->cap) {
+		ctx->truncated = 1;
+		free(mbs);
+		return 0;
+	}
+	ctx->buf[ctx->used++] = (dt_type == NTFS_DT_DIR) ? 'D' : 'F';
+	ctx->buf[ctx->used++] = '\t';
+	memcpy(ctx->buf + ctx->used, mbs, (size_t)len);
+	ctx->used += (size_t)len;
+	ctx->buf[ctx->used++] = '\n';
+	ctx->buf[ctx->used] = 0;
+	free(mbs);
+	return 0;
+}
+
+int ntfs_list_dir_direct(const char *device, const char *path, char *buf, size_t cap)
+{
+	ntfs_volume *vol;
+	ntfs_inode *ni;
+	list_ctx_t ctx;
+	s64 pos = 0;
+	int res;
+
+	if (!device || !path || !buf || cap < 2)
+		return -EINVAL;
+
+	vol = ntfs_mount(device, NTFS_MNT_RDONLY);
+	if (!vol)
+		return -errno;
+	ntfs_direct_enable_ignore_case(vol);
+
+	ni = ntfs_pathname_to_inode(vol, NULL, path);
+	if (!ni) {
+		res = -errno;
+		ntfs_umount(vol, FALSE);
+		return res;
+	}
+
+	ctx.buf = buf;
+	ctx.cap = cap;
+	ctx.used = 0;
+	ctx.count = 0;
+	ctx.truncated = 0;
+	buf[0] = 0;
+
+	if (ntfs_readdir(ni, &pos, &ctx, (ntfs_filldir_t)list_ctx_filler))
+		res = -errno;
+	else
+		res = ctx.count;
+
+	ntfs_inode_close(ni);
+	ntfs_umount(vol, FALSE);
+	return res;
+}
+
+int ntfs_delete_direct(const char *device, const char *path)
+{
+	ntfs_volume *vol;
+	ntfs_inode *ni;
+	ntfs_inode *dir_ni;
+	ntfschar *uname = NULL;
+	const char *base;
+	int name_len;
+	int res;
+
+	if (!device || !path)
+		return -EINVAL;
+
+	vol = ntfs_mount(device, NTFS_MNT_RECOVER);
+	if (!vol)
+		return -errno;
+	ntfs_direct_enable_ignore_case(vol);
+
+	ni = ntfs_pathname_to_inode(vol, NULL, path);
+	if (!ni) {
+		res = -errno;
+		ntfs_umount(vol, FALSE);
+		return res;
+	}
+
+	/* ntfs_delete() 需要父目录 inode 与文件名的 Unicode 形式。注意它**总是**关闭
+	 * ni 与 dir_ni（见 lowntfs-3g 的用法），所以成功路径上不能再关一次。 */
+	dir_ni = ntfs_dir_parent_inode(ni);
+	base = strrchr(path, '/');
+	base = base ? base + 1 : path;
+	name_len = ntfs_mbstoucs(base, &uname);
+	if (!dir_ni || (name_len < 0)) {
+		if (dir_ni)
+			ntfs_inode_close(dir_ni);
+		ntfs_inode_close(ni);
+		ntfs_umount(vol, FALSE);
+		return -EINVAL;
+	}
+
+	res = ntfs_delete(vol, (char*)NULL, ni, dir_ni, uname, (u8)name_len);
+	if (res)
+		res = -errno;
+	free(uname);
+
+	ntfs_umount(vol, FALSE);
+	return res;
+}
+
+/* 把目录里的名字收进一个固定数组（大小写不敏感回退用） */
+#define CI_MAX_NAMES 256
+#define CI_MAX_NAME 96
+typedef struct {
+	char names[CI_MAX_NAMES][CI_MAX_NAME];
+	int count;
+	int overflow;
+} ci_dir_t;
+
+static int ci_dir_filler(ci_dir_t *ctx, const ntfschar *name, const int name_len,
+			 const int name_type, const s64 pos __attribute__((unused)),
+			 const MFT_REF mref __attribute__((unused)),
+			 const unsigned dt_type __attribute__((unused)))
+{
+	char *mbs = NULL;
+	int len;
+
+	if (name_type == FILE_NAME_DOS)
+		return 0;
+	len = ntfs_ucstombs(name, name_len, &mbs, 0);
+	if (len < 0)
+		return -1;
+	if (ctx->count < CI_MAX_NAMES && len < CI_MAX_NAME) {
+		memcpy(ctx->names[ctx->count], mbs, (size_t)len + 1);
+		++ctx->count;
+	} else {
+		ctx->overflow = 1;
+	}
+	free(mbs);
+	return 0;
+}
+
+static int ascii_ci_equal(const char *a, const char *b)
+{
+	for (;; ++a, ++b) {
+		unsigned char ca = (unsigned char)*a, cb = (unsigned char)*b;
+		if (ca >= 'A' && ca <= 'Z') ca = (unsigned char)(ca - 'A' + 'a');
+		if (cb >= 'A' && cb <= 'Z') cb = (unsigned char)(cb - 'A' + 'a');
+		if (ca != cb) return 0;
+		if (!ca) return 1;
+	}
+}
+
+int ntfs_attr_info_direct(const char *device, const char *path, char *out, size_t cap)
+{
+	ntfs_volume *vol;
+	ntfs_inode *ni;
+	ntfs_attr *na;
+	int res = 0;
+	size_t used = 0;
+	int i;
+	s64 allocated = 0;
+	int holes = 0;
+
+	if (!device || !path || !out || cap < 2)
+		return -EINVAL;
+	out[0] = 0;
+
+	vol = ntfs_mount(device, NTFS_MNT_RDONLY);
+	if (!vol)
+		return -errno;
+	ntfs_direct_enable_ignore_case(vol);
+
+	ni = ntfs_pathname_to_inode(vol, NULL, path);
+	if (!ni) {
+		res = -errno;
+		ntfs_umount(vol, FALSE);
+		return res;
+	}
+	na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
+	if (!na) {
+		res = -errno;
+		ntfs_inode_close(ni);
+		ntfs_umount(vol, FALSE);
+		return res;
+	}
+
+	/* 关键三元组：data_size 是文件长度，initialized_size 是"已初始化"的长度 ——
+	 * **读到其后返回零**。两者不等就是"尾部读回零"的直接原因。 */
+	used += (size_t)snprintf(out + used, used < cap ? cap - used : 0,
+		"data_size=%lld initialized_size=%lld compressed_size=%lld\n",
+		(long long)na->data_size, (long long)na->initialized_size,
+		(long long)na->compressed_size);
+	used += (size_t)snprintf(out + used, used < cap ? cap - used : 0,
+		"resident=%d flags(sparse=%d compressed=%d encrypted=%d)\n",
+		!NAttrNonResident(na), !!NAttrSparse(na), !!NAttrCompressed(na),
+		!!NAttrEncrypted(na));
+
+	if (ntfs_attr_map_whole_runlist(na)) {
+		used += (size_t)snprintf(out + used, used < cap ? cap - used : 0,
+			"runlist: FAILED to map (%s)\n", strerror(errno));
+	} else {
+		/* 逐段列出：lcn == -1 就是洞（**读那里返回零**）。 */
+		for (i = 0; na->rl[i].length > 0; ++i) {
+			if (na->rl[i].lcn < 0) ++holes;
+			else allocated += na->rl[i].length;
+		}
+		used += (size_t)snprintf(out + used, used < cap ? cap - used : 0,
+			"runlist: %d run(s), %d hole run(s), %lld cluster(s) allocated (cluster=%u)\n",
+			i, holes, (long long)allocated, (unsigned)vol->cluster_size);
+		for (i = 0; na->rl[i].length > 0 && i < 24; ++i) {
+			used += (size_t)snprintf(out + used, used < cap ? cap - used : 0,
+				"  vcn=%-8lld lcn=%-10lld len=%lld%s\n",
+				(long long)na->rl[i].vcn, (long long)na->rl[i].lcn,
+				(long long)na->rl[i].length,
+				na->rl[i].lcn < 0 ? "  <-- HOLE (reads as zeros)" : "");
+		}
+		if (na->rl[i].length > 0)
+			used += (size_t)snprintf(out + used, used < cap ? cap - used : 0, "  ...\n");
+	}
+
+	ntfs_attr_close(na);
+	ntfs_inode_close(ni);
+	ntfs_umount(vol, FALSE);
+	return res;
+}
+
+/* record:<path> 的实现：把磁盘上那个 inode 的 **MFT 记录原始字节** 倾倒出来。
+ *
+ * 为什么需要：info: 只报解析后的字段。当 initialized_size 出现一个任何合法写入者都
+ * 产生不了的值（例如 4701 —— 拷贝循环只会写 0 或 8192 的倍数，truncate 只写 0/
+ * newsize/aligned）时，唯一能定案的是**看字节本身**：属性布局、序号、以及
+ * $STANDARD_INFORMATION 的四个时间戳 —— 那是"最后写这条记录的是谁"的笔迹
+ * （ntfscp 关路径 vs Windows 内核/还原软件，时间戳与字段次序各不相同）。
+ * 只读直接挂载，一个字节都不写。 */
+static const char *attr_type_name(u32 type)
+{
+	switch (type) {
+	case AT_STANDARD_INFORMATION:	return "$STANDARD_INFORMATION";
+	case AT_ATTRIBUTE_LIST:		return "$ATTRIBUTE_LIST";
+	case AT_FILE_NAME:		return "$FILE_NAME";
+	case AT_OBJECT_ID:		return "$OBJECT_ID";
+	case AT_SECURITY_DESCRIPTOR:	return "$SECURITY_DESCRIPTOR";
+	case AT_VOLUME_NAME:		return "$VOLUME_NAME";
+	case AT_VOLUME_INFORMATION:	return "$VOLUME_INFORMATION";
+	case AT_DATA:			return "$DATA";
+	case AT_INDEX_ROOT:		return "$INDEX_ROOT";
+	case AT_INDEX_ALLOCATION:	return "$INDEX_ALLOCATION";
+	case AT_BITMAP:			return "$BITMAP";
+	case AT_REPARSE_POINT:		return "$REPARSE_POINT";
+	case AT_EA_INFORMATION:		return "$EA_INFORMATION";
+	case AT_EA:			return "$EA";
+	case AT_LOGGED_UTILITY_STREAM:	return "$LOGGED_UTILITY_STREAM";
+	default:			return "?";
+	}
+}
+
+int ntfs_record_dump_direct(const char *device, const char *path, char *out, size_t cap)
+{
+	ntfs_volume *vol;
+	ntfs_inode *ni;
+	MFT_RECORD *mrec;
+	ATTR_RECORD *attr;
+	size_t used = 0;
+	int res = 0;
+
+	if (!device || !path || !out || cap < 2)
+		return -EINVAL;
+	out[0] = 0;
+
+	vol = ntfs_mount(device, NTFS_MNT_RDONLY);
+	if (!vol)
+		return -errno;
+	ntfs_direct_enable_ignore_case(vol);
+
+	ni = ntfs_pathname_to_inode(vol, NULL, path);
+	if (!ni) {
+		res = -errno;
+		ntfs_umount(vol, FALSE);
+		return res;
+	}
+
+#define RD(...) do { \
+		int _n = snprintf(out + used, used < cap ? cap - used : 0, __VA_ARGS__); \
+		if (_n > 0) used += (size_t)_n; \
+		if (used >= cap) { used = cap - 1; out[used] = 0; goto done; } \
+	} while (0)
+
+	/* 基记录 = inode 编号；ni->mrec 是 ntfs-3g 已解析的那条（基记录）。 */
+	RD("inode=%llu mft_record_size=%u\n",
+		(unsigned long long)ni->mft_no, (unsigned)vol->mft_record_size);
+
+	mrec = ni->mrec;
+	RD("record: magic=%c%c%c%c seq=%u links=%u flags=0x%04x bytes_in_use=%u "
+		"bytes_allocated=%u base_record_ref=0x%llx next_attr=0x%x\n",
+		isprint((unsigned char)((const u8*)&mrec->magic)[0]) ? ((const u8*)&mrec->magic)[0] : '.',
+		isprint((unsigned char)((const u8*)&mrec->magic)[1]) ? ((const u8*)&mrec->magic)[1] : '.',
+		isprint((unsigned char)((const u8*)&mrec->magic)[2]) ? ((const u8*)&mrec->magic)[2] : '.',
+		isprint((unsigned char)((const u8*)&mrec->magic)[3]) ? ((const u8*)&mrec->magic)[3] : '.',
+		le16_to_cpu(mrec->sequence_number), le16_to_cpu(mrec->link_count),
+		le16_to_cpu(mrec->flags), le32_to_cpu(mrec->bytes_in_use),
+		le32_to_cpu(mrec->bytes_allocated),
+		(unsigned long long)le64_to_cpu(mrec->base_mft_record),
+		le16_to_cpu(mrec->next_attr_instance));
+
+	/* 逐属性倾倒布局与原始长度字段 —— data_size(+0x30)/initialized_size(+0x38)
+	 * 是非驻留 $DATA 的关键三元组；dump 原始字节能看出"哪半截是新的"。 */
+	{
+		ntfs_attr_search_ctx *ctx = ntfs_attr_get_search_ctx(ni, NULL);
+		if (!ctx) {
+			RD("attr scan: FAILED to get search ctx (%s)\n", strerror(errno));
+		} else {
+			int idx = 0;
+			while (!ntfs_attr_lookup(AT_UNUSED, NULL, 0, 0, 0, NULL, 0, ctx)) {
+				attr = ctx->attr;
+				const u32 type = le32_to_cpu(attr->type);
+				const u32 len = le32_to_cpu(attr->length);
+				RD("attr[%d]: %s(0x%x) off=%u len=%u nonres=%u name_len=%u",
+					idx, attr_type_name(type), type,
+					le16_to_cpu(attr->name_offset), len,
+					attr->non_resident, attr->name_length);
+				if (attr->non_resident) {
+					RD(" lowest_vcn=%llu highest_vcn=%llu alloc=%llu "
+						"data=%llu init=%llu comp=%llu",
+						(unsigned long long)le64_to_cpu(attr->lowest_vcn),
+						(unsigned long long)le64_to_cpu(attr->highest_vcn),
+						(unsigned long long)sle64_to_cpu(attr->allocated_size),
+						(unsigned long long)sle64_to_cpu(attr->data_size),
+						(unsigned long long)sle64_to_cpu(attr->initialized_size),
+						(attr->compression_unit
+						 ? (unsigned long long)sle64_to_cpu(attr->compressed_size) : 0ull));
+				} else {
+					RD(" value_len=%u value_off=%u",
+						le32_to_cpu(attr->value_length),
+						le16_to_cpu(attr->value_offset));
+					/* $STANDARD_INFORMATION 的时间戳是"最后写入者"的笔迹：
+					 * ntfs-3g 关路径与 Windows/还原软件写的次序和值都不同。 */
+					if (type == AT_STANDARD_INFORMATION) {
+						const STANDARD_INFORMATION *si =
+							(const STANDARD_INFORMATION*)((u8*)attr +
+							le16_to_cpu(attr->value_offset));
+						RD("\n  si: ctime=%llu atime=%llu mtime=%llu "
+							"ntfs_etime=%llu",
+							(unsigned long long)le64_to_cpu(si->creation_time),
+							(unsigned long long)le64_to_cpu(si->last_access_time),
+							(unsigned long long)le64_to_cpu(si->last_data_change_time),
+							(unsigned long long)le64_to_cpu(si->last_mft_change_time));
+					}
+				}
+				RD("\n");
+				++idx;
+			}
+			ntfs_attr_put_search_ctx(ctx);
+			if (errno != ENOENT)
+				RD("attr scan stopped: %s\n", strerror(errno));
+		}
+	}
+
+	/* 头 256 字节的十六进制倾倒：布局异常（错位/半新半旧）肉眼可辨。 */
+	{
+		const u8 *p = (const u8*)mrec;
+		u32 i;
+		for (i = 0; i < 256; i += 16) {
+			RD("%04x  ", i);
+			for (u32 j = 0; j < 16; ++j)
+				RD("%02x ", p[i + j]);
+			RD(" |");
+			for (u32 j = 0; j < 16; ++j) {
+				const u8 c = p[i + j];
+				RD("%c", isprint(c) ? c : '.');
+			}
+			RD("|\n");
+		}
+	}
+	RD("(seq/attr layout/raw bytes: 'who wrote this record' forensics)\n");
+
+done:
+	ntfs_inode_close(ni);
+	ntfs_umount(vol, FALSE);
+	return res;
+}
+int ntfs_resolve_path_direct(const char *device, const char *path, char *out, size_t cap)
+{
+	ntfs_volume *vol;
+	ntfs_inode *ni;
+	char *work = NULL;
+	const char *parent;
+	const char *base;
+	const char *matched = NULL;
+	int matches = 0;
+	ci_dir_t *dir = NULL;
+	s64 pos = 0;
+	int res = 0;
+
+	if (!device || !path || !out || cap < 2)
+		return -EINVAL;
+	out[0] = 0;
+
+	vol = ntfs_mount(device, NTFS_MNT_RDONLY);
+	if (!vol)
+		return -errno;
+
+	/* 1) 先按原样解析 */
+	ni = ntfs_pathname_to_inode(vol, NULL, path);
+	if (ni) {
+		ntfs_inode_close(ni);
+		snprintf(out, cap, "%s", path);
+		ntfs_umount(vol, FALSE);
+		return 0;
+	}
+
+	/* 2) 查不到就拆出父目录与最后一段，列父目录做大小写不敏感匹配。
+	 * 只对**最后一段**回退：若某层父目录也需要回退，路径探针会先报出来（它逐层 stat）。 */
+	work = strdup(path);
+	if (!work) {
+		ntfs_umount(vol, FALSE);
+		return -ENOMEM;
+	}
+	{
+		char *slash = strrchr(work, '/');
+		if (!slash) {
+			parent = "/";
+			base = work;
+		} else {
+			*slash = 0;
+			parent = work[0] ? work : "/";
+			base = slash + 1;
+		}
+	}
+
+	if (!base[0]) {
+		res = -ENOENT;
+		goto out;
+	}
+
+	ni = ntfs_pathname_to_inode(vol, NULL, parent);
+	if (!ni) {
+		res = -errno;
+		goto out;
+	}
+
+	dir = malloc(sizeof(ci_dir_t));
+	if (!dir) {
+		ntfs_inode_close(ni);
+		res = -ENOMEM;
+		goto out;
+	}
+	dir->count = 0;
+	dir->overflow = 0;
+	if (ntfs_readdir(ni, &pos, dir, (ntfs_filldir_t)ci_dir_filler) == 0) {
+		int i;
+		for (i = 0; i < dir->count; ++i) {
+			if (ascii_ci_equal(dir->names[i], base)) {
+				/* 第一个作为匹配结果；同时记住**有几个**大小写不敏感匹配 ——
+				 * 多于一个就是"重名文件已经存在"（NTFS 按设计不允许，说明卷已经被
+				 * 写坏过），此时不能再往上写。 */
+				if (!matched) matched = dir->names[i];
+				++matches;
+			}
+		}
+	}
+	ntfs_inode_close(ni);
+
+	if (!matched) {
+		res = -ENOENT;
+		goto out;
+	}
+
+	/* 用真实名字重查一次，确认它确实能打开 */
+	snprintf(out, cap, "%s%s%s", parent,
+		 (parent[0] && parent[strlen(parent) - 1] == '/') ? "" : "/", matched);
+	ni = ntfs_pathname_to_inode(vol, NULL, out);
+	if (!ni) {
+		res = -errno;
+		out[0] = 0;
+		goto out;
+	}
+	ntfs_inode_close(ni);
+	/* matches >= 2 时把数量交给调用方（打印在 stderr 上，便于程序化识别） */
+	if (matches > 1)
+		fprintf(stderr, "resolve: AMBIGUOUS: %d case-insensitive matches\n", matches);
+	res = 0;
+
+out:
+	free(dir);
+	free(work);
+	ntfs_umount(vol, FALSE);
+	return res;
 }
 
 void ntfs_close(void)

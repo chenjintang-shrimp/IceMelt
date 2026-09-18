@@ -143,6 +143,20 @@ target("ntfscp")
     add_includedirs("ntfsprogs")
     on_load(function (target) mingw_common(target) end)
 
+-- 造 test 卷用：把 NTFS 建在一个普通文件里，从而能在不碰裸盘、不装驱动的前提下
+-- 用同一份 libntfs-3g 复现"写入后 initialized_size 不对"的问题（隔离出驱动变量）。
+-- mingw 的 struct stat 没有 st_blocks（msvcrt 就没有这个字段），而 mkntfs 只用它做
+-- "size 为 0 时的兜底"；把 st_blocks 映射到 st_size 语义完全等价（该分支仅在
+-- st_size == 0 时可达，此时两者都是 0），且不必改第三方源码。
+target("mkntfs")
+    set_kind("binary")
+    add_files("ntfsprogs/mkntfs.c", "ntfsprogs/attrdef.c", "ntfsprogs/boot.c",
+              "ntfsprogs/sd.c", "ntfsprogs/utils.c")
+    add_deps("ntfs-3g")
+    add_includedirs("ntfsprogs")
+    add_cxflags("-Dst_blocks=st_size")
+    on_load(function (target) mingw_common(target) end)
+
 -- 自研 CLI：用管道协议驱动 libntfs-3g 在 NTFS 上做文件操作。
 -- ntfs_fuse_* 接口在 src/ntfs-3g-fuse.c，与 ntfs-3g-cli.c 一起构成该工具。
 target("ntfs-3g-cli")

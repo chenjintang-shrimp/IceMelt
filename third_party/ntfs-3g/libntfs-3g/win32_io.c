@@ -1514,6 +1514,41 @@ static s64 ntfs_device_win32_pio(win32_fd *fd, const s64 pos,
 		li.QuadPart += fd->part_start;
 	}
 
+	/* SecMelt: the WinDisk raw driver allocates non-paged memory per request and does a
+	 * per-sector SCSI pass-through. Very large single WriteFile/ReadFile calls can run for
+	 * long and trip timeout/partial-write issues; split handle: transfers into bounded
+	 * chunks so each kernel request stays small and synchronous.
+	 */
+	if (fd->vol_handle == INVALID_HANDLE_VALUE && !fd->ntdll) {
+		const s64 maxix = 256 * 1024;
+		char *dst = (char *)rbuf;
+		const char *src = (const char *)wbuf;
+		s64 done = 0;
+		while (done < count) {
+			const s64 left = count - done;
+			const DWORD want = (DWORD)((left > maxix) ? maxix : left);
+			li.QuadPart = pos + done + fd->part_start;
+			if (!fnSetFilePointerEx(handle, li, NULL, FILE_BEGIN)) {
+				errno = ntfs_w32error_to_errno(GetLastError());
+				ntfs_log_trace("SetFilePointer failed.\n");
+				return done ? done : -1;
+			}
+			if (wbuf)
+				res = WriteFile(handle, src + done, want, &bt, NULL);
+			else
+				res = ReadFile(handle, dst + done, want, &bt, NULL);
+			if (!res) {
+				errno = ntfs_w32error_to_errno(GetLastError());
+				ntfs_log_trace("%sFile() failed.\n", wbuf ? "Write" : "Read");
+				return done ? done : -1;
+			}
+			done += bt;
+			if (bt < want)
+				break;
+		}
+		return done;
+	}
+
 	if (fd->ntdll) {
 		IO_STATUS_BLOCK io_status;
 		NTSTATUS res;
