@@ -56,6 +56,29 @@ namespace FSDAntiHook
 		return NULL;
 	}
 
+	/* 钩子已坐实时：把 hooker 映像里所有"值落在受害驱动映像区间内"的 qword 全部
+	 * 捞出来。冰点类驱动必须保存受害驱动的原始 dispatch 以便对自己 / 解冻态放行，
+	 * 抄件就藏在它自己的 .data（或它的 import/全局区）里 —— 这里列出的就是
+	 * 头号嫌疑格。读取原值后按指针直调即可绕过钩子，无需换表，也不惊动看门狗。 */
+	void ScanForSavedOriginal(PLDR_DATA_TABLE_ENTRY64 hooker,
+	                          PLDR_DATA_TABLE_ENTRY64 victim)
+	{
+		const UCHAR* img = (const UCHAR*)hooker->DllBase;
+		const ULONG_PTR vBase = (ULONG_PTR)victim->DllBase;
+		const ULONG_PTR vEnd = vBase + victim->SizeOfImage;
+		if (!img || !hooker->SizeOfImage)
+			return;
+		for (ULONG_PTR off = 0; off + sizeof(ULONG_PTR) <= hooker->SizeOfImage; off += sizeof(ULONG_PTR))
+		{
+			const ULONG_PTR v = *(const ULONG_PTR*)(img + off);
+			if (v >= vBase && v < vEnd)
+			{
+				LogWarn("  saved-original 嫌疑: %wZ+0x%llX = %p\n",
+					&hooker->BaseDllName, (unsigned long long)off, (PVOID)v);
+			}
+		}
+	}
+
 	BOOLEAN AntiFSDHookCallback(PVOID Buffer, SIZE_T Size)
 	{
 		PDEVICE_OBJECT device = *((PDEVICE_OBJECT*)Buffer);
@@ -77,12 +100,17 @@ namespace FSDAntiHook
 		{
 			PLDR_DATA_TABLE_ENTRY64 owner = FindModuleByAddress(scsiHandler, ldr);
 			if (owner)
+			{
 				LogWarn("%wZ 的 IRP_MJ_SCSI 被钩: 分派指针落在 %wZ (base=%p size=0x%X) 里\n",
 					driver->DriverName, &owner->FullDllName,
 					owner->DllBase, owner->SizeOfImage);
+				ScanForSavedOriginal(owner, ldr);
+			}
 			else
+			{
 				LogWarn("%wZ 的 IRP_MJ_SCSI 被钩: 分派指针不在任何已加载模块内\n",
 					driver->DriverName);
+			}
 		}
 		return TRUE;
 	}
