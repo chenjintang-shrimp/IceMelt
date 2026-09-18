@@ -384,7 +384,10 @@ void DiagnoseWritePath(WinDiskDevice& device, const VolumeInfo& vol,
     //     这条路在运行中的系统上走不通；
     //   * 新名字**也脏** → 与耗时/大小有关（写入过程中被别的东西覆盖）。
     {
-        const std::wstring ntfsProbe = L"\\Windows\\System32\\config\\secmelt-probe.hive";
+        /* 名字必须与分层探针（secmelt-probe.hive）区分开：preflight 的第 4 层探针目标
+         * 就是 config\secmelt-probe.hive，同名会让本组的写/删把那一层的证据搅在一起
+         * （第 4 层收尾 rm 报 "No such file" 就是这么来的）。 */
+        const std::wstring ntfsProbe = L"\\Windows\\System32\\config\\secmelt-fullprobe.hive";
         const std::filesystem::path back = scratchDir / L"secmelt-fullprobe.back.bin";
 
         std::error_code ec;
@@ -492,7 +495,6 @@ void DiagnoseWritePath(WinDiskDevice& device, const VolumeInfo& vol,
     // data_size / initialized_size 打出来 —— 后者是"NTFS 认为多少字节有效"的判据，
     // 它比内容比对更直接：内容相同但 initialized_size 小，就是元数据没提交。
     {
-        static const size_t kSizes[] = {4u << 20, 6u << 20, 8u << 20, 10u << 20, 12u << 20};
         const std::filesystem::path back = scratchDir / L"secmelt-bisect.back.bin";
 
         std::vector<unsigned char> exportBytes;
@@ -512,9 +514,28 @@ void DiagnoseWritePath(WinDiskDevice& device, const VolumeInfo& vol,
             return;
         }
 
-        log.step(L"write-path diagnosis: size bisection (same export prefix, fresh name each time)");
-        for (const size_t want : kSizes) {
-            if (want > exportBytes.size()) continue;
+        /* 档位要对导出的大小自适应：固定 4..12 MiB 的档位只对 melt 的 11.6 MiB 导出成立，
+         * preflight 的 1 MiB 导出会让循环**一格都不跑**且不留任何日志（之前的表现就是
+         * "size bisection" 之后直接沉默）。导出小于 4 MiB 时用它的 1/4、1/2、3/4 与全长。 */
+        std::vector<size_t> sizes;
+        if (exportBytes.size() >= (4u << 20)) {
+            for (const size_t s : {4u << 20, 6u << 20, 8u << 20, 10u << 20, 12u << 20})
+                if (s < exportBytes.size()) sizes.push_back(s);
+            sizes.push_back(exportBytes.size());
+        } else {
+            const size_t full = exportBytes.size();
+            for (const size_t s : {full / 4, full / 2, (full * 3) / 4, full})
+                if (s >= 4096 && (sizes.empty() || s != sizes.back())) sizes.push_back(s);
+        }
+        if (sizes.empty()) {
+            log.warn(L"write-path diagnosis: the export is too small for a size bisection");
+            return;
+        }
+
+        log.step(FormatW(L"write-path diagnosis: size bisection over %zu sizes (max %zu bytes, "
+                         L"same export prefix, fresh name each time)",
+                         sizes.size(), sizes.back()));
+        for (const size_t want : sizes) {
             const std::filesystem::path localPrefix = scratchDir / L"secmelt-bisect.bin";
             std::ofstream out(localPrefix, std::ios::binary | std::ios::trunc);
             if (!out) break;
