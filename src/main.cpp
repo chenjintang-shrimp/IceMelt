@@ -58,12 +58,14 @@ struct Check {
     std::string hint;
 };
 
-// 环境自检的结果。两个"结论"单独给字段：界面需要它们做判断，而靠 checks[] 的
+// 环境自检的结果。这里的"结论"单独给字段：界面需要它们做判断，而靠 checks[] 的
 // 下标或 label 文案去取会在改文案时静默失效。
 struct Environment {
     std::vector<Check> checks;
     bool elevated = false;
-    bool dseOff = false;
+    // 驱动装载探测的结果（装载未签名驱动是判断"签名强制有没有在拦"的唯一可靠办法）
+    bool driverLoadProbed = false;
+    secmelt::DriverLoad driverLoad = secmelt::DriverLoad::Failed;
 };
 
 std::wstring RegReadString(HKEY root, const wchar_t* subkey, const wchar_t* name) {
@@ -91,7 +93,23 @@ fs::path FindProjectRoot() {
     return secmelt::CurrentDirectory();
 }
 
-Environment RunEnvironmentChecks() {
+// 用一次真实的装载尝试来判断"签名强制有没有在拦"，被拦下就 kdu -dse 0 再复测 ——
+// 与 melt 的第一步共用同一份实现（melt/unfreeze.h::EnsureUnsignedDriverLoads），
+// 所以环境屏显示的是**实测结论**，不是"melt 之后大概会怎样"的预测。
+//
+// 为什么不用 NtQuerySystemInformation(SystemCodeIntegrityInformation)：它读到的
+// CodeIntegrityOptions 来自启动期的配置（BCD 一类）映像，不是内核此刻的实际拦截状态 ——
+// 实测有机器报 "enabled" 却根本不拦，也有报 1 而确实在拦。装载返回码才是判据：
+//   577 (ERROR_INVALID_IMAGE_HASH) = 还在拦；装上了 = 没在拦。
+// WDAC 策略与易受攻击驱动黑名单同样表现为 577，所以这一项测的是"能不能装"这件事本身，
+// 而不只是"DSE 开没开"——那正好就是 melt 下一步要依赖的事实。
+//
+// allowDseFix=false（--dump）：只探测不动系统，报告里说清"这一步由 Melt 完成"。
+secmelt::DriverLoadOutcome ProbeDriverLoad(const fs::path& exeDir, bool allowDseFix) {
+    return secmelt::EnsureUnsignedDriverLoads(exeDir, allowDseFix);
+}
+
+Environment RunEnvironmentChecks(bool allowDseFix) {
     Environment env;
     std::vector<Check>& out = env.checks;
 
@@ -134,18 +152,51 @@ Environment RunEnvironmentChecks() {
     out.push_back({"Windows version", !product.empty(), version.empty() ? "unknown" : version,
                    "cannot read HKLM\\...\\Windows NT\\CurrentVersion"});
 
-    bool dseOff = false;
-    std::wstring dseError;
-    if (secmelt::DseDisabled(dseOff, dseError)) {
-        env.dseOff = dseOff;
-        // DSE 开着**不算故障**：apply 路径会自己用 KDU 关掉它（见 DisableDseWithKdu）。
-        // 所以这里只报告状态、不标红 —— 冷舱原则：只有真的需要人处理的问题才醒目。
+    // 签名强制这项不查任何接口 —— 直接试着装载未签名的 WinDisk.sys，看返回码。
+    // 非提权时装载必然失败（OpenSCManager 拒绝），那种失败说明不了 DSE，如实报"未探测"。
+    if (!elevated) {
         out.push_back({"Driver signature enforcement", true,
-                       dseOff ? "disabled" : "enabled (melt turns it off via kdu)", ""});
+                       "not probed (the load probe needs an elevated prompt)", ""});
     } else {
-        // 查不到就是真的不确定，仍然标红
-        out.push_back({"Driver signature enforcement", false, secmelt::Narrow(dseError),
-                       "run: kdu -diag"});
+        const secmelt::DriverLoadOutcome load = ProbeDriverLoad(secmelt::ExeDir(), allowDseFix);
+        env.driverLoadProbed = true;
+        env.driverLoad = load.result;
+        switch (load.result) {
+            case secmelt::DriverLoad::Loaded:
+                if (load.kduRan) {
+                    // 这次探测自己把 DSE 关掉了 —— 这是结论，不是预测。
+                    out.push_back({"Driver signature enforcement", true,
+                                   "was blocking; turned off with 'kdu -dse 0' and the load now "
+                                   "succeeds", ""});
+                } else {
+                    // 未签名的驱动装上了（或本来就在运行）—— 没有东西在拦它。
+                    out.push_back({"Driver signature enforcement", true,
+                                   "not blocking: the unsigned WinDisk.sys is loaded", ""});
+                }
+                break;
+            case secmelt::DriverLoad::SignatureRejected:
+                // 想关但没关成：要么被允许去关却没成功，要么这条路径不许动系统。
+                if (load.kduRan) {
+                    out.push_back({"Driver signature enforcement", false,
+                                   "the load is still rejected with 577 even after 'kdu -dse 0' "
+                                   "(HVCI / memory integrity on, a WDAC policy, or the Microsoft "
+                                   "vulnerable driver blocklist)",
+                                   "turn off Memory integrity in Windows Security, or check "
+                                   "the blocklist"});
+                } else {
+                    out.push_back({"Driver signature enforcement", true,
+                                   "blocking: the load was rejected with 577 (ERROR_INVALID_IMAGE_HASH); "
+                                   "Melt runs 'kdu -dse 0' and retries the load",
+                                   ""});
+                }
+                break;
+            case secmelt::DriverLoad::Failed:
+                // 577 以外的失败与签名无关（服务注册、驱动文件、权限…），要人去处理。
+                out.push_back({"Driver signature enforcement", false,
+                               secmelt::Narrow(load.firstError),
+                               "run: secmelt --selftest-raw (in a VM) to see the full error"});
+                break;
+        }
     }
 
     return env;
@@ -164,6 +215,15 @@ std::vector<Check> RunAssetChecks(const fs::path& root) {
         {"ntfs-3g-cli", "third_party/ntfs-3g/src/ntfs-3g-cli.c"},
         {"target list", "config/targets.txt"},
     };
+
+    // 部署包（拿来就能跑的 release 目录）里没有源码树 —— 上面这些都是**构建期**资产，
+    // 运行时不需要它们（运行时要的是 exe 旁边的 WinDisk_x64.sys / kdu.exe / drv64.dll /
+    // targets.txt / tools）。源码树不在时只报一行，否则部署包里会刷出 6 条"缺失"故障，
+    // 把真正需要人处理的问题淹掉。
+    if (!secmelt::PathIsDirectory(root / "third_party")) {
+        return {{"Source tree", true,
+                 "not present (deployed bundle: build-time assets are not checked here)", ""}};
+    }
 
     std::vector<Check> out;
     for (const auto& asset : kAssets) {
@@ -258,7 +318,18 @@ std::vector<const Check*> Faults(const std::vector<Check>& a, const std::vector<
 // 不需要占一整屏。
 Element NominalLine(size_t assetOk, size_t assetTotal, const Environment& environment) {
     std::string detail = std::string(environment.elevated ? "admin" : "no admin");
-    detail += environment.dseOff ? " · DSE off" : " · DSE ON";
+    // 用装载探测的结果说话，而不是某个查询接口的读数：装上了就是没东西在拦，
+    // 577 就是还在拦（此时 Melt 会先 kdu -dse 0 再重装一次）。
+    detail += " · unsigned driver load: ";
+    if (!environment.driverLoadProbed) {
+        detail += "not probed";
+    } else if (environment.driverLoad == secmelt::DriverLoad::Loaded) {
+        detail += "accepted";
+    } else if (environment.driverLoad == secmelt::DriverLoad::SignatureRejected) {
+        detail += "rejected (577) - Melt disables DSE first";
+    } else {
+        detail += "failed";
+    }
     detail += " · assets " + std::to_string(assetOk) + "/" + std::to_string(assetTotal);
     return hbox({
         text(" ALL SYSTEMS GO ") | bold | color(Color::Green),
@@ -362,15 +433,26 @@ Element RenderMelt(const std::vector<TargetRow>& rows, const Environment& enviro
             text(row.status) | dim,
         }));
     }
-    // 就绪只看管理员：DSE 由 melt 自己关（kdu -dse 0），不需要人先处理。
+    // 就绪只看管理员：签名强制那一关由 melt 自己过（装载被 577 拒绝时先 kdu -dse 0
+    // 再重装），不需要人先处理。这里的副标题用实测的装载结果说明接下来会发生什么。
     const bool ready = environment.elevated;
+    std::string loadNote = "  (needs an elevated prompt)";
+    if (ready) {
+        if (!environment.driverLoadProbed) {
+            loadNote = "  (admin; the driver load was not probed)";
+        } else if (environment.driverLoad == secmelt::DriverLoad::Loaded) {
+            loadNote = "  (admin; the unsigned driver already loads)";
+        } else if (environment.driverLoad == secmelt::DriverLoad::SignatureRejected) {
+            loadNote = "  (admin; the load is rejected with 577, melt runs kdu -dse 0 first)";
+        } else {
+            loadNote = "  (admin; the driver load failed for a non-signature reason - see above)";
+        }
+    }
     list.push_back(hbox({
         text("  "),
         text(ready ? "ready to melt" : "NOT ready") |
             (ready ? color(Color::Green) : (bold | color(Color::Red))),
-        text(ready ? (environment.dseOff ? "  (admin; DSE already off)"
-                                         : "  (admin; DSE will be turned off by kdu)")
-                   : "  (needs an elevated prompt)") | dim,
+        text(loadNote) | dim,
         filler(),
     }));
     return vbox(std::move(list));
@@ -469,7 +551,11 @@ bool ConsoleSupportsVt(std::string& how) {
 }
 
 int DumpMode(const fs::path& root) {
-    const auto environment = RunEnvironmentChecks();
+    // 运行期资产（targets.txt）相对 exe 目录解析，源码树根 root 只用于构建期资产自检
+    // 与界面上的路径显示 —— 两者在部署包里不是一回事。
+    const fs::path exeDir = secmelt::ExeDir();
+    // --dump 是纯报告：探测装载（判 DSE），但**不动系统** —— 不去调用 kdu。
+    const auto environment = RunEnvironmentChecks(/*allowDseFix=*/false);
     const auto assets = RunAssetChecks(root);
 
     std::vector<std::string> log = {Timestamp() + "  checks executed (dump mode)"};
@@ -490,16 +576,19 @@ int DumpMode(const fs::path& root) {
         Timestamp() + "  checks executed (dump mode)",
         Timestamp() + "  Dry run rehearses the whole chain and writes nothing",
     };
-    Render(meltScreen, MeltScreen(" SecMelt :: Melt", ProbeTargetRows(root), environment, nullptr,
+    Render(meltScreen, MeltScreen(" SecMelt :: Melt", ProbeTargetRows(exeDir), environment, nullptr,
                                   meltPreview));
     std::cout << PlainScreen(meltScreen) << "\n";
     return all_ok ? 0 : 1;
 }
 
 int InteractiveMode(const fs::path& root) {
-    auto environment = RunEnvironmentChecks();
+    const fs::path exeDir = secmelt::ExeDir();
+    // 交互模式允许探测时就把 DSE 关掉（被 577 拦下 → kdu -dse 0 → 重新装载复测），
+    // 与 melt 用同一份实现，所以屏上显示的是实测结论。
+    auto environment = RunEnvironmentChecks(/*allowDseFix=*/true);
     auto assets = RunAssetChecks(root);
-    auto rows = ProbeTargetRows(root);
+    auto rows = ProbeTargetRows(exeDir);
 
     // 运行中的 Melt 在后台线程里跑：破坏性操作期间界面必须还能刷新日志
     std::mutex meltMutex;
@@ -548,8 +637,11 @@ int InteractiveMode(const fs::path& root) {
             secmelt::MeltOptions opt;
             opt.dryRun = dryRun;
             opt.runNtfsFix = runNtfsFix;
-            opt.exeDir = root;
-            opt.winDiskSysPath = secmelt::ExeDir() / L"WinDisk_x64.sys";
+            // 运行期资产一律相对 exe 所在目录解析（构建期把它们都落位在那儿）：
+            // kdu.exe / drv64.dll / targets.txt / tools 都在 exe 旁边，而项目根在部署
+            // 包里根本不存在、在源码树里也不是资产所在处。
+            opt.exeDir = exeDir;
+            opt.winDiskSysPath = exeDir / L"WinDisk_x64.sys";
             if (!dryRun) {
                 // 确认对话框走原生 MessageBox：RunMelt 是同步调用，而 FTXUI 的事件循环
                 // 不能从处理器内部再嵌一层循环。
@@ -574,9 +666,9 @@ int InteractiveMode(const fs::path& root) {
     };
 
     const auto doRefresh = [&] {
-        environment = RunEnvironmentChecks();
+        environment = RunEnvironmentChecks(/*allowDseFix=*/true);
         assets = RunAssetChecks(root);
-        rows = ProbeTargetRows(root);
+        rows = ProbeTargetRows(exeDir);
         {
             std::lock_guard<std::mutex> guard(meltMutex);
             appendLocked("checks re-executed");
@@ -667,9 +759,12 @@ void PrintUsage() {
                  "  secmelt --dump           render one frame and exit (no TTY self-check)\n"
                  "  secmelt --dry-run        rehearse the whole chain without writing the disk\n"
                  "  secmelt --no-ntfsfix     skip the ntfsfix step (works with --dry-run/--melt)\n"
+                 "  secmelt --preflight      one-shot root-cause scan: logstate + directory\n"
+                 "                           tier probing + DiagnoseWritePath breakdown, then stop\n"
                  "  secmelt --melt --yes-i-know\n"
-                 "                           non-interactive apply: strip filters, write the hive,\n"
-                 "                           zero the logs, then reset by bugcheck 0x0D000721\n"
+                 "                           non-interactive apply: strip filters, write the hive\n"
+                 "                           (and its RegBack copy), then wait for Enter to reset by\n"
+                 "                           bugcheck 0x0D000721 (the reset is manual in this mode)\n"
                  "  secmelt --selftest-hive  verify regf base block offsets and checksum algorithm\n"
                  "  secmelt --selftest-registry\n"
                  "                           exercise the filter-stripping write path on a scratch key\n"
@@ -690,6 +785,7 @@ int main(int argc, char** argv) {
     bool dump = false;
     bool help = false;
     bool melt = false;
+    bool preflight = false;
     bool yesIKnow = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -698,13 +794,16 @@ int main(int argc, char** argv) {
         else if (arg == "--dry-run") dryRun = true;
         else if (arg == "--no-ntfsfix") noNtfsFix = true;
         else if (arg == "--melt") melt = true;
+        else if (arg == "--preflight") preflight = true;
         else if (arg == "--yes-i-know") yesIKnow = true;
         else if (arg == "--selftest-hive") selftestHive = true;
         else if (arg == "--selftest-registry") selftestRegistry = true;
         else if (arg == "--selftest-raw") selftestRaw = true;
         else if (arg == "--help" || arg == "-h") help = true;
         else {
-            std::cout << "unknown option: " << arg << "\n";
+            std::cout << secmelt::Narrow(
+                             secmelt::CliPaint(L"unknown option: " + secmelt::Widen(std::string(arg))))
+                      << "\n";
             PrintUsage();
             return 2;
         }
@@ -722,12 +821,14 @@ int main(int argc, char** argv) {
         // 因此 TUI 那条路的确认对话框仍然保留）。
         if (!yesIKnow) {
             std::cout << "--melt writes the SYSTEM hive to the raw disk, zeroes SYSTEM.LOG1/LOG2\n"
-                         "and resets the machine by bugcheck 0x0D000721. There is no rollback.\n"
+                         "and resets the machine by bugcheck 0x0D000721. There is no rollback\n"
+                         "on this machine (System Restore cannot undo it); only a VM snapshot can.\n"
                          "Re-run with --melt --yes-i-know if that is what you want.\n";
             return 2;
         }
         return secmelt::MeltApply(exeDir, !noNtfsFix);
     }
+    if (preflight) return secmelt::PreflightScan(exeDir);
     if (selftestHive) return secmelt::HiveSelfTest(exeDir);
     if (selftestRegistry) return secmelt::RegistrySelfTest(exeDir);
     if (selftestRaw) return secmelt::RawSelfTest(exeDir);
