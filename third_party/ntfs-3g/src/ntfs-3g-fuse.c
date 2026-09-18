@@ -1278,6 +1278,33 @@ out:
 	return res;
 }
 
+int ntfs_raw_read_direct(const char *device, long long offset, char *buf, size_t size)
+{
+	ntfs_volume *vol;
+	s64 got;
+	int res;
+
+	if (!device || !buf || !size || offset < 0)
+		return -EINVAL;
+
+	/* 只读直接挂载：不重放日志、不碰写路径，只借用被证明可用的 handle: 开设备
+	 * 通道；随后全部走 ntfs_pread（分区相对偏移 → 驱动 → 扇区），不解释任何
+	 * NTFS 结构，因此读到的就是磁盘上**本来就在那里**的字节。 */
+	vol = ntfs_mount(device, NTFS_MNT_RDONLY);
+	if (!vol)
+		return -errno;
+
+	got = ntfs_pread(vol->dev, (s64)offset, (s64)size, buf);
+	if (got < 0)
+		res = -errno;
+	else
+		res = (int)got;
+
+	if (ntfs_umount(vol, FALSE) && res >= 0)
+		res = -EIO;
+	return res;
+}
+
 int ntfs_stat_paths_direct(const char *device, const char *const *paths, int count,
 			   long long *sizes)
 {

@@ -674,7 +674,8 @@ int main(int argc, char **argv) {
 	 *   * 只读探针用 NTFS_MNT_RDONLY 挂载：**不重放日志、不清 dirty 标记，一个字节都不写**。
 	 *     （这正是之前用 ntfs_open 探测时最大的问题 —— 那个挂载本身可能改卷。）
 	 */
-	if (argc == 3 || (argc == 6 && !strcmp(argv[2], "readhead"))) {
+	if (argc == 3 || (argc == 6 && (!strcmp(argv[2], "readhead") ||
+	                                !strcmp(argv[2], "rawread")))) {
 		/* setdirty：置卷的 VOLUME_IS_DIRTY 标记 —— chkdsk /f 对在用卷做的就是这件事。
 		 * 复用 libntfs-3g 的 ntfs_volume_write_flags()，不手搓 $Volume 的 MFT 偏移。 */
 		if (argc == 3 && !strcmp(argv[2], "setdirty")) {
@@ -781,6 +782,71 @@ int main(int argc, char **argv) {
 			printf("readhead: %d of %lld bytes from %s (file size %lld)\n", rs, want, pth,
 			       total);
 			free(pth);
+			free(buf);
+			return rs == (int)want ? 0 : 1;
+		}
+
+		/* rawread <byteOffset> <localOut> <bytes>：分区内的**裸扇区读**，不经任何
+		 * NTFS 语义（不会按 initialized_size/hole 合成零）。readhead/info:/record:
+		 * 都只能看 NTFS 视图：一个"读回来全是零"可能是写没落盘，也可能是元数据的
+		 * initialized_size 没提交而数据其实躺在簇里 —— 这两者用 NTFS 视图**永远
+		 * 分不开**。rawread 直接读 info: 报的 LCN × cluster_size 那些扇区：
+		 * 扇区里是期望的字节 → 数据落盘了，去查元数据提交/卸载；扇区里是零 →
+		 * 数据真没写进去，去查驱动/SCSI 写路径。
+		 * 偏移认十进制或 0x 十六进制；后两个参数与 readhead 一样两种顺序都接受。 */
+		if (argc == 6 && !strcmp(argv[2], "rawread")) {
+			const char *outPath = NULL;
+			long long want = 0;
+			long long off;
+			char *buf;
+			FILE *out;
+			char *end = NULL;
+			int rs;
+
+			off = strtoll(argv[3], &end, 0);
+			if (!end || *end != 0 || argv[3][0] == 0 || off < 0) {
+				fprintf(stderr, "rawread: bad byte offset '%s' (want decimal or 0x hex)\n",
+				        argv[3]);
+				return 1;
+			}
+			{
+				char *endA = NULL, *endB = NULL;
+				const long long a = strtoll(argv[4], &endA, 0);
+				const long long b = strtoll(argv[5], &endB, 0);
+				if (endA && *endA == 0 && argv[4][0] != 0) {
+					outPath = argv[5];
+					want = a;
+				} else if (endB && *endB == 0 && argv[5][0] != 0) {
+					outPath = argv[4];
+					want = b;
+				}
+			}
+			if (want <= 0) {
+				fprintf(stderr, "rawread: bad byte count (got '%s' and '%s'; need one number "
+				                "and one output path)\n", argv[4], argv[5]);
+				return 1;
+			}
+			buf = malloc((size_t)want);
+			if (!buf) {
+				perror("malloc");
+				return 1;
+			}
+			rs = ntfs_raw_read_direct(argv[1], off, buf, (size_t)want);
+			if (rs < 0) {
+				fprintf(stderr, "rawread: offset %lld: %s\n", off, strerror(-rs));
+				free(buf);
+				return 1;
+			}
+			out = fopen(outPath, "wb");
+			if (!out) {
+				perror("fopen");
+				free(buf);
+				return 1;
+			}
+			fwrite(buf, 1, (size_t)rs, out);
+			fclose(out);
+			printf("rawread: %d of %lld bytes from offset %lld -> %s\n", rs, want, off,
+			       outPath);
 			free(buf);
 			return rs == (int)want ? 0 : 1;
 		}
@@ -926,7 +992,7 @@ int main(int argc, char **argv) {
 		}
 
 		fprintf(stderr, "unknown command '%s' (known: setdirty, logstate, stat:<path>, list:<path>, "
-		                "resolve:<path>, info:<path>, record:<path>, rm:<path>, readhead)\n", argv[2]);
+		                "resolve:<path>, info:<path>, record:<path>, rm:<path>, readhead, rawread)\n", argv[2]);
 	}
 
 	if (ntfs_fuse_init()) {

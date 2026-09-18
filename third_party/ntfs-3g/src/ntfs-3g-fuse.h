@@ -94,6 +94,13 @@ int ntfs_record_dump_direct(const char *device, const char *path, char *out, siz
  * RW 挂载在重启页 v2.0 时被无条件拒绝（"Windows 持有缓存元数据"）——把这个
  * 状态在写回之前显式报出来，操作者先真关机再重试，而不是让 ntfscp 摔死。 */
 int ntfs_logstate_direct(const char *device, char *out, size_t cap);
+/* 分区内的**裸扇区读**（只读直接挂载，之后只用 ntfs_pread，不经任何 NTFS 语义）。
+ * 存在的理由：info:/record: 看的是元数据，readhead 读超 initialized_size 会**合成零、
+ * 根本不碰盘**——它们都回答不了"那些数据簇的扇区里到底有没有字节"。rawread 读的是
+ * 分区内绝对字节偏移（info: 报的那个 LCN × cluster_size），能把"数据没写进去"和
+ * "数据在盘上但元数据的 initialized_size 撒谎"这两件事一刀切开。
+ * 返回实际读到的字节数，<0 表示 -errno。 */
+int ntfs_raw_read_direct(const char *device, long long offset, char *buf, size_t size);
 
 #ifdef __cplusplus
 }
