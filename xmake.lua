@@ -157,7 +157,7 @@ target("secmelt")
             print("SecMelt: WARNING driver not found at " .. sys .. " (raw disk features will be unavailable)")
         end
 
-        local tools = {"ntfsfix.exe", "ntfscp.exe", "ntfs-3g-cli.exe"}
+        local tools = {"ntfsfix.exe", "ntfscp.exe", "ntfs-3g-cli.exe", "mkntfs.exe"}
         local toolsdir = path.join(outdir, "tools")
         for _, name in ipairs(tools) do
             -- mingw-w64 产物（原来是 msys/x86_64——那是 cygwin 目标，Win7 用不了）
