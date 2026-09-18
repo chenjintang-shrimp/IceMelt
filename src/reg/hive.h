@@ -17,9 +17,20 @@
 //   0x030 64  file name (UTF-16)
 //   0x1FC  4  checksum = 前 0x1FC 字节按 ULONG 逐字异或
 //
-// 恢复语义：只有「主 hive 脏 或 校验和无效」时内核才会应用事务日志；日志项又必须从
-// 期望序号起连续。因此 (a) 写回干净且校验和有效的 hive，(b) 清零日志头部，
-// 两条独立防线共同消除日志重放把我们的改动覆盖回去的可能。
+// 恢复语义（依据 regf 公开规范 msuhanov/regf 的「Dirty state of a hive」与
+// 「Multiple transaction log files」两节）：
+//
+//   * 内核只在主 hive「脏」时才做恢复 —— 脏 = base block 校验和不对，或主序号 != 次序号。
+//     **干净的 hive，日志里的后续日志项一律被忽略。**
+//   * 日志文件（*.LOG / *.LOG1 / *.LOG2）开头那一个扇区是主 hive base block 的「部分备份
+//     副本」（只写 Clustering factor × 512 字节），File type 字段被改写（新格式为 6）。
+//     一个日志能否被用来恢复，取决于这份副本是否有效、Last written timestamp 是否对得上。
+//   * 因此「清零日志头部」= 让它不再持有有效的 base block 副本，该日志即不可应用。这是
+//     规范明确处理的情形（Windows 8 之前：主 hive base block 无效、第一个日志没有有效副本
+//     时，去看第二个日志）。日志文件本身会在成功恢复 / 复位后被内核重建。
+//
+// 于是两条防线是：(a) 写回干净且校验和有效的 hive（**这条是决定性的**）；（b）让日志头部
+// 不再可应用 —— 防止那份 hive 万一被判脏时，被按旧序号重放旧日志项、把改动覆盖回去。
 
 #pragma once
 
@@ -74,6 +85,12 @@ bool ExportSystemHive(const std::filesystem::path& outPath, std::wstring& error)
 // 读取并解析 base block（只读）
 bool ReadBaseBlock(const std::filesystem::path& hivePath, HiveBaseBlock& out, std::wstring& error);
 
+// 解析内存里的一份 base block（至少 kHiveBlockSize 字节）。用途：把**从原始磁盘读回来的**
+// 那 4096 字节解析成同样的字段 —— 这样"磁盘上那份 hive 到底干净不干净、校验和对不对"
+// 就有了直接证据，而不是只看写入工具自己报告的退出码。
+bool ParseBaseBlock(const unsigned char* block, size_t blockSize, uint64_t fileSize,
+                    HiveBaseBlock& out);
+
 // 令 hive 变干净：sequence2 = sequence1，重算校验和并写回。
 // 断言 size % 4096 == 0 且 type == 0。RegSaveKeyEx 正常已产出干净 hive，
 // 因此这三步以校验为主、修正为辅。调用方用调用前后的 base block 比对得知是否真做了修正。
@@ -83,5 +100,17 @@ bool MakeCleanAndFixChecksum(const std::filesystem::path& hivePath, HiveBaseBloc
 // 结构可加载性校验（不触碰运行中的注册表，不做 RegLoadKey）：
 // signature / type / 对齐 / 序号干净 / 校验和有效 / root cell 为合法 "nk" 单元。
 bool VerifyHiveLoadable(const std::filesystem::path& hivePath, std::wstring& error);
+
+// 从**导出的副本**里摘掉一个服务键（离线加载 → 删除 → 卸载）。
+//
+// 为什么必须在副本上做，而不是在活动注册表里删：装载驱动会写入活动注册表，而导出又取自它，
+// 所以要保证的是"写回目标机的那份 hive 里没有这个服务键"。如果在活动注册表里删，
+// SCM 的内存记录并不会跟着消失（驱动还加载着、也无法卸载），于是注册表与 SCM 脱节 ——
+// 实测后果：下一次 CreateServiceW 报"已存在"（走内存），ChangeServiceConfigW 要写注册表键而
+// 键已不在，失败 ERROR_FILE_NOT_FOUND(2)，整条链路起不来。
+// 正确做法是两侧各自用自己该用的手段：活动现场留给 SCM（CreateServiceW/ChangeServiceConfigW），
+// 目标副本用离线编辑。
+bool RemoveServiceFromExportedHive(const std::filesystem::path& hivePath,
+                                   const std::wstring& serviceName, std::wstring& error);
 
 }  // namespace secmelt

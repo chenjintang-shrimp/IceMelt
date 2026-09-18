@@ -240,16 +240,166 @@ EditReport StripFilterEntries(const std::vector<std::wstring>& names) {
     return report;
 }
 
+bool QueryServiceRunning(const std::wstring& name, bool& running, std::wstring& detail) {
+    running = false;
+    detail.clear();
+
+    SC_HANDLE manager = ::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+    if (!manager) {
+        detail = FormatW(L"OpenSCManagerW failed: %u", ::GetLastError());
+        return false;
+    }
+    SC_HANDLE service = ::OpenServiceW(manager, name.c_str(), SERVICE_QUERY_STATUS);
+    if (!service) {
+        const DWORD openError = ::GetLastError();
+        ::CloseServiceHandle(manager);
+        if (openError == ERROR_SERVICE_DOES_NOT_EXIST) {
+            detail = L"no such service";
+            return true;
+        }
+        detail = FormatW(L"OpenServiceW(%ls) failed: %u", name.c_str(), openError);
+        return false;
+    }
+    SERVICE_STATUS status{};
+    const BOOL ok = ::QueryServiceStatus(service, &status);
+    const DWORD queryError = ok ? ERROR_SUCCESS : ::GetLastError();
+    ::CloseServiceHandle(service);
+    ::CloseServiceHandle(manager);
+    if (!ok) {
+        detail = FormatW(L"QueryServiceStatus(%ls) failed: %u", name.c_str(), queryError);
+        return false;
+    }
+    running = status.dwCurrentState != SERVICE_STOPPED;
+    detail = running ? FormatW(L"RUNNING (state %u)", status.dwCurrentState) : L"not running";
+    return true;
+}
+
+bool StopService(const std::wstring& name, bool& stopped, std::wstring& detail) {
+    stopped = false;
+    detail.clear();
+
+    SC_HANDLE manager = ::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+    if (!manager) {
+        detail = FormatW(L"OpenSCManagerW failed: %u", ::GetLastError());
+        return false;
+    }
+
+    SC_HANDLE service = ::OpenServiceW(manager, name.c_str(),
+                                       SERVICE_STOP | SERVICE_QUERY_STATUS);
+    if (!service) {
+        const DWORD openError = ::GetLastError();
+        ::CloseServiceHandle(manager);
+        if (openError == ERROR_SERVICE_DOES_NOT_EXIST) {
+            stopped = true;  // 没有这个服务：没有东西需要停
+            detail = L"no such service";
+            return true;
+        }
+        detail = FormatW(L"OpenServiceW(%ls) failed: %u", name.c_str(), openError);
+        return false;
+    }
+
+    // 先看它是不是本来就没在运行 —— 那也不算失败（服务可能是 DEMAND_START 且没被启动）
+    SERVICE_STATUS status{};
+    if (!::QueryServiceStatus(service, &status)) {
+        const DWORD queryError = ::GetLastError();
+        ::CloseServiceHandle(service);
+        ::CloseServiceHandle(manager);
+        detail = FormatW(L"QueryServiceStatus(%ls) failed: %u", name.c_str(), queryError);
+        return false;
+    }
+    if (status.dwCurrentState == SERVICE_STOPPED) {
+        ::CloseServiceHandle(service);
+        ::CloseServiceHandle(manager);
+        stopped = true;
+        detail = L"already stopped";
+        return true;
+    }
+
+    if (!::ControlService(service, SERVICE_CONTROL_STOP, &status)) {
+        const DWORD stopError = ::GetLastError();
+        ::CloseServiceHandle(service);
+        ::CloseServiceHandle(manager);
+        if (stopError == ERROR_SERVICE_NOT_ACTIVE) {
+            stopped = true;
+            detail = L"already stopped";
+            return true;
+        }
+        // 最常见的两种：ERROR_SERVICE_CANNOT_ACCEPT_CTRL(1061) —— 服务不接受控制命令，
+        // 内核过滤器驱动基本都这样（没有 DriverUnload）；ERROR_SERVICE_REQUEST_TIMEOUT(1053)
+        // —— 接受了但不响应。都归入"仍在运行"。
+        stopped = false;
+        detail = FormatW(L"still running (ControlService(SERVICE_CONTROL_STOP) failed: %u%s)",
+                         stopError,
+                         stopError == ERROR_SERVICE_CANNOT_ACCEPT_CTRL
+                             ? L", the service does not accept control commands"
+                             : (stopError == ERROR_SERVICE_REQUEST_TIMEOUT
+                                    ? L", stop timed out"
+                                    : L""));
+        ::CloseServiceHandle(manager);
+        return true;
+    }
+
+    // 等它真的停下来（最多 2 秒）。等不到就如实说"还在跑" —— 不谎报成功。
+    // 停不下来本来就不算失败（用户明确说过，也是过滤器驱动的常态），所以这个等待很短。
+    bool isStopped = false;
+    for (int i = 0; i < 20; ++i) {
+        SERVICE_STATUS now{};
+        if (!::QueryServiceStatus(service, &now)) break;
+        if (now.dwCurrentState == SERVICE_STOPPED) {
+            isStopped = true;
+            break;
+        }
+        ::Sleep(100);
+    }
+    ::CloseServiceHandle(service);
+    ::CloseServiceHandle(manager);
+
+    stopped = isStopped;
+    detail = isStopped ? L"stopped" : L"still running (did not reach SERVICE_STOPPED in 5s)";
+    return true;
+}
+
 EditReport DeleteServiceKeys(const std::vector<std::wstring>& names) {
     EditReport report;
     for (const auto& name : names) {
         const std::wstring path = ServicePath(name);
         HKEY key = nullptr;
-        if (::RegOpenKeyExW(HKEY_LOCAL_MACHINE, path.c_str(), 0, KEY_READ, &key) != ERROR_SUCCESS) {
+        const bool keyPresent =
+            ::RegOpenKeyExW(HKEY_LOCAL_MACHINE, path.c_str(), 0, KEY_READ, &key) == ERROR_SUCCESS;
+        if (keyPresent) ::RegCloseKey(key);
+
+        // 先停，再删键。只删注册表键**不会**停掉已加载的驱动 —— 那样在重启前保护照旧生效，
+        // 而我们紧接着就要绕开它（写裸盘），所以能停就停。停不下来不是致命错误：过滤器驱动
+        // 大多没有 DriverUnload，重启后不加载才是真正的效果 —— 但必须如实报出来。
+        //
+        // 注册表键不存在时**也要**问一次 SCM：SCM 的内存记录可以比注册表键活得更久（键被删了
+        // 服务还在跑），那种状态下如果只看注册表就会漏掉一个**正在生效**的过滤器。
+        bool stopped = false;
+        std::wstring detail;
+        const bool asked = StopService(name, stopped, detail);
+        const bool scmKnowsIt = asked && detail != L"no such service";
+
+        if (keyPresent) {
+            if (asked) {
+                (stopped ? report.stoppedServices : report.runningServices)
+                    .push_back(FormatW(L"%ls (%ls)", name.c_str(), detail.c_str()));
+            } else {
+                report.runningServices.push_back(
+                    FormatW(L"%ls (stop attempt failed: %ls)", name.c_str(), detail.c_str()));
+            }
+        } else if (scmKnowsIt && !stopped) {
+            // 键不在、但服务还在跑：这是我们必须报出来的异常状态
+            report.runningServices.push_back(FormatW(
+                L"%ls (%ls; its registry key is already gone, so nothing points at this driver "
+                L"any more -- expect it to disappear after the reboot)",
+                name.c_str(), detail.c_str()));
+        }
+
+        if (!keyPresent) {
             report.absentKeys.push_back(ServiceKeyPath(name));
             continue;
         }
-        ::RegCloseKey(key);
+
         const LSTATUS status = ::RegDeleteTreeW(HKEY_LOCAL_MACHINE, path.c_str());
         if (status == ERROR_SUCCESS) {
             report.deletedKeys.push_back(ServiceKeyPath(name));
