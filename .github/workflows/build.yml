@@ -40,40 +40,19 @@ jobs:
         shell: cmd
         run: C:\msys64\usr\bin\bash.exe -lc "pacman -S --noconfirm --needed mingw-w64-x86_64-gcc"
 
+      - name: Put MSYS2 mingw64 on PATH (ahead of the image's own C:\mingw64)
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "$($env:MINGW_ROOT)\bin"
+        # cc1.exe 住在 ...\lib\gcc\... 而不是 ...\bin —— mingw bin 不在 PATH 时它找不到自己的
+        # libintl/libiconv/libgmp/libmpfr/libmpc/libzstd，gcc --version 能跑、一编译就 silently
+        # exit 1（CI 实例）。机器学习包之前也踩过这个。GH 把 GITHUB_PATH 追加到后续步骤 PATH 的最前。
+
       - name: Report toolchain versions
         shell: pwsh
         run: |
           xmake --version
           clang-cl --version
           & "$env:MINGW_ROOT\bin\gcc.exe" --version | Select-Object -First 1
-
-      - name: Diagnose mingw toolchain (temporary)
-        shell: pwsh
-        run: |
-          Write-Host "PATH=$env:PATH"
-          Write-Host "TEMP=$env:TEMP"
-          $gcc = Join-Path $env:MINGW_ROOT 'bin\gcc.exe'
-          Write-Host "gcc=$gcc exists=$(Test-Path $gcc)"
-          foreach ($dll in 'libwinpthread-1.dll', 'libintl-8.dll', 'libiconv-2.dll', 'libgcc_s_seh-1.dll') {
-            Write-Host ("  {0}: {1}" -f $dll, (Test-Path (Join-Path $env:MINGW_ROOT "bin\$dll")))
-          }
-          Write-Host "--- file check ---"
-          Get-Item $gcc | Format-List FullName, Length, VersionInfo
-          Write-Host "--- gcc --version ---"
-          & $gcc --version
-          Write-Host "exit=$LASTEXITCODE"
-          Write-Host "--- gcc -v compile probe ---"
-          $dir = Join-Path $env:TEMP 'probe-diag'
-          New-Item -ItemType Directory -Path $dir -Force | Out-Null
-          Set-Content -Path (Join-Path $dir 'p.c') -Value 'int main(void){return 0;}' -Encoding ASCII
-          & $gcc -v -o (Join-Path $dir 'p.exe') (Join-Path $dir 'p.c')
-          Write-Host "exit=$LASTEXITCODE"
-          Get-ChildItem $dir | Format-Table Name, Length -AutoSize
-          Write-Host "--- same, with mingw bin on PATH ---"
-          $env:PATH = "$env:MINGW_ROOT\bin;$env:PATH"
-          & $gcc -o (Join-Path $dir 'p2.exe') (Join-Path $dir 'p.c')
-          Write-Host "exit=$LASTEXITCODE"
-          Get-ChildItem $dir | Format-Table Name, Length -AutoSize
 
       - name: Preflight dependency check
         shell: pwsh
