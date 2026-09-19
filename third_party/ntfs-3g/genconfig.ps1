@@ -431,7 +431,11 @@ function Resolve-Macro {
     return $null
 }
 
-$templateText = Get-Content -Path $Template -Raw
+# 先统一成 \n 再解析：clone/checkout 可能把这份模板变成 CRLF（autocrlf=true 或 .gitattributes
+# 缺失时就这么干），而下面给 config.status 复刻的 `(?m)^#...undef ... [ \t]*$` 对 CRLF 一行都
+# 匹配不到 —— 结果是替换零处、整份 config.h 没有任何 define（'(defined 0)'，uint8_t 全报
+# unknown type）。这里做了归一化后，`[ \t]*$` 等价地覆盖 `\n` 与凭空而来的 `\r`。
+$templateText = (Get-Content -Path $Template -Raw) -replace "`r`n", "`n"
 $unresolved = [System.Collections.Generic.List[string]]::new()
 $definedCount = 0
 
