@@ -470,6 +470,26 @@ resolve: /Windows/System32/config/SYSTEM -> /Windows/System32/config/system
 [!] would stop and delete service key: HKLM\SYSTEM\CurrentControlSet\Services\DeepFrz [RUNNING (state 4)]
 ```
 
+### 拦截模型的实证：sector 层只影子引导区，"还原"发生在卷/文件层
+
+对 DeepFreeze 8.63 的三枚驱动做了全量逆向（Ghidra headless 全函数反编译），并在冻结的
+Win7 与 Win10 上做了 A/B 实测（完全不走任何旁路、只走普通 `IoCallDriver` 的版本，melt
+照常落盘），拦截模型如下：
+
+| 层 | 组件 | 干什么 | 对本工具的影响 |
+|---|---|---|---|
+| sector 层（端口驱动 dispatch hook） | DfDiskLo.sys | **只影子引导结构**：MBR 盘 = LBA0；GPT 盘 = LBA0 + GPT 头 + 分区表数组，copy-on-write 进内存（RAM-only，每 boot 重建）| **无** —— 数据区读写被它的 stub 原样转交原始 dispatch，hive/RegBack/dirty 标记的路径上没有 sector 级拦截 |
+| 卷/文件层 | DeepFrz.sys | 真正的"还原"：普通写 COW 进它的隐藏磁盘存储，重启丢弃；**没有 SRB 能力** | **无** —— 端口层裸写在它的视野之外，绕它不靠任何钩子 |
+| 文件系统层 | DFFilter.sys | 观察 + 机器账户保护 | 无 |
+
+推论：**本工具不需要绕过任何钩子**。WinDisk 的 SRB 天然从还原软件的视野下面穿过 ——
+早期版本曾实现过一套从 hooker 内存记录里"救回原始 dispatch"的 bypass，上述实测证明
+它对 hive 写入多余，已经整体删除（留档于 git 历史）。
+
+**唯一的边界**：别碰 MBR/GPT 那几个扇区 —— 那是唯一被 sector 影子覆盖的区域，写它会被
+内存影子吞掉（会话内读回自洽、重启蒸发）。本工具不碰它们（也正因如此，那些"必须改 MBR
+才能杀冰点"的传说与本工具无关）。
+
 ### 原理：为什么"写坏也炸不了机"
 
 先把目的说清楚（这一条决定了后面所有的取舍）：
@@ -477,8 +497,9 @@ resolve: /Windows/System32/config/SYSTEM -> /Windows/System32/config/system
 **我们要的是 patch hive 里的 filter 清单 → 写到裸磁盘 → 重启后 Windows 不再加载那些过滤驱动。**
 改动是给**下一次启动**用的，不需要在当前会话里生效。
 
-关键推论 —— **我们的基线写入不可能被 Windows 覆盖**：Windows 自己的任何写入都走磁盘栈，而
-冰点/影子系统把那些写入**重定向到增量区**，到不了基线。所以：
+关键推论 —— **我们的基线写入不可能被 Windows 覆盖**：Windows 自己的任何写入都走
+文件系统 → 卷 → 磁盘栈，而还原软件在**卷/文件层**把那些写入 COW 进增量区（见上一节的
+拦截模型），到不了基线。所以：
 
 * 内核的内存注册表懒写回 → 被重定向 → **盖不到我们写上去的 hive**；
 * 因此 **bugcheck 不是必需的**：它存在的理由（防止内存里的注册表刷回磁盘覆盖我们写的 hive）
