@@ -115,7 +115,13 @@ namespace FSDAntiHook
 	static const ULONG_PTR kDfNodeDevice     = 0x00;
 	static const ULONG_PTR kDfNodeOriginal   = 0x98;
 
-	PVOID FindSavedSrbHandler(PDEVICE_OBJECT pdo, PLDR_DATA_TABLE_ENTRY64 hooker)
+	/* 2026-09-19 现机证据：DfDiskLo 钩的是 DRIVER 级 MajorFunction 表，记录里
+	 * node+0x00 只是装挂时见到的代表设备（另一枚 LSI_SAS PDO），exact 匹配会
+	 * 漏。而 node+0x98 的 saved-orig 是该驱动整张表换表前的值，对本驱动所有
+	 * PDO 通用 —— 所以归属判据放宽为“saved-orig 落在 victim 镜像内”，
+	 * exact 设备匹配仍优先。 */
+	PVOID FindSavedSrbHandler(PDEVICE_OBJECT pdo, PLDR_DATA_TABLE_ENTRY64 hooker,
+	                          PLDR_DATA_TABLE_ENTRY64 victim)
 	{
 		PLIST_ENTRY* headPtr = (PLIST_ENTRY*)((UCHAR*)hooker->DllBase + kDfHookListGlobal);
 		__try
@@ -134,6 +140,8 @@ namespace FSDAntiHook
 				return NULL;
 			}
 			int count = 0;
+			PVOID fallback = NULL;
+			int candidates = 0;
 			for (PLIST_ENTRY le = head->Flink; le != head; le = le->Flink)
 			{
 				if (++count > 32) { LogWarn("[DfWalk] walk aborted: >32 nodes (corrupt list?)"); return NULL; }
@@ -144,8 +152,25 @@ namespace FSDAntiHook
 				LogWarn("[DfWalk] node %d: device=%p saved-orig=%p", count, dev, orig);
 				if ((PDEVICE_OBJECT)dev == pdo)
 					return orig;
+				if ((ULONG_PTR)orig >= (ULONG_PTR)victim->DllBase &&
+					(ULONG_PTR)orig < (ULONG_PTR)victim->DllBase + victim->SizeOfImage)
+				{
+					if (!fallback) fallback = orig;
+					candidates++;
+				}
 			}
-			LogWarn("[DfWalk] walked %d node(s); no device == PDO %p", count, pdo);
+			if (candidates == 1)
+			{
+				LogWarn("[DfWalk] device %p not in records; adopting saved-orig %p by victim-image attribution (1 candidate)",
+					pdo, fallback);
+				return fallback;
+			}
+			if (candidates > 1)
+			{
+				LogWarn("[DfWalk] walked %d node(s); %d victim-image candidates -- ambiguous, refusing", count, candidates);
+				return NULL;
+			}
+			LogWarn("[DfWalk] walked %d node(s); no device == PDO %p, no victim-image candidate", count, pdo);
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER)
 		{
@@ -179,7 +204,7 @@ namespace FSDAntiHook
 			LogWarn("scsi dispatch hooked by an untraceable module; bypass NOT enabled");
 			return;
 		}
-		PVOID orig = FindSavedSrbHandler(pdo, hooker);
+		PVOID orig = FindSavedSrbHandler(pdo, hooker, victim);
 		if (!orig) {
 			LogWarn("no saved-original hook record for PDO %p in %wZ; bypass NOT enabled",
 				pdo, &hooker->BaseDllName);
