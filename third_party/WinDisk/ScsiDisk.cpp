@@ -1,5 +1,14 @@
 #include "ScsiDisk.h"
 
+/* Main.cpp 的 SetTargetDisk→ResolveSrbBypass 在发现端口驱动 IRP_MJ_SCSI 被钩
+ * （DfDiskLo 式 dispatch hook）时，从 hooker 的挂钩记录里救回受害驱动的原始
+ * 处理函数存到这里。直调它 = 真正访问磁盘；IoCallDriver = 先进钩子的账本。
+ *
+ * 调用形态与 IoCallDriver 完全一致（内部本来就是这个函数指针的间接调用），
+ * 所以不需要换表、不触碰冰点全局状态、不留任何可检痕迹。 */
+extern PVOID g_BypassSrbHandler;
+typedef NTSTATUS (*PDRIVER_DISPATCH_FN)(PDEVICE_OBJECT, PIRP);
+
 NTSTATUS ScsiReadWriteDiskCompletion(PDEVICE_OBJECT pDevObj, PIRP pIrp, PVOID Context)
 {
 	if (pIrp->UserIosb) {
@@ -163,13 +172,19 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 	 * 覆盖这些标志位。 */
 	IoSetCompletionRoutine(pIrp, ScsiReadWriteDiskCompletion, pSrb, TRUE, TRUE, TRUE);
 
-	ntStatus = IoCallDriver(pDevObj, pIrp);
+	/* 旁路：端口 PDO 的分派被冰品类钩住时，不走 IoCallDriver（那张表已被人换过），
+	 * 直接调 hooker 记录里存下的受害驱动原始 dispatch。签名与 IoCallDriver 相同。 */
+	if (g_BypassSrbHandler)
+		ntStatus = ((PDRIVER_DISPATCH_FN)g_BypassSrbHandler)(pDevObj, pIrp);
+	else
+		ntStatus = IoCallDriver(pDevObj, pIrp);
 	if (ntStatus == STATUS_PENDING)
 	{
 		KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
 		ntStatus = IoSB.Status;
 	}
-	LogInfo("IoCallDriverStatus: 0x%.8x\n", ntStatus);
+	LogInfo("IoCallDriverStatus: 0x%.8x (via %s)\n", ntStatus,
+		g_BypassSrbHandler ? "bypass" : "dispatch");
 	LogInfo("SrbStatus: 0x%.8x\n", pSrb->SrbStatus);
 	LogInfo("ScsiStatus: 0x%.8x\n", pSrb->ScsiStatus);
 	LogInfo("IoSB.Status: 0x%.8x Information=%llu Expected=%lu\n",

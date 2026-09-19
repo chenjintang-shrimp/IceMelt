@@ -26,6 +26,10 @@ UNICODE_STRING SymLinkName;
 DATA_LIST_ENTRY TargetDisks = { 0 };
 PDEVICE_OBJECT TargetDisk = NULL;
 
+/* 全局符号，勿进命名空间 —— ScsiDisk.cpp 要 extern 引用它做直调。
+ * 非空 = 端口 PDO 的 IRP_MJ_SCSI 被钩、已从 hooker 的记录里救回真身。 */
+PVOID g_BypassSrbHandler = NULL;
+
 namespace FSDAntiHook
 {
 	typedef struct _LDR_DATA_TABLE_ENTRY {
@@ -92,6 +96,85 @@ namespace FSDAntiHook
 					&hooker->BaseDllName, (unsigned long long)off, (PVOID)v);
 			}
 		}
+	}
+
+	/* DfDiskLo（DeepFreeze 系）的挂钩记录布局 —— 来自对该版本
+	 * (SizeOfImage=0xD000, 2021-07-15) 的静态分析：
+	 *   全局 DfBase+0x153b0 存指针 P；P+0x00 是 LIST_ENTRY 表头、P+0x10 是自旋锁。
+	 *   每条节点记录的链节在 node+0x100，node+0x00 是被钩的 DEVICE_OBJECT (PDO)，
+	 *   node+0x98 是被存下的原始 IRP_MJ_SCSI dispatch（DfDiskLo 自己的解析器
+	 *   0x1303c 就是这样按 PDO 查表的）。
+	 * 冰点升级换版本时这些偏移都会变 —— 出缓之前必须打印并验证。 */
+	static const ULONG_PTR kDfHookListGlobal = 0x153b0;
+	static const ULONG_PTR kDfNodeListLink   = 0x100;
+	static const ULONG_PTR kDfNodeDevice     = 0x00;
+	static const ULONG_PTR kDfNodeOriginal   = 0x98;
+
+	PVOID FindSavedSrbHandler(PDEVICE_OBJECT pdo, PLDR_DATA_TABLE_ENTRY64 hooker)
+	{
+		PLIST_ENTRY* headPtr = (PLIST_ENTRY*)((UCHAR*)hooker->DllBase + kDfHookListGlobal);
+		__try
+		{
+			PLIST_ENTRY head = (PLIST_ENTRY)*headPtr;
+			if (!MmIsAddressValid(head))
+				return NULL;
+			for (PLIST_ENTRY le = head->Flink; le != head; le = le->Flink)
+			{
+				UCHAR* node = (UCHAR*)le - kDfNodeListLink;
+				if (!MmIsAddressValid(node))
+					break;
+				if (*(PDEVICE_OBJECT*)(node + kDfNodeDevice) == pdo)
+					return *(PVOID*)(node + kDfNodeOriginal);
+			}
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			/* 链表正被改写/布局对不上：没找到就放弃，不动粗 */
+		}
+		return NULL;
+	}
+
+	/* 目标 PDO 定下来之后调：检测其 dispatch 是否被钩、若被钩就从 hooker 的
+	 * 挂钩记录里捞出真身，存进 g_BypassSrbHandler。
+	 * 任何一步对不上都保持 NULL —— 语义回到"可能没写进 baseline"的旧世界，
+	 * 绝不带着错误的指针硬闯。 */
+	void ResolveSrbBypass(PDEVICE_OBJECT pdo)
+	{
+		g_BypassSrbHandler = NULL;
+		if (!pdo || !pdo->DriverObject || !pdo->DriverObject->DriverSection)
+			return;
+		PLDR_DATA_TABLE_ENTRY64 victim =
+			(PLDR_DATA_TABLE_ENTRY64)pdo->DriverObject->DriverSection;
+		const PVOID cur = pdo->DriverObject->MajorFunction[IRP_MJ_SCSI];
+		const BOOLEAN ownImage =
+			((ULONG_PTR)cur >= (ULONG_PTR)victim->DllBase) &&
+			((ULONG_PTR)cur < (ULONG_PTR)victim->DllBase + victim->SizeOfImage);
+		if (ownImage) {
+			LogInfo("scsi dispatch of %wZ is clean; no bypass needed", victim->FullDllName);
+			return;
+		}
+		PLDR_DATA_TABLE_ENTRY64 hooker = FindModuleByAddress(cur, victim);
+		if (!hooker) {
+			LogWarn("scsi dispatch hooked by an untraceable module; bypass NOT enabled");
+			return;
+		}
+		PVOID orig = FindSavedSrbHandler(pdo, hooker);
+		if (!orig) {
+			LogWarn("no saved-original hook record for PDO %p in %wZ; bypass NOT enabled",
+				pdo, &hooker->BaseDllName);
+			return;
+		}
+		const BOOLEAN origInVictim =
+			((ULONG_PTR)orig >= (ULONG_PTR)victim->DllBase) &&
+			((ULONG_PTR)orig < (ULONG_PTR)victim->DllBase + victim->SizeOfImage);
+		if (!origInVictim) {
+			LogWarn("saved-original candidate %p is not inside %wZ; refusing to trust it",
+				orig, victim->FullDllName);
+			return;
+		}
+		g_BypassSrbHandler = orig;
+		LogWarn("BYPASS ENABLED: SRBs go through saved original %p (recovered from %wZ's hook record)",
+			orig, &hooker->BaseDllName);
 	}
 
 	BOOLEAN AntiFSDHookCallback(PVOID Buffer, SIZE_T Size)
@@ -204,6 +287,9 @@ NTSTATUS SetTargetDisk(WCHAR DiskName[])
 		TargetDisk = *((PDEVICE_OBJECT*)(List_GetTailItem(&TargetDisks)->Buffer));
 	}
 	List_Visit(&TargetDisks, FSDAntiHook::AntiFSDHookCallback);
+	/* 在审计之后再判定旁路：hooker 是谁、saved-original 在哪，都由上面的日志
+	 * 先留个底；这一步决定 SRB 是照常走（可能被钩）还是直调真身。 */
+	FSDAntiHook::ResolveSrbBypass(TargetDisk);
 	return status;
 }
 
