@@ -3,7 +3,7 @@
 build/
 *.xmake
 
-# ---- 发布包（package.ps1 的落位目录）----
+# ---- 发布包（xmake pack -o dist 的落位目录）----
 dist/
 
 # ---- MSVC / VS ----
