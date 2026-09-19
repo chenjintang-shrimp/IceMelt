@@ -54,7 +54,7 @@ xmake build
 
 | 依赖 | 用途 |
 |---|---|
-| Visual Studio + LLVM（clang-cl） | secmelt.exe |
+| Visual Studio + LLVM（clang-cl） | icemelt.exe |
 | Windows Driver Kit | WinDisk.sys |
 | mingw-w64 工具链（默认取 MSYS2 的 `D:\msys64\mingw64`，`MINGW_ROOT` 可指向任意发行版） | ntfs-3g 工具。需要 **msvcrt** 变体，不要 ucrt64 |
 | PowerShell（7 或系统自带的 5.1 都行） | 首次构建时探测工具链、生成 ntfs-3g 的 config.h |
@@ -91,8 +91,8 @@ glibc 动态链接器有一段著名注释：
 
 ```
 build/windows/x64/release/
-├── secmelt.exe
-├── secmelt-gui.exe        图形前端（可选，资产与 secmelt.exe 共用）
+├── icemelt.exe
+├── icemelt-gui.exe        图形前端（可选，资产与 icemelt.exe 共用）
 ├── targets.txt            目标名单
 ├── WinDisk_x64.sys        驱动
 ├── kdu.exe                关 DSE
@@ -103,9 +103,9 @@ build/windows/x64/release/
 单独构建某个子工程：`cd third_party/{WinDisk,ntfs-3g} && xmake f -P . --yes ... && xmake build -P .`；
 KDU 的构建工程在 `third_party/KDU.build`（源码在 `third_party/KDU` submodule 里），用法相同。
 
-两个前端产物（`secmelt` / `secmelt-gui`）挂的是同一段 `after_build`：**构建任意一个都会连带构建
+两个前端产物（`icemelt` / `icemelt-gui`）挂的是同一段 `after_build`：**构建任意一个都会连带构建
 三方子工程并把资产落位到该构建目录**（同一次 xmake 里两个一起构建时三方只跑一遍）。所以
-`xmake build secmelt-gui` 单独跑也能得到完整的运行期组合。
+`xmake build icemelt-gui` 单独跑也能得到完整的运行期组合。
 
 ### 打发布包
 
@@ -113,8 +113,8 @@ KDU 的构建工程在 `third_party/KDU.build`（源码在 `third_party/KDU` sub
 
 ```
 dist/
-├── IceMelt-v1.0.0-cli/      + .zip    命令行前端：secmelt.exe + preflight.bat / melt.bat + 运行期资产
-└── IceMelt-GUI-v1.0.0-gui/  + .zip    图形前端：secmelt-gui.exe + 同一套运行期资产
+├── IceMelt-v1.0.0-cli/      + .zip    命令行前端：icemelt.exe + preflight.bat / melt.bat + 运行期资产
+└── IceMelt-GUI-v1.0.0-gui/  + .zip    图形前端：icemelt-gui.exe + 同一套运行期资产
 ```
 
 ```powershell
@@ -131,21 +131,21 @@ CI（`.github/workflows/build.yml`）每次运行都用同一份脚本出包，�
 
 | 命令 | 作用 |
 |---|---|
-| `secmelt` | 命令行入口（无子命令时打印用法）；交互/点按式操作走 `secmelt-gui` |
-| `secmelt-gui` | 图形前端（Dear ImGui · Win32 + D3D9）：同一套 pipeline，点按式操作，Win7 SP1 → Win11 |
-| `secmelt --dump` | 自检报告：环境 + 构建期资产 + 名单的实测存在状态，只读，可用于 CI |
-| `secmelt --dry-run` | 只读预演整条链路 |
-| `secmelt --preflight` | melt 前的一次性根因扫描（logstate 守卫 + 目录层级探针），**只在带快照的 VM 里跑** |
-| `secmelt --melt --yes-i-know` | 非交互执行整条链路；破坏性、不可回滚 |
-| `secmelt --selftest-hive` | 校验 hive base block 偏移与校验和算法 |
-| `secmelt --selftest-registry` | 验证过滤器摘除的写入路径 |
-| `secmelt --selftest-raw` | 裸盘写入/读回判定：底层通路是硬断言，OS 通路只做分类（**只在虚拟机里跑**） |
+| `icemelt` | 命令行入口（无子命令时打印用法）；交互/点按式操作走 `icemelt-gui` |
+| `icemelt-gui` | 图形前端（Dear ImGui · Win32 + D3D9）：同一套 pipeline，点按式操作，Win7 SP1 → Win11 |
+| `icemelt --dump` | 自检报告：环境 + 构建期资产 + 名单的实测存在状态，只读，可用于 CI |
+| `icemelt --dry-run` | 只读预演整条链路 |
+| `icemelt --preflight` | melt 前的一次性根因扫描（logstate 守卫 + 目录层级探针），**只在带快照的 VM 里跑** |
+| `icemelt --melt --yes-i-know` | 非交互执行整条链路；破坏性、不可回滚 |
+| `icemelt --selftest-hive` | 校验 hive base block 偏移与校验和算法 |
+| `icemelt --selftest-registry` | 验证过滤器摘除的写入路径 |
+| `icemelt --selftest-raw` | 裸盘写入/读回判定：底层通路是硬断言，OS 通路只做分类（**只在虚拟机里跑**） |
 
 `--selftest-raw`、`--melt`（以及图形前端的三个动作）需要管理员权限。无需担心数字签名：程序自己会搞定。
 
-### 图形前端（secmelt-gui）
+### 图形前端（icemelt-gui）
 
-`secmelt-gui.exe` 与 `secmelt.exe` 共用同一条 pipeline（不包壳子进程），三个按钮与 CLI 一一对应：
+`icemelt-gui.exe` 与 `icemelt.exe` 共用同一条 pipeline（不包壳子进程），三个按钮与 CLI 一一对应：
 
 | 按钮 | 等价命令 | 说明 |
 |---|---|---|
@@ -311,7 +311,7 @@ SYSTEM hive 写到基线里属于**别的文件**的簇上。这不但毁掉那�
 | 组 | 目标 | 目的 |
 |---|---|---|
 | 1 | 4 MiB 图案 → 卷根**新文件** | 最小往返检查 |
-| 2 | **同样的 11.6 MiB 导出** → `config\secmelt-probe.hive`（**新名字，内核没持有**） | 把"大小/耗时"与"内核正持有那个文件"分开 |
+| 2 | **同样的 11.6 MiB 导出** → `config\icemelt-probe.hive`（**新名字，内核没持有**） | 把"大小/耗时"与"内核正持有那个文件"分开 |
 
 判读：
 
@@ -559,7 +559,7 @@ release 目录里没有它们，运行时用的也不是它们（运行时只用
 
 **没有交互界面了？**
 CLI 只做命令行工具：每条子命令跑完打印报告就退出，不依赖任何终端能力 —— Windows 7 的原生
-conhost 也能完整工作。需要点按式操作时用图形前端 `secmelt-gui`（同一份 pipeline）。
+conhost 也能完整工作。需要点按式操作时用图形前端 `icemelt-gui`（同一份 pipeline）。
 
 ### 构建时
 
@@ -568,11 +568,11 @@ KDU 需要 `git submodule update --init --recursive`；ntfs-3g 需要 mingw-w64 
 MSYS2 里是 `pacman -S mingw-w64-x86_64-gcc`，或者用 `MINGW_ROOT` 指向别的发行版。
 
 **只删了某个子工程的产物，`xmake build` 不补建？**
-子工程挂在 secmelt 的链接步骤后面。用 `xmake build -r`，或进子目录单独构建。
+子工程挂在 icemelt 的链接步骤后面。用 `xmake build -r`，或进子目录单独构建。
 
 **驱动在 Win7 上不加载？**
 `dumpbin /headers WinDisk_x64.sys` 应为 `6.01 subsystem version`；显示 `10.00` 说明是
-`SECMELT_WDK_WINVER=win10` 构建的。
+`ICEMELT_WDK_WINVER=win10` 构建的。
 
 ## 许可
 
