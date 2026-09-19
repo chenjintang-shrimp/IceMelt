@@ -172,12 +172,24 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 	 * 覆盖这些标志位。 */
 	IoSetCompletionRoutine(pIrp, ScsiReadWriteDiskCompletion, pSrb, TRUE, TRUE, TRUE);
 
-	/* 旁路：端口 PDO 的分派被冰品类钩住时，不走 IoCallDriver（那张表已被人换过），
-	 * 直接调 hooker 记录里存下的受害驱动原始 dispatch。签名与 IoCallDriver 相同。 */
+	/* 旁路：端口 PDO 的分派被冰品类钩住时,不走 IoCallDriver(那张表已被人换过),
+	 * 直接调 hooker 记录里存下的受害驱动原始 dispatch。签名与 IoCallDriver 相同。
+	 *
+	 * 但 IofCallDriver 在调 dispatch 之前会做 CurrentLocation/CurrentStackLocation
+	 * 同降一格（这就是 IoSetNextIrpStackLocation 宏体）——被调方读
+	 * [IRP+0xB8] 时拿到的才是我们刚填的那一格。DfDiskLo 的 stub 之所以能给
+	 * r14 传对了，是因为它本身就是经 IoCallDriver 进来的、栈已降格；
+	 * 我们直调漏掉这一步 = 被调方读到未填的垃圾槽(上轮 storport +0x17CB
+	 * 的 0x3B C0000005 即此)。直调前必须补这一刀。 */
 	if (g_BypassSrbHandler)
+	{
+		IoSetNextIrpStackLocation(pIrp);
 		ntStatus = ((PDRIVER_DISPATCH_FN)g_BypassSrbHandler)(pDevObj, pIrp);
+	}
 	else
+	{
 		ntStatus = IoCallDriver(pDevObj, pIrp);
+	}
 	if (ntStatus == STATUS_PENDING)
 	{
 		KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
