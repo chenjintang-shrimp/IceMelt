@@ -2,10 +2,11 @@
 #include "DataList.h"
 #include "FileUnlock.h"
 
-/* 这套 Win7 WDK 头没有导出的 MmIsAddressValid 原型（NT 导出，老驱动通吃）。
- * 手动声明；语义：虚址当前可安全解引用（映射可用）返回 TRUE。 */
-extern "C" NTKERNELAPI BOOLEAN NTAPI MmIsAddressValid(_In_ PVOID VirtualAddress);
-
+/* 2026-09-19：saved-original bypass 已证实不需要并删除。
+ * DfDiskLo 的 sector 账本只影子 MBR/GPT，数据区经其 hook stub 原样直通；
+ * 冻结 Win7/Win10 双平台 (via dispatch) A/B 实测 melt 全部落盘。
+ * bypass 实现留档于 bcf79f4 及之前提交；将来若需要写 MBR/GPT 结构再去捞。
+ * AntiFSDHookCallback 的栈审计（hooker 识别与归属）保留为诊断。 */
 NTSTATUS DriverEntry(IN PDRIVER_OBJECT DriverObject, IN PUNICODE_STRING RegistryPath);
 VOID DriverUnload(IN PDRIVER_OBJECT DriverObject);
 
@@ -15,10 +16,6 @@ UNICODE_STRING SymLinkName;
 
 DATA_LIST_ENTRY TargetDisks = { 0 };
 PDEVICE_OBJECT TargetDisk = NULL;
-
-/* 全局符号，勿进命名空间 —— ScsiDisk.cpp 要 extern 引用它做直调。
- * 非空 = 端口 PDO 的 IRP_MJ_SCSI 被钩、已从 hooker 的记录里救回真身。 */
-PVOID g_BypassSrbHandler = NULL;
 
 namespace FSDAntiHook
 {
@@ -54,181 +51,6 @@ namespace FSDAntiHook
 		return NULL;
 	}
 
-	/* 钩子已坐实时：把 hooker 映像里所有"值落在受害驱动映像区间内"的 qword 全部
-	 * 捞出来。冰点类驱动必须保存受害驱动的原始 dispatch 以便对自己 / 解冻态放行，
-	 * 抄件就藏在它自己的 .data（或它的 import/全局区）里 —— 这里列出的就是
-	 * 头号嫌疑格。读取原值后按指针直调即可绕过钩子，无需换表，也不惊动看门狗。 */
-	void ScanForSavedOriginal(PLDR_DATA_TABLE_ENTRY64 hooker,
-	                          PLDR_DATA_TABLE_ENTRY64 victim)
-	{
-		const UCHAR* img = (const UCHAR*)hooker->DllBase;
-		const ULONG_PTR vBase = (ULONG_PTR)victim->DllBase;
-		const ULONG_PTR vEnd = vBase + victim->SizeOfImage;
-		if (!img || !hooker->SizeOfImage)
-			return;
-		for (ULONG_PTR off = 0; off + sizeof(ULONG_PTR) <= hooker->SizeOfImage; off += sizeof(ULONG_PTR))
-		{
-			/* SizeOfImage 把 INIT 等已丢弃段也计入，而那些页面加载后早被回收 —
-			 * 顺着 SizeOfImage 扫到映像尾部必然 PAGE_FAULT_IN_NONPAGED_AREA。
-			 * 逐页探活，第一个不可映射点即止步；截断点本身也是情报：
-			 * saved-original 只可能藏在它之前的 .data 里。 */
-			if (!MmIsAddressValid((PVOID)(img + off)))
-			{
-				LogWarn("  %wZ image unmapped past +0x%llX (size 0x%X includes discarded pages); "
-				        "stopping scan here\n",
-				        &hooker->BaseDllName, (unsigned long long)off, hooker->SizeOfImage);
-				break;
-			}
-			const ULONG_PTR v = *(const ULONG_PTR*)(img + off);
-			if (v >= vBase && v < vEnd)
-			{
-				LogWarn("  saved-original 嫌疑: %wZ+0x%llX = %p\n",
-					&hooker->BaseDllName, (unsigned long long)off, (PVOID)v);
-			}
-		}
-	}
-
-	/* DfDiskLo（DeepFreeze 系）的挂钩记录布局 —— 来自对该版本
-	 * (SizeOfImage=0xD000, 2021-07-15) 的静态分析：
-	 *   全局 DfBase+0x153b0 存指针 P；P+0x00 是 LIST_ENTRY 表头、P+0x10 是自旋锁。
-	 *   每条节点记录的链节在 node+0x100，node+0x00 是被钩的 DEVICE_OBJECT (PDO)，
-	 *   node+0x98 是被存下的原始 IRP_MJ_SCSI dispatch（DfDiskLo 自己的解析器
-	 *   0x1303c 就是这样按 PDO 查表的）。
-	 * 冰点升级换版本时这些偏移都会变 —— 出缓之前必须打印并验证。 */
-	/* 注意单位：objdump 里 rip 相对寻址的注释给的是**带 ImageBase 的 VA**
-	 * （样本 ImageBase=0x10000），活动映像要用的是 **RVA**（= VA - ImageBase）。
-	 * 之前误把 0x153B0(VA) 直接加在活动基址上，等于戳到映像外未映射页，
-	 * 以 0x50 收场 —— 这个错误不再犯第二次（崩点地址反推更是如此：
-	 * faultAddr - 0x153B0 恰好等于该次启动的 DfBase）。 */
-	static const ULONG_PTR kDfHookListGlobal = 0x53b0;   /* RVA */
-	static const ULONG_PTR kDfNodeListLink   = 0x100;
-	static const ULONG_PTR kDfNodeDevice     = 0x00;
-	static const ULONG_PTR kDfNodeOriginal   = 0x98;
-
-	/* 2026-09-19 现机证据（两轮）：①DfDiskLo 钩的是 DRIVER 级 MajorFunction 表，
-	 * node+0x00 只是装挂代表设备，exact 设备匹配必漏；②saved-orig 的形态对
-	 * storport 系 miniport 是 port（storport.sys）里的框架 dispatch，不在
-	 * miniport 自身镜像里 —— 归属判据改为“落在任一已加载驱动镜像内且不在
-	 * hooker 镜像内”，唯一候选采纳；exact 设备匹配仍最优先。 */
-	PVOID FindSavedSrbHandler(PDEVICE_OBJECT pdo, PLDR_DATA_TABLE_ENTRY64 hooker,
-	                          PLDR_DATA_TABLE_ENTRY64 victim)
-	{
-		PLIST_ENTRY* headPtr = (PLIST_ENTRY*)((UCHAR*)hooker->DllBase + kDfHookListGlobal);
-		__try
-		{
-			if (!MmIsAddressValid(headPtr))
-			{
-				LogWarn("[DfWalk] headPtr probe failed: %wZ base=%p headPtr=%p",
-					&hooker->BaseDllName, hooker->DllBase, headPtr);
-				return NULL;
-			}
-			PLIST_ENTRY head = (PLIST_ENTRY)*headPtr;
-			LogWarn("[DfWalk] %wZ base=%p head(P)=%p", &hooker->BaseDllName, hooker->DllBase, head);
-			if (!head || !MmIsAddressValid(head))
-			{
-				LogWarn("[DfWalk] head(P) invalid: %p", head);
-				return NULL;
-			}
-			LogWarn("[DfWalk] victim %wZ base=%p size=0x%X; hooker %wZ base=%p size=0x%X",
-				&victim->FullDllName, victim->DllBase, victim->SizeOfImage,
-				&hooker->BaseDllName, hooker->DllBase, hooker->SizeOfImage);
-			int count = 0;
-			PVOID fallback = NULL;
-			PLDR_DATA_TABLE_ENTRY64 fallbackMod = NULL;
-			int candidates = 0;
-			for (PLIST_ENTRY le = head->Flink; le != head; le = le->Flink)
-			{
-				if (++count > 32) { LogWarn("[DfWalk] walk aborted: >32 nodes (corrupt list?)"); return NULL; }
-				UCHAR* node = (UCHAR*)le - kDfNodeListLink;
-				if (!MmIsAddressValid(node)) { LogWarn("[DfWalk] node %d probe failed at %p", count, node); break; }
-				PVOID dev = *(PVOID*)(node + kDfNodeDevice);
-				PVOID orig = *(PVOID*)(node + kDfNodeOriginal);
-				LogWarn("[DfWalk] node %d: device=%p saved-orig=%p", count, dev, orig);
-				if ((PDEVICE_OBJECT)dev == pdo)
-					return orig;
-				if ((ULONG_PTR)orig >= (ULONG_PTR)hooker->DllBase &&
-					(ULONG_PTR)orig < (ULONG_PTR)hooker->DllBase + hooker->SizeOfImage)
-				{
-					LogWarn("[DfWalk]   saved-orig lies inside hooker image -- trampoline, skipped");
-					continue;
-				}
-				PLDR_DATA_TABLE_ENTRY64 mod = FindModuleByAddress(orig, victim);
-				if (mod)
-				{
-					LogWarn("[DfWalk]   saved-orig attributed to loaded module %wZ", &mod->FullDllName);
-					if (!fallback) { fallback = orig; fallbackMod = mod; }
-					candidates++;
-				}
-			}
-			if (candidates == 1)
-			{
-				LogWarn("[DfWalk] device %p not in records; adopting saved-orig %p (%wZ) by module attribution (1 candidate)",
-					pdo, fallback, &fallbackMod->FullDllName);
-				return fallback;
-			}
-			if (candidates > 1)
-			{
-				LogWarn("[DfWalk] walked %d node(s); %d module candidates -- ambiguous, refusing", count, candidates);
-				return NULL;
-			}
-			LogWarn("[DfWalk] walked %d node(s); no device == PDO %p, no attributing candidate", count, pdo);
-		}
-		__except (EXCEPTION_EXECUTE_HANDLER)
-		{
-			/* 链表正被改写/布局对不上：没找到就放弃，不动粗 */
-			LogWarn("[DfWalk] exception while walking hook list (code 0x%08X)", GetExceptionCode());
-		}
-		return NULL;
-	}
-
-	/* 目标 PDO 定下来之后调：检测其 dispatch 是否被钩、若被钩就从 hooker 的
-	 * 挂钩记录里捞出真身，存进 g_BypassSrbHandler。
-	 * 任何一步对不上都保持 NULL —— 语义回到"可能没写进 baseline"的旧世界，
-	 * 绝不带着错误的指针硬闯。 */
-	void ResolveSrbBypass(PDEVICE_OBJECT pdo)
-	{
-		g_BypassSrbHandler = NULL;
-		if (!pdo || !pdo->DriverObject || !pdo->DriverObject->DriverSection)
-			return;
-		PLDR_DATA_TABLE_ENTRY64 victim =
-			(PLDR_DATA_TABLE_ENTRY64)pdo->DriverObject->DriverSection;
-		const PVOID cur = pdo->DriverObject->MajorFunction[IRP_MJ_SCSI];
-		const BOOLEAN ownImage =
-			((ULONG_PTR)cur >= (ULONG_PTR)victim->DllBase) &&
-			((ULONG_PTR)cur < (ULONG_PTR)victim->DllBase + victim->SizeOfImage);
-		if (ownImage) {
-			LogInfo("scsi dispatch of %wZ is clean; no bypass needed", victim->FullDllName);
-			return;
-		}
-		PLDR_DATA_TABLE_ENTRY64 hooker = FindModuleByAddress(cur, victim);
-		if (!hooker) {
-			LogWarn("scsi dispatch hooked by an untraceable module; bypass NOT enabled");
-			return;
-		}
-		PVOID orig = FindSavedSrbHandler(pdo, hooker, victim);
-		if (!orig) {
-			LogWarn("no saved-original hook record for PDO %p in %wZ; bypass NOT enabled",
-				pdo, &hooker->BaseDllName);
-			return;
-		}
-		/* miniport 的原始 dispatch 可能在 port（storport.sys）镜像里：
-		 * 信任条件是“在任一已加载模块里、但不在 hooker 镜像里”，
-		 * 而不是死认 victim 镜像。 */
-		PLDR_DATA_TABLE_ENTRY64 origMod = FindModuleByAddress(orig, victim);
-		const BOOLEAN origTrusted =
-			origMod &&
-			!((ULONG_PTR)orig >= (ULONG_PTR)hooker->DllBase &&
-			  (ULONG_PTR)orig < (ULONG_PTR)hooker->DllBase + hooker->SizeOfImage);
-		if (!origTrusted) {
-			LogWarn("saved-original candidate %p is not inside a loaded driver image (or is inside hooker); refusing to trust it",
-				orig);
-			return;
-		}
-		g_BypassSrbHandler = orig;
-		LogWarn("BYPASS ENABLED: SRBs go through saved original %p (recovered from %wZ's hook record)",
-			orig, &hooker->BaseDllName);
-	}
-
 	BOOLEAN AntiFSDHookCallback(PVOID Buffer, SIZE_T Size)
 	{
 		PDEVICE_OBJECT device = *((PDEVICE_OBJECT*)Buffer);
@@ -254,7 +76,6 @@ namespace FSDAntiHook
 				LogWarn("%wZ 的 IRP_MJ_SCSI 被钩: 分派指针落在 %wZ (base=%p size=0x%X) 里\n",
 					driver->DriverName, &owner->FullDllName,
 					owner->DllBase, owner->SizeOfImage);
-				ScanForSavedOriginal(owner, ldr);
 			}
 			else
 			{
@@ -339,13 +160,6 @@ NTSTATUS SetTargetDisk(WCHAR DiskName[])
 		TargetDisk = *((PDEVICE_OBJECT*)(List_GetTailItem(&TargetDisks)->Buffer));
 	}
 	List_Visit(&TargetDisks, FSDAntiHook::AntiFSDHookCallback);
-	/* 在审计之后再判定旁路：hooker 是谁、saved-original 在哪，都由上面的日志
-	 * 先留个底；这一步决定 SRB 是照常走（可能被钩）还是直调真身。 */
-	/* 2026-09-19 实验：DfDiskLo 完整逆向证实其 sector 账本只影子 MBR/GPT，
-	 * 数据区经 stub 直通 storport —— 故 hive 写入本不需要 bypass。
-	 * 本分支强制不走 bypass（g_BypassSrbHandler 恒 NULL，全 IoCallDriver），
-	 * 用于在 VM 上实测 (via dispatch) 是否真的落盘，以裁决 bypass 的必要性。 */
-	// FSDAntiHook::ResolveSrbBypass(TargetDisk);
 	return status;
 }
 

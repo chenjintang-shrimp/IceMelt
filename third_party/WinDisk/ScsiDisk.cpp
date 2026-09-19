@@ -1,14 +1,5 @@
 #include "ScsiDisk.h"
 
-/* Main.cpp 的 SetTargetDisk→ResolveSrbBypass 在发现端口驱动 IRP_MJ_SCSI 被钩
- * （DfDiskLo 式 dispatch hook）时，从 hooker 的挂钩记录里救回受害驱动的原始
- * 处理函数存到这里。直调它 = 真正访问磁盘；IoCallDriver = 先进钩子的账本。
- *
- * 调用形态与 IoCallDriver 完全一致（内部本来就是这个函数指针的间接调用），
- * 所以不需要换表、不触碰冰点全局状态、不留任何可检痕迹。 */
-extern PVOID g_BypassSrbHandler;
-typedef NTSTATUS (*PDRIVER_DISPATCH_FN)(PDEVICE_OBJECT, PIRP);
-
 NTSTATUS ScsiReadWriteDiskCompletion(PDEVICE_OBJECT pDevObj, PIRP pIrp, PVOID Context)
 {
 	if (pIrp->UserIosb) {
@@ -172,31 +163,17 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 	 * 覆盖这些标志位。 */
 	IoSetCompletionRoutine(pIrp, ScsiReadWriteDiskCompletion, pSrb, TRUE, TRUE, TRUE);
 
-	/* 旁路：端口 PDO 的分派被冰品类钩住时,不走 IoCallDriver(那张表已被人换过),
-	 * 直接调 hooker 记录里存下的受害驱动原始 dispatch。签名与 IoCallDriver 相同。
-	 *
-	 * 但 IofCallDriver 在调 dispatch 之前会做 CurrentLocation/CurrentStackLocation
-	 * 同降一格（这就是 IoSetNextIrpStackLocation 宏体）——被调方读
-	 * [IRP+0xB8] 时拿到的才是我们刚填的那一格。DfDiskLo 的 stub 之所以能给
-	 * r14 传对了，是因为它本身就是经 IoCallDriver 进来的、栈已降格；
-	 * 我们直调漏掉这一步 = 被调方读到未填的垃圾槽(上轮 storport +0x17CB
-	 * 的 0x3B C0000005 即此)。直调前必须补这一刀。 */
-	if (g_BypassSrbHandler)
-	{
-		IoSetNextIrpStackLocation(pIrp);
-		ntStatus = ((PDRIVER_DISPATCH_FN)g_BypassSrbHandler)(pDevObj, pIrp);
-	}
-	else
-	{
-		ntStatus = IoCallDriver(pDevObj, pIrp);
-	}
+	/* 即使端口驱动的这张表被 DfDiskLo 类的 hook 换过，hook stub 对数据区 LBA
+	 * 也是原样转交给受害驱动的原始 dispatch（2026-09-19 完整逆向 + Win7/Win10
+	 * 双平台实测证实），直走 IoCallDriver 即可，无需任何旁路。旧 bypass 实现
+	 * （含 IoSetNextIrpStackLocation 的 0x3B 教训）留档于 bcf79f4 之前历史。 */
+	ntStatus = IoCallDriver(pDevObj, pIrp);
 	if (ntStatus == STATUS_PENDING)
 	{
 		KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
 		ntStatus = IoSB.Status;
 	}
-	LogInfo("IoCallDriverStatus: 0x%.8x (via %s)\n", ntStatus,
-		g_BypassSrbHandler ? "bypass" : "dispatch");
+	LogInfo("IoCallDriverStatus: 0x%.8x\n", ntStatus);
 	LogInfo("SrbStatus: 0x%.8x\n", pSrb->SrbStatus);
 	LogInfo("ScsiStatus: 0x%.8x\n", pSrb->ScsiStatus);
 	LogInfo("IoSB.Status: 0x%.8x Information=%llu Expected=%lu\n",
