@@ -109,23 +109,35 @@ KDU 的构建工程在 `third_party/KDU.build`（源码在 `third_party/KDU` sub
 
 ### 打发布包
 
-`package.ps1` 把上面这套组合拆成两个可直接分发的包（版本默认取 `xmake.lua` 的 `set_version`）：
+包由 xmake 自己的 `pack` 出（`xmake.lua` 末尾的 `xpack` 定义），一次跑出两个 zip：
 
 ```
 dist/
-├── IceMelt-v1.0.0-cli/      + .zip    命令行前端：icemelt.exe + preflight.bat / melt.bat + 运行期资产
-└── IceMelt-GUI-v1.0.0-gui/  + .zip    图形前端：icemelt-gui.exe + 同一套运行期资产
+├── IceMelt-v1.0.0-cli.zip       命令行前端：icemelt.exe + preflight.bat / melt.bat + 运行期资产
+└── IceMelt-GUI-v1.0.0-gui.zip   图形前端：icemelt-gui.exe + 同一套运行期资产
 ```
 
-```powershell
-pwsh -File package.ps1                  # 版本取 xmake.lua
-pwsh -File package.ps1 -Version v1.0.0  # CI 里传 tag 名
+```bash
+xmake pack -f zip -o dist
 ```
 
-两个包各带一份完整的运行期资产（驱动 / kdu / 名单 / ntfs-3g 工具），目标机上只放其中一个就能跑；
-缺任何一项脚本直接失败，不出半可用的包。CLI 包里那两个 `.bat` 调的是自己旁边的 exe（`%~dp0`），
-双击即用、结尾停住等按键 —— 但它们不自己弹 UAC，需要提权的动作请右键"以管理员身份运行"。
-CI（`.github/workflows/build.yml`）每次运行都用同一份脚本出包，打 tag 时把两个 zip 挂到 release 草稿。
+包里装的不是另抄一份清单：那是各 target 的**安装文件**（`install_runtime_assets` + `add_installfiles`），
+与 exe 旁边那套运行期组合是同一份定义，`xmake install` 也能得到同样的布局。两个包各带一份完整资产
+（驱动 / kdu / 名单 / ntfs-3g 工具），目标机上只放其中一个就能跑。CLI 包里那两个 `.bat` 调的是自己
+旁边的 exe（`%~dp0`），双击即用、结尾停住等按键 —— 但它们不自己弹 UAC，需要提权的动作请右键
+"以管理员身份运行"。
+
+版本号来自 `xmake.lua` 的 `set_version`（本文件里固定 `0.0.0`），发版时在 configure 阶段覆盖：
+
+```bash
+xmake f --app_version=1.2.3     # 纯数字三段；包名里的 v 是命名习惯，不进版本资源
+```
+
+同一个版本号还会被编译进 exe 的版本资源（`resource/version-*.rc.in`）：右键"属性 → 详细信息"
+看到的 FileVersion / ProductVersion 就是它，所以文件属性、包名、`set_version` 三处永远一致。
+configure 的值会进 xmake 的配置缓存 —— 本地试过 `--app_version` 之后想回开发态，再跑一次
+`xmake f --app_version=0.0.0`。CI（`.github/workflows/build.yml`）在打 tag 时把 tag 剥成纯数字传进去，
+并在打包前断言两个 exe 的版本资源就是它；打 tag 的那次运行会把两个 zip 挂到 release 草稿。
 
 ## 用法
 
