@@ -1,4 +1,4 @@
-// SecMelt —— 外部 ntfs-3g 工具调用与文件物理位置
+// IceMelt —— 外部 ntfs-3g 工具调用与文件物理位置
 //
 // 命令行形态照抄原作者 DeepFrz/DiskIO.cpp（已验证）：
 //   ntfsfix  "handle:<handle>:<volumeOffset>:<volumeLength>"
@@ -20,7 +20,7 @@
 
 #include "win_disk.h"
 
-namespace secmelt {
+namespace icemelt {
 
 // 文件在物理磁盘上的连续区段
 struct Extent {
@@ -119,4 +119,4 @@ std::wstring HandleSpec(HANDLE rawDevice, const VolumeInfo& vol);
 // 传反斜杠会把整串当成一个文件名。
 std::wstring ToNtfsPath(const std::wstring& windowsPath);
 
-}  // namespace secmelt
+}  // namespace icemelt

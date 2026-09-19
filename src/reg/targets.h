@@ -1,4 +1,4 @@
-// SecMelt —— 目标名单（可维护）
+// IceMelt —— 目标名单（可维护）
 //
 // 名单由 exe 同目录的文本文件维护，缺省内置一份编译副本（源自原作者 UnFreeze 项目）。
 // 文件语法：
@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-namespace secmelt {
+namespace icemelt {
 
 struct Target {
     std::wstring name;   // 服务键名 / 过滤器项名（大小写不敏感）
@@ -38,4 +38,4 @@ std::vector<Target> ParseTargets(const std::string& utf8Text,
 // 只需要名称列表时的便捷包装
 std::vector<std::wstring> TargetNames(const std::vector<Target>& targets);
 
-}  // namespace secmelt
+}  // namespace icemelt

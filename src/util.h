@@ -1,4 +1,4 @@
-// SecMelt —— 公共小工具：字符串转换、提权判定、特权开关、路径与时间
+// IceMelt —— 公共小工具：字符串转换、提权判定、特权开关、路径与时间
 //
 // 约定：所有面向控制台的文案一律 ASCII。Windows 控制台默认代码页多为 936(GBK)，
 // 非 ASCII 文案在部分终端会花屏；宽字符只在 Win32 API 边界与文件内容（名单文件是
@@ -11,7 +11,7 @@
 #include <filesystem>
 #include <string>
 
-namespace secmelt {
+namespace icemelt {
 
 // UTF-8 <-> UTF-16
 std::string Narrow(const std::wstring& w);
@@ -74,4 +74,4 @@ std::wstring Timestamp();
 // 转义序列），Windows 7 的原生 conhost 上也不着色（它不解释这些序列，会打出一堆乱码）。
 std::wstring CliPaint(const std::wstring& line);
 
-}  // namespace secmelt
+}  // namespace icemelt

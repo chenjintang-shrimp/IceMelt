@@ -1,4 +1,4 @@
-// SecMelt —— 无交互自检（CLI）
+// IceMelt —— 无交互自检（CLI）
 //
 // 三个开关都以纯 ASCII 打到 stdout，退出码 0 = 全部断言成立：
 //   --selftest-hive   导出 SYSTEM hive，打印 base block 全部字段并断言
@@ -15,13 +15,13 @@
 //   --melt --yes-i-know 非交互执行整条链路（破坏性，必须显式确认）
 //
 // 后两个会装载内核驱动 / 写裸盘，只能在允许这类操作的机器（虚拟机）上运行。
-// --selftest-registry 只写 HKLM\SOFTWARE\SecMelt\Selftest 下的临时键，不碰设备类键。
+// --selftest-registry 只写 HKLM\SOFTWARE\IceMelt\Selftest 下的临时键，不碰设备类键。
 
 #pragma once
 
 #include <filesystem>
 
-namespace secmelt {
+namespace icemelt {
 
 // --melt        非交互执行整条链路（命令行版的 Melt 入口，无任何界面）。
 //               必须同时给 --yes-i-know：落盘不可逆，这个 token 就是"确认"本身。
@@ -37,4 +37,4 @@ int RegistrySelfTest(const std::filesystem::path& exeDir);
 int RawSelfTest(const std::filesystem::path& exeDir);
 int MeltDryRun(const std::filesystem::path& exeDir);
 
-}  // namespace secmelt
+}  // namespace icemelt

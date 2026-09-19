@@ -7,7 +7,7 @@
 
 #include "util.h"
 
-namespace secmelt {
+namespace icemelt {
 namespace {
 
 // 把命令行拆成 CreateProcessW 需要的 argv（规则同 MSVCRT：空白分隔，双引号成组，
@@ -44,7 +44,7 @@ std::filesystem::path ResolveTool(const std::wstring& exeName) {
         ExeDir() / exeName,
     };
     for (const auto& candidate : candidates) {
-        if (secmelt::PathIsRegularFile(candidate)) return candidate;
+        if (icemelt::PathIsRegularFile(candidate)) return candidate;
     }
 
     // PATH 兜底
@@ -312,7 +312,7 @@ bool NtfsReadFile(HANDLE rawDevice, const VolumeInfo& vol, const std::wstring& n
         error = L"ntfs-3g-cli.exe not found (looked in <exeDir>/tools, <exeDir>, PATH)";
         return false;
     }
-    secmelt::RemoveFile(localOut);  // 免得失败时读到上一次的残留
+    icemelt::RemoveFile(localOut);  // 免得失败时读到上一次的残留
     // 与 NtfsCopyIn 一样走 ToNtfsPath：ntfs_pathname_to_inode 只把 '/' 当分隔符，传反斜杠
     // 会把整串当成一个文件名，读回 0 字节（这个坑踩过一次）。
     const std::wstring args = L"\"" + HandleSpec(rawDevice, vol) + L"\" readhead " +
@@ -497,4 +497,4 @@ bool NtfsResolvePath(HANDLE rawDevice, const VolumeInfo& vol, const std::wstring
     return !canonical.empty();
 }
 
-}  // namespace secmelt
+}  // namespace icemelt

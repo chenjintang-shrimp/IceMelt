@@ -6,7 +6,7 @@
 
 #include "util.h"
 
-namespace secmelt {
+namespace icemelt {
 namespace {
 
 // 内置副本 == config/targets.txt（同一份内容的两处落点：文件便于运行时维护，
@@ -85,7 +85,7 @@ std::vector<Target> LoadTargets(const std::filesystem::path& exeDir,
     std::error_code ec;
     for (const auto& path : candidates) {
         if (searched) searched->push_back(path);
-        if (!secmelt::PathIsRegularFile(path)) continue;
+        if (!icemelt::PathIsRegularFile(path)) continue;
 
         std::ifstream in(path, std::ios::binary);
         if (!in) continue;
@@ -104,4 +104,4 @@ std::vector<std::wstring> TargetNames(const std::vector<Target>& targets) {
     return names;
 }
 
-}  // namespace secmelt
+}  // namespace icemelt

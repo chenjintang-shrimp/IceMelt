@@ -1,4 +1,4 @@
-// SecMelt —— SYSTEM hive 导出与 base block 校验/修补
+// IceMelt —— SYSTEM hive 导出与 base block 校验/修补
 //
 // regf base block（公开格式规范 msuhanov/regf；字段偏移在本文件以常量形式集中定义，
 // 由 --selftest-hive 用**真实 Windows 产出的 hive** 判定其正确性）：
@@ -38,7 +38,7 @@
 #include <filesystem>
 #include <string>
 
-namespace secmelt {
+namespace icemelt {
 
 // 偏移常量（唯一定义源；实现与自检都从这里取）
 constexpr uint64_t kHiveBlockSize = 4096;         // 基础块 / 对齐单位
@@ -113,4 +113,4 @@ bool VerifyHiveLoadable(const std::filesystem::path& hivePath, std::wstring& err
 bool RemoveServiceFromExportedHive(const std::filesystem::path& hivePath,
                                    const std::wstring& serviceName, std::wstring& error);
 
-}  // namespace secmelt
+}  // namespace icemelt

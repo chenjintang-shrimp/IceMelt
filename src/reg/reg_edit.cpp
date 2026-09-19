@@ -6,7 +6,7 @@
 
 #include "util.h"
 
-namespace secmelt {
+namespace icemelt {
 namespace {
 
 // Windows 固定的设备类 GUID。冻结类软件挂过滤器的位置：
@@ -416,4 +416,4 @@ EditReport DeleteServiceKeys(const std::vector<std::wstring>& names) {
     return report;
 }
 
-}  // namespace secmelt
+}  // namespace icemelt

@@ -1,4 +1,4 @@
-// SecMelt —— 注册表摘除：设备类过滤器值与服务键
+// IceMelt —— 注册表摘除：设备类过滤器值与服务键
 //
 // 处理冻结产品会挂过滤器的 Windows 固定设备类（磁盘/卷/键盘/鼠标）的 UpperFilters / LowerFilters，
 // 以及 HKLM\SYSTEM\CurrentControlSet\Services\<name> 服务键。
@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace secmelt {
+namespace icemelt {
 
 struct EditReport {
     std::vector<std::wstring> changedValues;  // "Class\\{GUID}\\UpperFilters"
@@ -83,4 +83,4 @@ bool QueryServiceRunning(const std::wstring& name, bool& running, std::wstring& 
 //   false                 —— 打开/控制服务失败，detail 里是 Win32 错误码
 bool StopService(const std::wstring& name, bool& stopped, std::wstring& detail);
 
-}  // namespace secmelt
+}  // namespace icemelt

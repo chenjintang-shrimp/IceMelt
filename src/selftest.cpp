@@ -16,7 +16,7 @@
 #include "reg/targets.h"
 #include "util.h"
 
-namespace secmelt {
+namespace icemelt {
 namespace {
 
 // 所有 CLI 输出都从这里走：cold & dark 着色（出错醒目红色、[!] 琥珀、其余白色）在同一处
@@ -102,8 +102,8 @@ bool ReadExtentsRaw(WinDiskDevice& device, const std::vector<Extent>& extents, s
 
 int HiveSelfTest(const std::filesystem::path& exeDir) {
     (void)exeDir;
-    const std::filesystem::path hive = TempFile(L"secmelt-selftest.hive");
-    Print(L"SecMelt hive self-test");
+    const std::filesystem::path hive = TempFile(L"icemelt-selftest.hive");
+    Print(L"IceMelt hive self-test");
     Print(FormatW(L"target: %ls", hive.c_str()));
 
     std::wstring error;
@@ -166,11 +166,11 @@ int HiveSelfTest(const std::filesystem::path& exeDir) {
 int RegistrySelfTest(const std::filesystem::path& exeDir) {
     // scratch 键落在 HKLM\SOFTWARE 下：结构与设备类键相同（同一段代码处理），
     // 但绝不涉及任何设备类，因此不可能影响下次启动的设备/驱动加载。
-    constexpr const wchar_t* kScratchRoot = L"SOFTWARE\\SecMelt\\Selftest";
+    constexpr const wchar_t* kScratchRoot = L"SOFTWARE\\IceMelt\\Selftest";
     constexpr const wchar_t* kFakeGuid = L"{00000000-0000-0000-0000-0000000000FF}";
     const std::wstring classPath = std::wstring(kScratchRoot) + L"\\Class\\" + kFakeGuid;
 
-    Print(L"SecMelt registry self-test");
+    Print(L"IceMelt registry self-test");
     Print(FormatW(L"scratch key: HKLM\\%ls (no device class key is touched)", classPath.c_str()));
 
     ::RegDeleteTreeW(HKEY_LOCAL_MACHINE, kScratchRoot);  // 从干净状态开始
@@ -214,9 +214,9 @@ int RegistrySelfTest(const std::filesystem::path& exeDir) {
         return true;
     };
 
-    // 名单 = 真实名单 + SecMeltProbe；插入的项里故意含一个大小写变体（DEEPFRZ）来验证不区分大小写
+    // 名单 = 真实名单 + IceMeltProbe；插入的项里故意含一个大小写变体（DEEPFRZ）来验证不区分大小写
     auto names = TargetNames(LoadTargets(exeDir));
-    names.emplace_back(L"SecMeltProbe");
+    names.emplace_back(L"IceMeltProbe");
 
     bool ok = true;
     const auto check = [&](const wchar_t* what, bool value) {
@@ -225,7 +225,7 @@ int RegistrySelfTest(const std::filesystem::path& exeDir) {
     };
 
     // 用例 1：列表里混有系统自身的项 + 命中项 → 只删命中项，其余原样保留且顺序不变
-    setValue(L"UpperFilters", {L"partmgr", L"SecMeltProbe", L"DEEPFRZ", L"OtherFilter"});
+    setValue(L"UpperFilters", {L"partmgr", L"IceMeltProbe", L"DEEPFRZ", L"OtherFilter"});
     EditReport report = StripFilterValueIn(classPath, kFakeGuid, names);
     std::vector<std::wstring> items;
     const bool present = getValue(L"UpperFilters", items);
@@ -238,7 +238,7 @@ int RegistrySelfTest(const std::filesystem::path& exeDir) {
     check(L"no write failures reported", report.failures.empty());
 
     // 用例 2：列表里全是命中项 → 整值删除（而不是留下空数组）
-    setValue(L"LowerFilters", {L"SecMeltProbe", L"deEPfrZ"});
+    setValue(L"LowerFilters", {L"IceMeltProbe", L"deEPfrZ"});
     const EditReport emptyCase = StripFilterValueIn(classPath, kFakeGuid, names);
     std::vector<std::wstring> lower;
     check(L"all-matched value is deleted entirely", !getValue(L"LowerFilters", lower));
@@ -246,7 +246,7 @@ int RegistrySelfTest(const std::filesystem::path& exeDir) {
 
     // 用例 2b：值是单项 REG_SZ（部分安装程序这么写）→ 必须能读出来、能删掉、类型不被改写成 MULTI_SZ
     {
-        const wchar_t* probe = L"SecMeltProbe";
+        const wchar_t* probe = L"IceMeltProbe";
         const DWORD bytes = static_cast<DWORD>((wcslen(probe) + 1) * sizeof(wchar_t));
         const bool wrote = ::RegSetValueExW(key, L"LowerFilters", 0, REG_SZ,
                                             reinterpret_cast<const BYTE*>(probe), bytes) ==
@@ -287,10 +287,10 @@ int RegistrySelfTest(const std::filesystem::path& exeDir) {
 }
 
 int RawSelfTest(const std::filesystem::path& exeDir) {
-    Print(L"SecMelt raw disk self-test");
+    Print(L"IceMelt raw disk self-test");
     Print(L"WARNING: this loads a kernel driver and writes to the raw disk of the system volume.");
 
-    const std::filesystem::path scratch = L"C:\\secmelt-selftest.bin";
+    const std::filesystem::path scratch = L"C:\\icemelt-selftest.bin";
     constexpr size_t kScratchSize = 64 * 1024;
 
     std::wstring error;
@@ -496,7 +496,7 @@ int MeltApply(const std::filesystem::path& exeDir) {
     // 这一版不复位：写完并逐字节验证之后交回给操作者，由他自己重启（理由见 RunMelt 第 10 步）。
     opt.confirm = [](const MeltResult&) { return true; };
 
-    Print(L"SecMelt melt (non-interactive; --yes-i-know was given)");
+    Print(L"IceMelt melt (non-interactive; --yes-i-know was given)");
     Print(L"WARNING: this overwrites the SYSTEM hive on the raw disk and also its RegBack copy,");
     Print(L"         so no earlier hive generation survives on this machine. There is no rollback:");
     Print(L"         System Restore cannot undo it - only a VM snapshot taken beforehand can.");
@@ -545,7 +545,7 @@ int PreflightScan(const std::filesystem::path& exeDir) {
     opt.exeDir = exeDir;
     opt.winDiskSysPath = exeDir / L"WinDisk_x64.sys";
 
-    Print(L"SecMelt preflight scan (non-interactive)");
+    Print(L"IceMelt preflight scan (non-interactive)");
     Print(L"WARNING: this does raw disk I/O to the same system volume a melt would use;");
     Print(L"         it does NOT write SYSTEM/RegBack or reset, but it does load an unsigned");
     Print(L"         driver. Only meaningful on a VM with a snapshot.");
@@ -555,4 +555,4 @@ int PreflightScan(const std::filesystem::path& exeDir) {
     return result.ok ? 0 : 1;
 }
 
-}  // namespace secmelt
+}  // namespace icemelt

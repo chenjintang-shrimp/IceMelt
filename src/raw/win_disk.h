@@ -1,4 +1,4 @@
-// SecMelt —— WinDisk 驱动装载与裸盘读写
+// IceMelt —— WinDisk 驱动装载与裸盘读写
 //
 // 设备与 IOCTL 契约的唯一来源是 third_party/WinDisk/Public.h：
 //   设备符号链接  \\.\WDLink
@@ -15,7 +15,7 @@
 #include <filesystem>
 #include <string>
 
-namespace secmelt {
+namespace icemelt {
 
 // 卷在物理磁盘上的位置与几何（引导扇区 + IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS）
 struct VolumeInfo {
@@ -77,4 +77,4 @@ bool UnloadDriver(const std::wstring& serviceName);
 // 读卷的引导扇区与磁盘范围（如 L"\\\\.\\C:"）
 bool QueryVolumeInfo(const std::wstring& volumePath, VolumeInfo& out, std::wstring& error);
 
-}  // namespace secmelt
+}  // namespace icemelt

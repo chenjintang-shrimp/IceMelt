@@ -1,4 +1,4 @@
-// SecMelt —— “解冻”编排
+// IceMelt —— “解冻”编排
 //
 // 顺序（每步失败即中止，保留已完成步骤的日志）：
 //   1 预检：提权 / WinDisk 驱动就位
@@ -31,7 +31,7 @@
 
 #include "raw/win_disk.h"  // DriverLoad
 
-namespace secmelt {
+namespace icemelt {
 
 // 「未签名的 WinDisk 能不能装载」这一次探测的完整结果。
 //
@@ -61,7 +61,7 @@ DriverLoadOutcome EnsureUnsignedDriverLoads(const std::filesystem::path& exeDir,
 struct MeltOptions {
     bool dryRun = false;
     std::filesystem::path winDiskSysPath;   // 缺省 <exeDir>/WinDisk_x64.sys
-    std::filesystem::path hiveOutPath;      // 缺省 %TEMP%\secmelt-system.hive
+    std::filesystem::path hiveOutPath;      // 缺省 %TEMP%\icemelt-system.hive
     std::filesystem::path exeDir;           // 缺省 ExeDir()
     // 非 dryRun 时必需：收到「待确认」清单后返回是否继续。为空即中止。
     std::function<bool(const struct MeltResult&)> confirm;
@@ -90,4 +90,4 @@ MeltResult DryRun(const MeltOptions& opt, const MeltLogger& log);
 // 不写 SYSTEM、不碰 RegBack、不复位；结束卸载并删除 WinDisk。
 MeltResult RunPreflightScan(const MeltOptions& opt, const MeltLogger& log);
 
-}  // namespace secmelt
+}  // namespace icemelt

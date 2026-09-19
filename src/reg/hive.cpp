@@ -8,7 +8,7 @@
 
 #include "util.h"
 
-namespace secmelt {
+namespace icemelt {
 namespace {
 
 // base block 校验和：前 kHiveChecksumOffset 字节按 ULONG 逐字异或，再做规范要求的
@@ -98,7 +98,7 @@ bool ParseBaseBlock(const unsigned char* block, size_t blockSize, uint64_t fileS
 
 bool ExportSystemHive(const std::filesystem::path& outPath, std::wstring& error) {
     std::error_code ec;
-    secmelt::RemoveFile(outPath);  // RegSaveKeyEx 在目标已存在时失败
+    icemelt::RemoveFile(outPath);  // RegSaveKeyEx 在目标已存在时失败
 
     std::wstring privilegeError;
     if (!EnablePrivilege(SE_BACKUP_NAME, privilegeError)) {
@@ -122,7 +122,7 @@ bool ExportSystemHive(const std::filesystem::path& outPath, std::wstring& error)
         error = FormatW(L"RegSaveKeyExW(SYSTEM) failed: %ld (target: %ls)", status, outPath.c_str());
         return false;
     }
-    if (!secmelt::PathIsRegularFile(outPath)) {
+    if (!icemelt::PathIsRegularFile(outPath)) {
         error = FormatW(L"RegSaveKeyExW reported success but %ls is missing", outPath.c_str());
         return false;
     }
@@ -219,7 +219,7 @@ bool VerifyHiveLoadable(const std::filesystem::path& hivePath, std::wstring& err
 namespace {
 
 // 离线加载导出副本时用的临时键名（只在函数内存在，异常路径也会卸载）
-constexpr const wchar_t* kOfflineKeyName = L"SECMELT_OFFLINE";
+constexpr const wchar_t* kOfflineKeyName = L"ICEMELT_OFFLINE";
 
 // 在**已加载**的离线 hive 里，按 Select\Current（兼顾 Default）遍历活动 ControlSet，
 // 删掉 <ControlSet>\Services\<name>。返回是否删掉了至少一个。
@@ -304,4 +304,4 @@ bool RemoveServiceFromExportedHive(const std::filesystem::path& hivePath,
     return ok;
 }
 
-}  // namespace secmelt
+}  // namespace icemelt

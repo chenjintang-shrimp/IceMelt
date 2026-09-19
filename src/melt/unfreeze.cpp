@@ -15,7 +15,7 @@
 #include "reg/targets.h"
 #include "util.h"
 
-namespace secmelt {
+namespace icemelt {
 namespace {
 
 constexpr const wchar_t* kServiceName = L"WinDisk";
@@ -73,7 +73,7 @@ std::filesystem::path DefaultHivePath() {
     const std::filesystem::path dir = (need > 0 && need < temp.size())
                                           ? std::filesystem::path(temp.data())
                                           : std::filesystem::path(L"C:\\Windows\\Temp");
-    return dir / "secmelt-system.hive";
+    return dir / "icemelt-system.hive";
 }
 
 // 跑 `kdu -dse 0`。本函数只负责把 kdu 拉起来并如实转发输出 —— **不判定 DSE 是否
@@ -87,17 +87,17 @@ std::filesystem::path DefaultHivePath() {
 //     然后静默什么都不做 —— 所以这里先显式检查 drv64.dll，把这种情况变成一条明确的错误。
 bool RunKduDseOff(const std::filesystem::path& exeDir, const Log& log, std::wstring& error) {
     std::filesystem::path kdu = exeDir / L"kdu.exe";
-    if (!secmelt::PathIsRegularFile(kdu)) {
+    if (!icemelt::PathIsRegularFile(kdu)) {
         const std::filesystem::path found = ResolveTool(L"kdu.exe");
         if (found.empty()) {
-            error = L"kdu.exe not found (looked next to secmelt.exe, then <exeDir>/tools, then PATH)";
+            error = L"kdu.exe not found (looked next to icemelt.exe, then <exeDir>/tools, then PATH)";
             return false;
         }
         kdu = found;
     }
 
     const std::filesystem::path db = kdu.parent_path() / L"drv64.dll";
-    if (!secmelt::PathIsRegularFile(db)) {
+    if (!icemelt::PathIsRegularFile(db)) {
         error = FormatW(L"drv64.dll is missing next to %ls -- kdu would silently do nothing "
                         L"without its provider database",
                         kdu.filename().c_str());
@@ -169,7 +169,7 @@ bool TargetHoldsHive(WinDiskDevice& device, const VolumeInfo& vol, const std::ws
         // ENOENT。逐层来一遍就能看出**是哪一层**断的 —— 是 /Windows 不在这个视图里，
         // 还是最末一层 SYSTEM 不在。这是诊断的关键信息，不该让人再去猜。
         //
-        // /Users 也在列表里，而且它是最有信息量的一个：secmelt.exe 自己就跑在
+        // /Users 也在列表里，而且它是最有信息量的一个：icemelt.exe 自己就跑在
         // /Users/<user>/Desktop/... 下，所以**它必然存在于文件系统的视图里**。若连它都
         // 查不到（而 "/" 查得到），那就说明 ntfs-3g 读到的基线 $MFT 与运行中文件系统的
         // 视图确实不一致，而不是我们的查找写错了。
@@ -288,8 +288,8 @@ void DiagnoseWritePath(WinDiskDevice& device, const VolumeInfo& vol,
 
     // ---- 第一组：小文件、全新名字（内核没持有它）------------------------------
     {
-        const std::filesystem::path localProbe = scratchDir / L"secmelt-writeprobe.bin";
-        const std::wstring ntfsProbe = L"\\secmelt-writeprobe.bin";
+        const std::filesystem::path localProbe = scratchDir / L"icemelt-writeprobe.bin";
+        const std::wstring ntfsProbe = L"\\icemelt-writeprobe.bin";
         std::ofstream out(localProbe, std::ios::binary | std::ios::trunc);
         if (!out) {
             log.warn(Fail(L"write-path diagnosis",
@@ -314,7 +314,7 @@ void DiagnoseWritePath(WinDiskDevice& device, const VolumeInfo& vol,
         }
         if (wrote) {
             // 逐字节比对（复用下面的公共逻辑）
-            const std::filesystem::path back = scratchDir / L"secmelt-writeprobe.back.bin";
+            const std::filesystem::path back = scratchDir / L"icemelt-writeprobe.back.bin";
             int exit2 = -1;
             std::wstring out2;
             std::wstring err2;
@@ -347,7 +347,7 @@ void DiagnoseWritePath(WinDiskDevice& device, const VolumeInfo& vol,
                                      L"bytes)",
                                      diff, kProbeSize, zero, total));
                 }
-                secmelt::RemoveFile(back);
+                icemelt::RemoveFile(back);
             } else {
                 log.warn(Fail(L"write-path diagnosis: reading the pattern probe back failed",
                               err2.empty() ? out2 : err2));
@@ -359,7 +359,7 @@ void DiagnoseWritePath(WinDiskDevice& device, const VolumeInfo& vol,
                                       ntfsProbe.c_str())));
             }
         }
-        secmelt::RemoveFile(localProbe);
+        icemelt::RemoveFile(localProbe);
     }
 
     // ---- 第二组：**同一份导出、同样大小**、只是写到一个新名字 -------------------
@@ -371,14 +371,14 @@ void DiagnoseWritePath(WinDiskDevice& device, const VolumeInfo& vol,
     //     这条路在运行中的系统上走不通；
     //   * 新名字**也脏** → 与耗时/大小有关（写入过程中被别的东西覆盖）。
     {
-        /* 名字必须与分层探针（secmelt-probe.hive）区分开：preflight 的第 4 层探针目标
-         * 就是 config\secmelt-probe.hive，同名会让本组的写/删把那一层的证据搅在一起
+        /* 名字必须与分层探针（icemelt-probe.hive）区分开：preflight 的第 4 层探针目标
+         * 就是 config\icemelt-probe.hive，同名会让本组的写/删把那一层的证据搅在一起
          * （第 4 层收尾 rm 报 "No such file" 就是这么来的）。 */
-        const std::wstring ntfsProbe = L"\\Windows\\System32\\config\\secmelt-fullprobe.hive";
-        const std::filesystem::path back = scratchDir / L"secmelt-fullprobe.back.bin";
+        const std::wstring ntfsProbe = L"\\Windows\\System32\\config\\icemelt-fullprobe.hive";
+        const std::filesystem::path back = scratchDir / L"icemelt-fullprobe.back.bin";
 
         std::error_code ec;
-        if (!secmelt::PathIsRegularFile(exportFile)) {
+        if (!icemelt::PathIsRegularFile(exportFile)) {
             log.warn(L"write-path diagnosis: the export is gone; skipping the full-size probe");
             return;
         }
@@ -469,7 +469,7 @@ void DiagnoseWritePath(WinDiskDevice& device, const VolumeInfo& vol,
                               FormatW(L"%ls -- delete %ls manually", rmOut.c_str(),
                                       ntfsProbe.c_str())));
             }
-            secmelt::RemoveFile(back);
+            icemelt::RemoveFile(back);
         }
 
     // ---- 第三组：大小二分 ------------------------------------------------------
@@ -482,7 +482,7 @@ void DiagnoseWritePath(WinDiskDevice& device, const VolumeInfo& vol,
     // data_size / initialized_size 打出来 —— 后者是"NTFS 认为多少字节有效"的判据，
     // 它比内容比对更直接：内容相同但 initialized_size 小，就是元数据没提交。
     {
-        const std::filesystem::path back = scratchDir / L"secmelt-bisect.back.bin";
+        const std::filesystem::path back = scratchDir / L"icemelt-bisect.back.bin";
 
         std::vector<unsigned char> exportBytes;
         {
@@ -523,14 +523,14 @@ void DiagnoseWritePath(WinDiskDevice& device, const VolumeInfo& vol,
                          L"same export prefix, fresh name each time)",
                          sizes.size(), sizes.back()));
         for (const size_t want : sizes) {
-            const std::filesystem::path localPrefix = scratchDir / L"secmelt-bisect.bin";
+            const std::filesystem::path localPrefix = scratchDir / L"icemelt-bisect.bin";
             std::ofstream out(localPrefix, std::ios::binary | std::ios::trunc);
             if (!out) break;
             out.write(reinterpret_cast<const char*>(exportBytes.data()),
                       static_cast<std::streamsize>(want));
             out.close();
 
-            const std::wstring ntfsProbe = L"\\Windows\\System32\\config\\secmelt-bisect.hive";
+            const std::wstring ntfsProbe = L"\\Windows\\System32\\config\\icemelt-bisect.hive";
             int exitCode = -1;
             std::wstring output;
             std::wstring error;
@@ -601,8 +601,8 @@ void DiagnoseWritePath(WinDiskDevice& device, const VolumeInfo& vol,
             }
             std::wstring rmOut;
             NtfsDeleteFile(device.raw(), vol, ntfsProbe, rmOut);
-            secmelt::RemoveFile(localPrefix);
-            secmelt::RemoveFile(back);
+            icemelt::RemoveFile(localPrefix);
+            icemelt::RemoveFile(back);
         }
     }
     }
@@ -774,7 +774,7 @@ bool VerifyHiveWrite(WinDiskDevice& device, const VolumeInfo& vol, const std::ws
                 }
             }
         }
-        secmelt::RemoveFile(secondScratch);
+        icemelt::RemoveFile(secondScratch);
 
         // 把磁盘上那个 inode 的元数据摆出来 —— 这是分辨"读回一大片零"成因的关键证据：
         // NTFS 读到 initialized_size 之外返回零，runlist 的 hole 也返回零。若这里显示
@@ -848,7 +848,7 @@ bool VerifyHiveWrite(WinDiskDevice& device, const VolumeInfo& vol, const std::ws
 DriverLoadOutcome EnsureUnsignedDriverLoads(const std::filesystem::path& exeDir, bool allowKdu) {
     DriverLoadOutcome outcome;
     const std::filesystem::path sysPath = exeDir / kDefaultSysName;
-    if (!secmelt::PathIsRegularFile(sysPath)) {
+    if (!icemelt::PathIsRegularFile(sysPath)) {
         outcome.firstError = FormatW(L"driver file not found: %ls", sysPath.c_str());
         return outcome;
     }
@@ -864,7 +864,7 @@ DriverLoadOutcome EnsureUnsignedDriverLoads(const std::filesystem::path& exeDir,
 
     // 到这里的两种失败都没有驱动在跑（被拒的装载不会加载任何东西），所以删掉本次探测
     // 建出来的服务键是安全的 —— 不删的话，每次提权探测都会在活动注册表里留一个。
-    const auto cleanup = [&] { secmelt::UnloadDriver(kServiceName); };
+    const auto cleanup = [&] { icemelt::UnloadDriver(kServiceName); };
     if (outcome.result != DriverLoad::SignatureRejected) {
         cleanup();  // 与签名无关的失败（服务注册/权限/文件…）
         return outcome;
@@ -904,7 +904,7 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
     std::wstring error;
     std::error_code ec;
 
-    emit.step(FormatW(L"SecMelt melt starting (%ls mode)", opt.dryRun ? L"dry-run" : L"apply"));
+    emit.step(FormatW(L"IceMelt melt starting (%ls mode)", opt.dryRun ? L"dry-run" : L"apply"));
 
     // ---- 1. 预检 ---------------------------------------------------------------
     if (!IsProcessElevated()) {
@@ -922,7 +922,7 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
 
     const std::filesystem::path sysPath =
         opt.winDiskSysPath.empty() ? (exeDir / kDefaultSysName) : opt.winDiskSysPath;
-    if (!secmelt::PathIsRegularFile(sysPath)) {
+    if (!icemelt::PathIsRegularFile(sysPath)) {
         emit.warn(Fail(L"preflight / WinDisk driver", FormatW(L"missing: %ls", sysPath.c_str())));
         if (!opt.dryRun) return result;
     } else {
@@ -1004,7 +1004,7 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
     const auto names = TargetNames(targets);
     for (const auto& path : searched) {
         emit.step(FormatW(L"looked for targets file: %ls (%ls)", path.c_str(),
-                          secmelt::PathIsRegularFile(path) ? L"present" : L"absent"));
+                          icemelt::PathIsRegularFile(path) ? L"present" : L"absent"));
     }
     emit.ok(FormatW(L"targets loaded: %zu entries", targets.size()));
     for (const auto& t : targets) emit.step(FormatW(L"  %ls  (%ls)", t.name.c_str(), t.label.c_str()));
@@ -1155,7 +1155,7 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
         FormatW(L"copy %ls to %ls on the raw disk (the volume's real name for it is resolved first, "
                 L"so a case difference cannot make ntfscp create a second file)",
                 hivePath.c_str(), kNtfsSystemHive));
-    if (secmelt::PathIsRegularFile(kHiveBackupWin32)) {
+    if (icemelt::PathIsRegularFile(kHiveBackupWin32)) {
         result.pending.push_back(FormatW(
             L"copy the same hive to %ls as well, so the primary/backup pair reports one generation "
             L"(startup repair compares them and calls a mismatch BadPatch)",
@@ -1250,7 +1250,7 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
     // 也**必须在 ntfsfix 之前**：ntfsfix 会经同一个 handle: 写这个卷（置 dirty 标记、修
     // $MFTMirr、清 $LogFile），而探针要读的是"我们动手之前"的现场；先让它跑再去读，读到的是
     // 它改过的状态（这也让"读不到"更难判断）。
-    const std::filesystem::path guardScratch = hivePath.parent_path() / L"secmelt-guard-head.bin";
+    const std::filesystem::path guardScratch = hivePath.parent_path() / L"icemelt-guard-head.bin";
     if (!TargetHoldsHive(device, vol, ntfsHivePath, guardScratch, emit)) {
         emit.warn(L"aborting before any raw disk write: the target is not the SYSTEM hive this "
                   L"volume's file system presents");
@@ -1289,7 +1289,7 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
     // ---- 8. 写回 hive —— 但**先保证写坏了也能收场** ---------------------------
 
     // 1) 回滚点：把当前的 SYSTEM 整份读下来
-    const std::filesystem::path backupPath = hivePath.parent_path() / L"secmelt-system.before.hive";
+    const std::filesystem::path backupPath = hivePath.parent_path() / L"icemelt-system.before.hive";
     uint64_t currentSize = 0;
     std::wstring backupError;
     bool haveBackup = false;
@@ -1351,7 +1351,7 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
     }
 
     // 2) 预演：把同一份字节写到临时名字并校验。不碰 SYSTEM 一个字节。
-    const std::wstring ntfsPreflight = L"\\Windows\\System32\\config\\secmelt-preflight.hive";
+    const std::wstring ntfsPreflight = L"\\Windows\\System32\\config\\icemelt-preflight.hive";
     {
         uint64_t exportSize = 0;
         {
@@ -1415,7 +1415,7 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
     // Windows 在 config\\RegBack\\ 下留着一份 SYSTEM 备份（Win7 有；Win10 1803 起默认清空），
     // 启动修复做"修复"时会拿它比对、甚至拿它还原。只改主 hive、把备份留在旧版本，恰恰就是
     // "注册表在离线状态下被改过一半"的样子。因此存在备份时必须把同一份导出写入并验证。
-    if (secmelt::PathIsRegularFile(kHiveBackupWin32)) {
+    if (icemelt::PathIsRegularFile(kHiveBackupWin32)) {
         if (!TargetHoldsHive(device, vol, kNtfsHiveBackup, guardScratch, emit)) {
             emit.warn(L"RegBack target is not a readable hive; refusing to reboot");
             return result;
@@ -1440,7 +1440,7 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
     // 真正的地基是上一步的读回校验，不是清零。这里只把现场读出来记进日志。
     for (const wchar_t* logFile : kLogFiles) {
         const std::filesystem::path path(logFile);
-        if (!secmelt::PathIsRegularFile(path)) {
+        if (!icemelt::PathIsRegularFile(path)) {
             emit.step(FormatW(L"%ls: absent", logFile));
             continue;
         }
@@ -1629,13 +1629,13 @@ MeltResult RunPreflightScan(const MeltOptions& opt, const MeltLogger& log) {
     // DiagnoseWritePath 是另一个函数，它的 scratchDir 才是目录。
     const std::filesystem::path scratchDir = DefaultHivePath().parent_path();
     const std::filesystem::path scratchBack = DefaultHivePath().parent_path() /
-                                              L"secmelt-probe-back.bin";
+                                              L"icemelt-probe-back.bin";
     int probeOk = 0, probeFail = 0;
     for (const wchar_t* ntfsProbe : {
-             L"secmelt-probe.hive",                           // 卷根
-             L"Windows\\secmelt-probe.hive",                  // \Windows（环境目录，无配置）
-             L"Windows\\System32\\secmelt-probe.hive",        // \Windows\System32
-             L"Windows\\System32\\config\\secmelt-probe.hive" // \Windows\System32\config
+             L"icemelt-probe.hive",                           // 卷根
+             L"Windows\\icemelt-probe.hive",                  // \Windows（环境目录，无配置）
+             L"Windows\\System32\\icemelt-probe.hive",        // \Windows\System32
+             L"Windows\\System32\\config\\icemelt-probe.hive" // \Windows\System32\config
          }) {
         emit.step(L"----------------------------------------");
         emit.step(FormatW(L"probe target: \\%ls", ntfsProbe));
@@ -1719,4 +1719,4 @@ MeltResult RunPreflightScan(const MeltOptions& opt, const MeltLogger& log) {
     return result;
 }
 
-}  // namespace secmelt
+}  // namespace icemelt

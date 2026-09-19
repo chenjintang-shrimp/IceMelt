@@ -8,7 +8,7 @@
 #include "WinDisk/Public.h"  // DEVICE_NAME / SYMBOLIC_LINK_NAME / CTL_* 契约
 #include "util.h"
 
-namespace secmelt {
+namespace icemelt {
 namespace {
 
 // 驱动在 CTL_CHANGE_TARGET_DISK 里做的是：
@@ -122,7 +122,7 @@ bool WinDiskDevice::ReadAt(uint64_t byteOffset, void* data, size_t len, std::wst
 
 DriverLoad LoadDriver(const std::filesystem::path& sysPath, const std::wstring& serviceName,
                       std::wstring& error) {
-    if (!secmelt::PathIsRegularFile(sysPath)) {
+    if (!icemelt::PathIsRegularFile(sysPath)) {
         error = FormatW(L"driver file not found: %ls", sysPath.c_str());
         return DriverLoad::Failed;
     }
@@ -263,4 +263,4 @@ bool QueryVolumeInfo(const std::wstring& volumePath, VolumeInfo& out, std::wstri
     return true;
 }
 
-}  // namespace secmelt
+}  // namespace icemelt

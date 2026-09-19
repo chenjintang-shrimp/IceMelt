@@ -5,7 +5,7 @@
 #include <ctime>
 #include <vector>
 
-namespace secmelt {
+namespace icemelt {
 
 std::string Narrow(const std::wstring& w) {
     if (w.empty()) return {};
@@ -219,4 +219,4 @@ std::wstring Timestamp() {
     return buf;
 }
 
-}  // namespace secmelt
+}  // namespace icemelt
