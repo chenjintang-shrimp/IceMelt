@@ -107,6 +107,26 @@ KDU 的构建工程在 `third_party/KDU.build`（源码在 `third_party/KDU` sub
 三方子工程并把资产落位到该构建目录**（同一次 xmake 里两个一起构建时三方只跑一遍）。所以
 `xmake build secmelt-gui` 单独跑也能得到完整的运行期组合。
 
+### 打发布包
+
+`package.ps1` 把上面这套组合拆成两个可直接分发的包（版本默认取 `xmake.lua` 的 `set_version`）：
+
+```
+dist/
+├── IceMelt-v1.0.0-cli/      + .zip    命令行前端：secmelt.exe + preflight.bat / melt.bat + 运行期资产
+└── IceMelt-GUI-v1.0.0-gui/  + .zip    图形前端：secmelt-gui.exe + 同一套运行期资产
+```
+
+```powershell
+pwsh -File package.ps1                  # 版本取 xmake.lua
+pwsh -File package.ps1 -Version v1.0.0  # CI 里传 tag 名
+```
+
+两个包各带一份完整的运行期资产（驱动 / kdu / 名单 / ntfs-3g 工具），目标机上只放其中一个就能跑；
+缺任何一项脚本直接失败，不出半可用的包。CLI 包里那两个 `.bat` 调的是自己旁边的 exe（`%~dp0`），
+双击即用、结尾停住等按键 —— 但它们不自己弹 UAC，需要提权的动作请右键"以管理员身份运行"。
+CI（`.github/workflows/build.yml`）每次运行都用同一份脚本出包，打 tag 时把两个 zip 挂到 release 草稿。
+
 ## 用法
 
 | 命令 | 作用 |
