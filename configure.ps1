@@ -131,7 +131,14 @@ if ($ok) {
         $src = Join-Path $probeDir 'probe.c'
         Set-Content -Path $src -Value 'int main(void){return 0;}' -Encoding ASCII
         $exe = Join-Path $probeDir 'probe.exe'
-        & $gcc -o $exe $src 2>$null | Out-Null
+        # 编译器自己的诊断必须留下来：这里以前把 stderr 丢掉，探测失败时只报
+        # "probe did not link"，看不出是缺 DLL、缺 CRT 还是别的 —— CI 上就是这么翻车的。
+        $probeOut = ''
+        try {
+            $probeOut = (& $gcc -o $exe $src 2>&1 | Out-String).Trim()
+        } catch {
+            $probeOut = $_.Exception.Message
+        }
         if (Test-Path $exe) {
             $bytes = [IO.File]::ReadAllBytes($exe)
             $text = [Text.Encoding]::ASCII.GetString($bytes)
@@ -140,7 +147,12 @@ if ($ok) {
                 $(if ($isUcrt) { 'UCRT (links api-ms-win-crt-*.dll)' } else { 'msvcrt (links msvcrt.dll)' }) `
                 'prefer the msvcrt variant (MSYS2 mingw64, not ucrt64): UCRT needs an extra runtime on Windows 7' $false
         } else {
-            Add-Result 'mingw CRT flavour' $false 'probe did not link' 'the toolchain cannot produce an executable'
+            $produced = @(Get-ChildItem $probeDir -File -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty Name) -join ', '
+            $detail = "probe did not link (exit $LASTEXITCODE; produced: " +
+                      $(if ($produced) { $produced } else { 'nothing' }) + ') ' + $probeOut
+            Add-Result 'mingw CRT flavour' $false ($detail -replace '\s+', ' ') `
+                'the toolchain cannot produce an executable'
         }
     } finally {
         Remove-Item $probeDir -Recurse -Force -ErrorAction SilentlyContinue
