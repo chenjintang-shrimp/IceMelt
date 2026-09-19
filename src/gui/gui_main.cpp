@@ -671,6 +671,9 @@ void RenderUI(App& app) {
         ImGui::Separator();
         ImGui::Spacing();
 
+        // 标题/来源文字与"重新加载名单"按钮同排时，按 frame 高度对齐基线，
+        // 否则触摸尺寸的按钮（56+ px 高）会让贴顶的标题看起来错位。
+        ImGui::AlignTextToFramePadding();
         ImGui::TextColored(Rgb(mocha::Lavender), "目标探测（只读）");
         ImGui::SameLine();
         if (ImGui::Button("重新加载名单")) {
