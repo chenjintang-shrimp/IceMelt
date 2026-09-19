@@ -22,7 +22,7 @@
               SCM 管，动了会让注册表与 SCM 脱节 —— 实测会以 ChangeServiceConfigW failed: 2 炸掉）
 7 确认      列出将执行的动作（此时尚未发生任何裸盘写入）
 8 写回      **写回前守卫**（用 ntfs-3g 的**只读直接挂载**读目标，确认它是 regf hive，否则一个字节
-            都不写就中止）→ 可选 ntfsfix（非 0 退出**不中止**，见下）
+            都不写就中止）→ ntfsfix（非 0 退出**不中止**，见下）
             → **回滚点**（先把当前 SYSTEM 整份读下来）→ **预演**（把同一份字节写到同目录的
               临时名字并读回校验，**不碰 SYSTEM**）→ ntfscp 经 handle: 把 hive 写回
               \Windows\System32\config\SYSTEM → **经 ntfs-3g 读回校验**（必须与导出的
