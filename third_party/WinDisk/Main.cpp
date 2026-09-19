@@ -341,7 +341,11 @@ NTSTATUS SetTargetDisk(WCHAR DiskName[])
 	List_Visit(&TargetDisks, FSDAntiHook::AntiFSDHookCallback);
 	/* 在审计之后再判定旁路：hooker 是谁、saved-original 在哪，都由上面的日志
 	 * 先留个底；这一步决定 SRB 是照常走（可能被钩）还是直调真身。 */
-	FSDAntiHook::ResolveSrbBypass(TargetDisk);
+	/* 2026-09-19 实验：DfDiskLo 完整逆向证实其 sector 账本只影子 MBR/GPT，
+	 * 数据区经 stub 直通 storport —— 故 hive 写入本不需要 bypass。
+	 * 本分支强制不走 bypass（g_BypassSrbHandler 恒 NULL，全 IoCallDriver），
+	 * 用于在 VM 上实测 (via dispatch) 是否真的落盘，以裁决 bypass 的必要性。 */
+	// FSDAntiHook::ResolveSrbBypass(TargetDisk);
 	return status;
 }
 
