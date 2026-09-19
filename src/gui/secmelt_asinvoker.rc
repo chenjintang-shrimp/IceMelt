@@ -1,0 +1,6 @@
+// 仅 debug 构建：asInvoker manifest（宿主开发机渲染冒烟用）。
+// release 用 secmelt.rc（requireAdministrator）；选择逻辑在 xmake.lua 的
+// secmelt-gui 目标里，按构建模式二选一。
+#include <winresrc.h>
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "secmelt-asinvoker.manifest"

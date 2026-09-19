@@ -1,0 +1,11 @@
+// SecMelt GUI 资源清单
+// SECMELT_GUI_AS_INVOKER 由 xmake 在 debug 模式下注入（add_defines 会自动转发给
+// rc.exe）：宿主开发机上的渲染冒烟不需要管理员；release 打包路径永远是
+// requireAdministrator。
+#include <winresrc.h>
+
+#ifdef SECMELT_GUI_AS_INVOKER
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "secmelt-asinvoker.manifest"
+#else
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "secmelt.manifest"
+#endif
