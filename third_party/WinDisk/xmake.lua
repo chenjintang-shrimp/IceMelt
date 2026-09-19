@@ -1,6 +1,6 @@
 -- WinDisk —— 内核驱动（WDM）：直发 SCSI 请求到磁盘 miniport，绕过文件系统栈
 --
--- 单独一个 xmake 工程：驱动是独立产物（.sys），与 TUI 主程序（secmelt.exe）分开构建。
+-- 单独一个 xmake 工程：驱动是独立产物（.sys），与 TUI 主程序（icemelt.exe）分开构建。
 --
 --   xmake f --yes -p windows -a x64 --toolchain=clang-cl
 --   xmake build
@@ -29,7 +29,7 @@ set_toolchains(DEFAULT_TOOLCHAIN)
 --
 -- 覆盖方式（优先级从高到低）：
 --   1. xmake f --wdk_winver=win10     （子工程自己的 config，会被根工程的 f 重置）
---   2. SECMELT_WDK_WINVER=win10       （环境变量，根工程重配也保留）
+--   2. ICEMELT_WDK_WINVER=win10       （环境变量，根工程重配也保留）
 --   3. 本文件的默认值 win7
 --
 -- WDK 版本：现役的任何一版都还能面向 Win7 —— 逐个查过实际文件，26100、28000.1839、
@@ -47,7 +47,7 @@ set_toolchains(DEFAULT_TOOLCHAIN)
 --
 -- 构建时可能出现 `linkdir 'Windows Kits\10\Lib\win7\km\x64' not found` 警告 —— 那是 xmake
 -- 按版本名追加的库目录（WDK 8.1 时代的布局），本工程不需要，警告无害。
-local wdk_winver = get_config("wdk_winver") or os.getenv("SECMELT_WDK_WINVER") or "win7"
+local wdk_winver = get_config("wdk_winver") or os.getenv("ICEMELT_WDK_WINVER") or "win7"
 if not get_config("wdk_winver") then
     set_values("wdk.env.winver", wdk_winver)
 end

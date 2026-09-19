@@ -1514,7 +1514,7 @@ static s64 ntfs_device_win32_pio(win32_fd *fd, const s64 pos,
 		li.QuadPart += fd->part_start;
 	}
 
-	/* SecMelt: the WinDisk raw driver allocates non-paged memory per request and does a
+	/* IceMelt: the WinDisk raw driver allocates non-paged memory per request and does a
 	 * per-sector SCSI pass-through. Very large single WriteFile/ReadFile calls can run for
 	 * long and trip timeout/partial-write issues; split handle: transfers into bounded
 	 * chunks so each kernel request stays small and synchronous.

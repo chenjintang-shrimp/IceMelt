@@ -1160,7 +1160,7 @@ int main(int argc, char *argv[])
 }
 /* 拷贝循环可以在**任何**提前 EOF 下安静退出（fread 返回 0 且 feof），并且
  * truncate_solid 已经把 data_size 扩到了目标长度 —— 于是"少写"在盘上看起来
- * 像一个完整的文件：长度对、开头对、后面是 truncate 填的零。调用方（SecMelt）
+ * 像一个完整的文件：长度对、开头对、后面是 truncate 填的零。调用方（IceMelt）
  * 是按退出码放行的，所以这里必须把"写少了"变成硬失败，而不是留给运气。 */
 if (!result && offset != new_size) {
 	ntfs_log_error("ERROR: short copy: wrote %lld of %lld bytes; source ended early "

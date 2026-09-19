@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    SecMelt 的 configure 步骤：检测构建依赖，报告缺什么、怎么补。
+    IceMelt 的 configure 步骤：检测构建依赖，报告缺什么、怎么补。
 
 .DESCRIPTION
     在做 `xmake build` 之前跑一次，确认工具链齐了。全部必需项都在时退出码 0，
@@ -125,7 +125,7 @@ if ($ok) {
         'reinstall the mingw-w64 gcc package'
 
     # CRT 变体：mingw64（msvcrt）能在 Win7 直接跑；ucrt64 需要目标机另装 UCRT。
-    $probeDir = Join-Path ([IO.Path]::GetTempPath()) ('secmelt-probe-' + [Guid]::NewGuid().ToString('N'))
+    $probeDir = Join-Path ([IO.Path]::GetTempPath()) ('icemelt-probe-' + [Guid]::NewGuid().ToString('N'))
     try {
         New-Item -ItemType Directory -Path $probeDir -Force | Out-Null
         $src = Join-Path $probeDir 'probe.c'

@@ -6,7 +6,7 @@
  * "msys" environment), which provides a full POSIX emulation layer via
  * msys-2.0.dll. That DLL requires Windows 10 / Server 2016 in current MSYS2
  * releases (Cygwin 3.5 dropped Windows 7), which makes every ntfs-3g tool
- * unusable on a Windows 7 machine -- and ntfscp is the only way SecMelt has to
+ * unusable on a Windows 7 machine -- and ntfscp is the only way IceMelt has to
  * write the exported SYSTEM hive back to the volume.
  *
  * mingw-w64 targets Windows 7 by default (_WIN32_WINNT 0x601) and links only
@@ -161,7 +161,7 @@ typedef unsigned int gid_t;
  * mingw has no POSIX user ids. libntfs-3g/security.c uses them in the
  * secure-API entry point: it only takes the privileged path when `!getuid()`
  * (i.e. "running as root"), and stores the ids as the default owner for the
- * mapping. Reporting 0 is the faithful analogue: SecMelt runs elevated, and 0
+ * mapping. Reporting 0 is the faithful analogue: IceMelt runs elevated, and 0
  * is the id the Cygwin build would report there too.
  */
 #ifndef getuid

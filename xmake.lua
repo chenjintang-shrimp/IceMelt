@@ -1,4 +1,4 @@
--- SecMelt —— UnFreeze 后继：基于磁盘级绕过的“解冻”工具链
+-- IceMelt —— UnFreeze 后继：基于磁盘级绕过的“解冻”工具链
 --
 -- 工具链：clang-cl（MSVC ABI 下的 Clang，需本机 Visual Studio + LLVM）
 --
@@ -7,7 +7,7 @@
 --   * 没有 check_cxflags / import / os.run，无法在 xmake.lua 里探测 flag 支持
 --   * 工具链判定走 get_config("toolchain")
 
-set_project("SecMelt")
+set_project("IceMelt")
 set_version("1.0.0")
 
 -- 整体以 GPLv3 发布。third_party/ntfs-3g 为 GPL-2.0-or-later（允许升到 v3），
@@ -38,7 +38,7 @@ add_requires("imgui v1.92.9", {configs = {dx9 = true, win32 = true}})
 -- ============================================================================
 -- 一键构建：third_party 下的三个子工程各有自己的工具链，无法并进同一个 xmake
 -- 工程（内核 WDK 规则 / msys-cygwin 的 gcc / clang-cl 用户态程序），因此这里在
--- secmelt 链接完成后依次驱动它们，再把产物搬到 exe 旁边。
+-- icemelt 链接完成后依次驱动它们，再把产物搬到 exe 旁边。
 --
 --   xmake build            构建全部（本程序 + 驱动 + ntfs-3g 工具 + KDU）
 --   xmake build -P .       同上；子工程不可用时跳过并打印原因，不静默
@@ -57,7 +57,7 @@ local WIN_KITS = os.getenv("WindowsSdkDir") or "C:/Program Files (x86)/Windows K
 
 
 -- ============================================================================
--- 三方子工程 + 运行期资产落位：secmelt 与 secmelt-gui 共用这一段 after_build。
+-- 三方子工程 + 运行期资产落位：icemelt 与 icemelt-gui 共用这一段 after_build。
 --
 -- 单独构建任一个前端都应得到完整的运行期组合（驱动 / ntfs-3g 工具 / KDU / 名单），
 -- 所以两个 target 挂同一个回调。子工程在一个 xmake 进程里只构建一次（上面的去重
@@ -74,7 +74,7 @@ local function stage_third_party_and_assets(target)
     local function sub_build(spec)
         local dir = path.join(ROOT, spec.dir)
         if not os.isdir(dir) then
-            print("SecMelt: skip " .. spec.label .. " (" .. spec.dir .. " is missing)")
+            print("IceMelt: skip " .. spec.label .. " (" .. spec.dir .. " is missing)")
             return
         end
         -- 前置缺失时打印原因并跳过，而不是让整个 xmake build 失败：
@@ -84,7 +84,7 @@ local function stage_third_party_and_assets(target)
             if not path.is_absolute(file) then file = path.join(ROOT, file) end
             -- 前置可以是文件或目录（如 WDK 的 Include）
             if not (os.isfile(file) or os.isdir(file)) then
-                print("SecMelt: skip " .. spec.label .. " (" .. need.what .. " missing: " .. file .. ")")
+                print("IceMelt: skip " .. spec.label .. " (" .. need.what .. " missing: " .. file .. ")")
                 return
             end
         end
@@ -94,7 +94,7 @@ local function stage_third_party_and_assets(target)
                                                setenvs = spec.setenvs})
     end
 
--- 三方子工程在一个 xmake 进程里只构建一次（secmelt + secmelt-gui 同时构建时去重）
+-- 三方子工程在一个 xmake 进程里只构建一次（icemelt + icemelt-gui 同时构建时去重）
 if not third_party_built then
     third_party_built = true
         -- 先构建第三方产物，再把它们搬到 exe 旁边
@@ -108,9 +108,9 @@ if not third_party_built then
             },
             configure = {"-p", "windows", "-a", "x64", "--toolchain=" .. tostring(get_config("toolchain") or DEFAULT_TOOLCHAIN)},
             -- 驱动的目标系统版本：默认 win7（产出的 .sys 最低子系统版本 6.01，Win7 SP1 →
-            -- Win11 都能加载）。只面向 Win10+ 时用 SECMELT_WDK_WINVER=win10。
+            -- Win11 都能加载）。只面向 Win10+ 时用 ICEMELT_WDK_WINVER=win10。
             -- 这里显式转发而不是依赖环境继承，使"构建出的是哪个目标版本"在脚本里可见。
-            setenvs = {SECMELT_WDK_WINVER = os.getenv("SECMELT_WDK_WINVER") or "win7"},
+            setenvs = {ICEMELT_WDK_WINVER = os.getenv("ICEMELT_WDK_WINVER") or "win7"},
         })
         sub_build({
             label = "ntfs-3g tools",
@@ -152,7 +152,7 @@ end
     if os.isfile(sys) then
         os.cp(sys, path.join(outdir, "WinDisk_x64.sys"))
     else
-        print("SecMelt: WARNING driver not found at " .. sys .. " (raw disk features will be unavailable)")
+        print("IceMelt: WARNING driver not found at " .. sys .. " (raw disk features will be unavailable)")
     end
 
     local tools = {"ntfsfix.exe", "ntfscp.exe", "ntfs-3g-cli.exe", "mkntfs.exe"}
@@ -164,7 +164,7 @@ end
             os.mkdir(toolsdir)
             os.cp(tool, path.join(toolsdir, name))
         else
-            print("SecMelt: WARNING ntfs-3g tool not found at " .. tool ..
+            print("IceMelt: WARNING ntfs-3g tool not found at " .. tool ..
                   " (raw NTFS write-back will be unavailable)")
         end
     end
@@ -187,12 +187,12 @@ end
     if os.isfile(drv64) then
         os.cp(drv64, path.join(outdir, "drv64.dll"))
     else
-        print("SecMelt: WARNING drv64.dll not found at " .. drv64 ..
+        print("IceMelt: WARNING drv64.dll not found at " .. drv64 ..
               " -- kdu will not be able to load any provider")
     end
 end
 
-target("secmelt")
+target("icemelt")
     set_kind("binary")
     -- 显式列目录而不是 src/**.cpp：src/gui 是独立 target（有自己的入口点，且要
     -- imgui 依赖），被递归收集进来会让 CLI 目标去编译 GUI 入口。
@@ -224,11 +224,11 @@ target("secmelt")
 --
 -- 与 CLI 共用同一份 pipeline 源码（src/{raw,reg,melt} + util.cpp），只排除两个
 -- 入口：main.cpp（命令行前端）与 selftest.cpp（子命令包装）。产物与
--- secmelt.exe 同目录；after_build 与 secmelt 共用同一段落位逻辑，因此
--- `xmake build secmelt-gui` 单独构建时同样会产出 WinDisk.sys / ntfs-3g 工具 /
+-- icemelt.exe 同目录；after_build 与 icemelt 共用同一段落位逻辑，因此
+-- `xmake build icemelt-gui` 单独构建时同样会产出 WinDisk.sys / ntfs-3g 工具 /
 -- KDU / targets.txt，并复制到本目标的输出目录旁边。
 -- ============================================================================
-target("secmelt-gui")
+target("icemelt-gui")
     set_kind("binary")
     add_files(
         "src/util.cpp",
@@ -241,9 +241,9 @@ target("secmelt-gui")
     -- debug 下 add_defines 的宏没有到达 rc，仍然嵌入了 requireAdministrator）
     if is_mode("debug") then
         -- 宿主开发机的渲染冒烟用：不弹 UAC。release 始终 requireAdministrator
-        add_files("src/gui/secmelt_asinvoker.rc")
+        add_files("src/gui/icemelt_asinvoker.rc")
     else
-        add_files("src/gui/secmelt.rc")
+        add_files("src/gui/icemelt.rc")
     end
 
     add_packages("imgui")
@@ -251,7 +251,7 @@ target("secmelt-gui")
     -- src/gui 同时进 rc.exe 的 /I：RT_MANIFEST 里的文件名按包含路径解析
     add_includedirs("src", "third_party", "src/gui")
 
-    -- 与 secmelt 同一段落位逻辑：构建本目标即得到完整运行期组合
+    -- 与 icemelt 同一段落位逻辑：构建本目标即得到完整运行期组合
     after_build(stage_third_party_and_assets)
 
     if using_clang_cl() then
