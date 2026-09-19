@@ -115,11 +115,11 @@ namespace FSDAntiHook
 	static const ULONG_PTR kDfNodeDevice     = 0x00;
 	static const ULONG_PTR kDfNodeOriginal   = 0x98;
 
-	/* 2026-09-19 现机证据：DfDiskLo 钩的是 DRIVER 级 MajorFunction 表，记录里
-	 * node+0x00 只是装挂时见到的代表设备（另一枚 LSI_SAS PDO），exact 匹配会
-	 * 漏。而 node+0x98 的 saved-orig 是该驱动整张表换表前的值，对本驱动所有
-	 * PDO 通用 —— 所以归属判据放宽为“saved-orig 落在 victim 镜像内”，
-	 * exact 设备匹配仍优先。 */
+	/* 2026-09-19 现机证据（两轮）：①DfDiskLo 钩的是 DRIVER 级 MajorFunction 表，
+	 * node+0x00 只是装挂代表设备，exact 设备匹配必漏；②saved-orig 的形态对
+	 * storport 系 miniport 是 port（storport.sys）里的框架 dispatch，不在
+	 * miniport 自身镜像里 —— 归属判据改为“落在任一已加载驱动镜像内且不在
+	 * hooker 镜像内”，唯一候选采纳；exact 设备匹配仍最优先。 */
 	PVOID FindSavedSrbHandler(PDEVICE_OBJECT pdo, PLDR_DATA_TABLE_ENTRY64 hooker,
 	                          PLDR_DATA_TABLE_ENTRY64 victim)
 	{
@@ -139,8 +139,12 @@ namespace FSDAntiHook
 				LogWarn("[DfWalk] head(P) invalid: %p", head);
 				return NULL;
 			}
+			LogWarn("[DfWalk] victim %wZ base=%p size=0x%X; hooker %wZ base=%p size=0x%X",
+				&victim->FullDllName, victim->DllBase, victim->SizeOfImage,
+				&hooker->BaseDllName, hooker->DllBase, hooker->SizeOfImage);
 			int count = 0;
 			PVOID fallback = NULL;
+			PLDR_DATA_TABLE_ENTRY64 fallbackMod = NULL;
 			int candidates = 0;
 			for (PLIST_ENTRY le = head->Flink; le != head; le = le->Flink)
 			{
@@ -152,25 +156,32 @@ namespace FSDAntiHook
 				LogWarn("[DfWalk] node %d: device=%p saved-orig=%p", count, dev, orig);
 				if ((PDEVICE_OBJECT)dev == pdo)
 					return orig;
-				if ((ULONG_PTR)orig >= (ULONG_PTR)victim->DllBase &&
-					(ULONG_PTR)orig < (ULONG_PTR)victim->DllBase + victim->SizeOfImage)
+				if ((ULONG_PTR)orig >= (ULONG_PTR)hooker->DllBase &&
+					(ULONG_PTR)orig < (ULONG_PTR)hooker->DllBase + hooker->SizeOfImage)
 				{
-					if (!fallback) fallback = orig;
+					LogWarn("[DfWalk]   saved-orig lies inside hooker image -- trampoline, skipped");
+					continue;
+				}
+				PLDR_DATA_TABLE_ENTRY64 mod = FindModuleByAddress(orig, victim);
+				if (mod)
+				{
+					LogWarn("[DfWalk]   saved-orig attributed to loaded module %wZ", &mod->FullDllName);
+					if (!fallback) { fallback = orig; fallbackMod = mod; }
 					candidates++;
 				}
 			}
 			if (candidates == 1)
 			{
-				LogWarn("[DfWalk] device %p not in records; adopting saved-orig %p by victim-image attribution (1 candidate)",
-					pdo, fallback);
+				LogWarn("[DfWalk] device %p not in records; adopting saved-orig %p (%wZ) by module attribution (1 candidate)",
+					pdo, fallback, &fallbackMod->FullDllName);
 				return fallback;
 			}
 			if (candidates > 1)
 			{
-				LogWarn("[DfWalk] walked %d node(s); %d victim-image candidates -- ambiguous, refusing", count, candidates);
+				LogWarn("[DfWalk] walked %d node(s); %d module candidates -- ambiguous, refusing", count, candidates);
 				return NULL;
 			}
-			LogWarn("[DfWalk] walked %d node(s); no device == PDO %p, no victim-image candidate", count, pdo);
+			LogWarn("[DfWalk] walked %d node(s); no device == PDO %p, no attributing candidate", count, pdo);
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER)
 		{
@@ -210,12 +221,17 @@ namespace FSDAntiHook
 				pdo, &hooker->BaseDllName);
 			return;
 		}
-		const BOOLEAN origInVictim =
-			((ULONG_PTR)orig >= (ULONG_PTR)victim->DllBase) &&
-			((ULONG_PTR)orig < (ULONG_PTR)victim->DllBase + victim->SizeOfImage);
-		if (!origInVictim) {
-			LogWarn("saved-original candidate %p is not inside %wZ; refusing to trust it",
-				orig, victim->FullDllName);
+		/* miniport 的原始 dispatch 可能在 port（storport.sys）镜像里：
+		 * 信任条件是“在任一已加载模块里、但不在 hooker 镜像里”，
+		 * 而不是死认 victim 镜像。 */
+		PLDR_DATA_TABLE_ENTRY64 origMod = FindModuleByAddress(orig, victim);
+		const BOOLEAN origTrusted =
+			origMod &&
+			!((ULONG_PTR)orig >= (ULONG_PTR)hooker->DllBase &&
+			  (ULONG_PTR)orig < (ULONG_PTR)hooker->DllBase + hooker->SizeOfImage);
+		if (!origTrusted) {
+			LogWarn("saved-original candidate %p is not inside a loaded driver image (or is inside hooker); refusing to trust it",
+				orig);
 			return;
 		}
 		g_BypassSrbHandler = orig;
