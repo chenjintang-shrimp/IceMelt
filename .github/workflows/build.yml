@@ -11,11 +11,41 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # action-gh-release 建 draft release 需要写权限；PR（含 fork）拿到的 token 仍是只读的，
+  # 而且 release 步骤有 ref_type == 'tag' 的 if 守着，非 tag 运行根本不会走到。
+  contents: write
 
 jobs:
+  gate:
+    # 把 commit 和 tag 一把推（git push origin main v1.2.3 / --follow-tags）时，
+    # GitHub 对 main 和 tag 各触发一次 run。这里让 branch 触发的 run 先查
+    # HEAD commit 有没有 tag 指中：有 → 跳过整个构建，由 tag run 独占
+    # （tag run 是 branch run 的超集：同样的构建 + release draft）。
+    # 分开推（先推 main 后打 tag）则两次 run 都是真实需求，不去重。
+    name: Deduplicate branch vs tag runs
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        with:
+          fetch-depth: 0 # 拿全部 tag，git tag --points-at 才可靠
+
+      - id: check
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        run: |
+          if git tag --points-at '${{ github.sha }}' | grep -q .; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "commit has a tag; skipping branch build (tag run covers it)"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
   windows-x64:
     name: secmelt + WinDisk.sys + ntfs-3g tools
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     runs-on: windows-2022
     env:
       # 根 xmake.lua 只在没给出 env 时退回 D:\msys64；GH runner 的 MSYS2 装在 C: 下
@@ -107,3 +137,26 @@ jobs:
           name: IceMelt-windows-x64${{ github.ref_type == 'tag' && format('-{0}', github.ref_name) || '' }}
           path: build/windows/x64/release/**
           if-no-files-found: error
+
+      - name: Package bundle (tag only)
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $zip = "IceMelt-${{ github.ref_name }}-windows-x64.zip"
+          Compress-Archive -Path 'build\windows\x64\release\*' -DestinationPath $zip
+
+      - name: Create release draft (tag only)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          # draft: true → push tag 后只建草稿，发布要人在网页上确认；
+          # tag 已随 push 存在，这里只引用它，不会重复创建。
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          name: IceMelt ${{ github.ref_name }}
+          # tag push 时 github.sha 就是该 tag 指向的 commit；body 在前，
+          # generate_release_notes 的自动变更说明会追加到 body 之后。
+          body: |
+            Commit: `${{ github.sha }}`
+          generate_release_notes: true
+          files: IceMelt-${{ github.ref_name }}-windows-x64.zip
