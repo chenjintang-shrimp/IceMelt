@@ -43,7 +43,7 @@ jobs:
           fi
 
   windows-x64:
-    name: secmelt + WinDisk.sys + ntfs-3g tools
+    name: secmelt + secmelt-gui + WinDisk.sys + ntfs-3g tools
     needs: gate
     if: needs.gate.outputs.skip != 'true'
     runs-on: windows-2022
@@ -99,7 +99,7 @@ jobs:
         run: |
           $out = 'build\windows\x64\release'
           $required = @(
-            'secmelt.exe', 'WinDisk_x64.sys', 'kdu.exe', 'drv64.dll', 'targets.txt',
+            'secmelt.exe', 'secmelt-gui.exe', 'WinDisk_x64.sys', 'kdu.exe', 'drv64.dll', 'targets.txt',
             'tools\ntfscp.exe', 'tools\ntfsfix.exe', 'tools\ntfs-3g-cli.exe', 'tools\mkntfs.exe'
           )
           $missing = @($required | Where-Object { -not (Test-Path (Join-Path $out $_)) })
@@ -120,6 +120,32 @@ jobs:
           if ($dump -notmatch 'state on this machine') { throw 'dump did not probe the target list' }
           # 退出码 = 自检是否全绿；runner 上必然有一条不绿（进程非提权），故只断言自检真的跑了
           if ($dump -notmatch 'CHECK FAILED|ALL SYSTEMS GO') { throw 'dump did not run the self-check' }
+
+      - name: Assert Win7 floor for both frontends
+        shell: pwsh
+        run: |
+          # Win7 SP1 是本项目的硬承诺：子系统版本必须 ≤ 6.01（secmelt 用链接器默认
+          # 6.00，GUI 显式钉 6.01）。再断言没有 Win8+ 的静态导入 —— MSVC STL 的
+          # std::filesystem "打开句柄" 路径会无条件链 CreateFile2，静默毁掉 Win7
+          # 启动，这类回归不会以任何别的方式暴露。
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -property installationPath
+          $dumpbin = (Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" |
+                      Select-Object -First 1).FullName
+          $bad = 'CreateFile2', 'GetTempPath2W', 'CopyFile2', 'GetSystemTimePreciseAsFileTime',
+                 'SetThreadDescription', 'GetDpiForWindow'
+          foreach ($exe in @('build\windows\x64\release\secmelt.exe',
+                             'build\windows\x64\release\secmelt-gui.exe')) {
+            $headers = (& $dumpbin /headers $exe | Out-String)
+            if ($headers -notmatch '(6\.00|6\.01) subsystem version') {
+              throw "$exe : subsystem version is not <= 6.01 (Win7 floor)"
+            }
+            $imports = (& $dumpbin /imports $exe | Out-String)
+            foreach ($sym in $bad) {
+              if ($imports -match "\b$sym\b") { throw "$exe : imports $sym (Win8+ API)" }
+            }
+            Write-Host "OK: $exe"
+          }
 
       - name: Assert the driver cannot reset the machine
         shell: pwsh
