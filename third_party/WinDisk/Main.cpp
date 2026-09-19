@@ -121,22 +121,36 @@ namespace FSDAntiHook
 		__try
 		{
 			if (!MmIsAddressValid(headPtr))
+			{
+				LogWarn("[DfWalk] headPtr probe failed: %wZ base=%p headPtr=%p",
+					&hooker->BaseDllName, hooker->DllBase, headPtr);
 				return NULL;
+			}
 			PLIST_ENTRY head = (PLIST_ENTRY)*headPtr;
-			if (!MmIsAddressValid(head))
+			LogWarn("[DfWalk] %wZ base=%p head(P)=%p", &hooker->BaseDllName, hooker->DllBase, head);
+			if (!head || !MmIsAddressValid(head))
+			{
+				LogWarn("[DfWalk] head(P) invalid: %p", head);
 				return NULL;
+			}
+			int count = 0;
 			for (PLIST_ENTRY le = head->Flink; le != head; le = le->Flink)
 			{
+				if (++count > 32) { LogWarn("[DfWalk] walk aborted: >32 nodes (corrupt list?)"); return NULL; }
 				UCHAR* node = (UCHAR*)le - kDfNodeListLink;
-				if (!MmIsAddressValid(node))
-					break;
-				if (*(PDEVICE_OBJECT*)(node + kDfNodeDevice) == pdo)
-					return *(PVOID*)(node + kDfNodeOriginal);
+				if (!MmIsAddressValid(node)) { LogWarn("[DfWalk] node %d probe failed at %p", count, node); break; }
+				PVOID dev = *(PVOID*)(node + kDfNodeDevice);
+				PVOID orig = *(PVOID*)(node + kDfNodeOriginal);
+				LogWarn("[DfWalk] node %d: device=%p saved-orig=%p", count, dev, orig);
+				if ((PDEVICE_OBJECT)dev == pdo)
+					return orig;
 			}
+			LogWarn("[DfWalk] walked %d node(s); no device == PDO %p", count, pdo);
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER)
 		{
 			/* 链表正被改写/布局对不上：没找到就放弃，不动粗 */
+			LogWarn("[DfWalk] exception while walking hook list (code 0x%08X)", GetExceptionCode());
 		}
 		return NULL;
 	}
