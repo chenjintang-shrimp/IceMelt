@@ -1,13 +1,13 @@
 ﻿<#
 .SYNOPSIS
-    SecMelt 打包：把一次完整构建的输出拆成两个部署包（命令行 / 图形）。
+    IceMelt 打包：把一次完整构建的输出拆成两个部署包（命令行 / 图形）。
 
 .DESCRIPTION
     两个包各带一份完整的运行期资产（WinDisk 驱动、kdu、名单、ntfs-3g 工具），因此目标
     机器上只放其中一个就能跑：
 
-        dist/IceMelt-<版本>-cli/      .zip   命令行前端 secmelt.exe + preflight.bat / melt.bat
-        dist/IceMelt-GUI-<版本>-gui/  .zip   图形前端 secmelt-gui.exe
+        dist/IceMelt-<版本>-cli/      .zip   命令行前端 icemelt.exe + preflight.bat / melt.bat
+        dist/IceMelt-GUI-<版本>-gui/  .zip   图形前端 icemelt-gui.exe
 
     版本默认取 xmake.lua 的 set_version("x.y.z")（统一补上前缀 v）；CI 里传 tag 名。
     任何一项资产缺失都直接失败 —— 宁可不打包，也不出半可用的包。
@@ -53,12 +53,12 @@ $runtime = @('WinDisk_x64.sys', 'kdu.exe', 'drv64.dll', 'targets.txt', 'tools')
 $packages = @(
     [pscustomobject]@{
         Dir   = "IceMelt-$Version-cli"
-        Exe   = 'secmelt.exe'
+        Exe   = 'icemelt.exe'
         Extra = @('preflight.bat', 'melt.bat')
     }
     [pscustomobject]@{
         Dir   = "IceMelt-GUI-$Version-gui"
-        Exe   = 'secmelt-gui.exe'
+        Exe   = 'icemelt-gui.exe'
         Extra = @()
     }
 )
