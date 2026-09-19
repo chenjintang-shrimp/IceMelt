@@ -102,6 +102,8 @@ jobs:
       - name: Upload bundle
         uses: actions/upload-artifact@v4
         with:
-          name: secmelt-windows-x64
+          # 产物名跟着产品走（仓库已改名 IceMelt），tag 构建再带上版本号，
+          # 这样从 Actions 页面下载时能分清是 main 的快照还是某个 release。
+          name: IceMelt-windows-x64${{ github.ref_type == 'tag' && format('-{0}', github.ref_name) || '' }}
           path: build/windows/x64/release/**
           if-no-files-found: error
