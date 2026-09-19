@@ -207,6 +207,25 @@ jobs:
             Write-Host ("packaged {0} ({1:N1} MB)" -f $zip.Name, ($zip.Length / 1MB))
           }
 
+          # 包里必须真有整套运行期组合：xmake pack 的 installfiles 模式一旦失配（例如
+          # $(builddir) 展开没了），它会安安静静地少装文件 —— 这点不如原来那份脚本
+          # （缺文件直接失败），所以在这里逐项点验，别让空壳包发出去。
+          $runtime = @('WinDisk_x64.sys', 'kdu.exe', 'drv64.dll', 'targets.txt',
+                       'tools/ntfscp.exe', 'tools/ntfsfix.exe', 'tools/ntfs-3g-cli.exe', 'tools/mkntfs.exe')
+          $expected = @{
+            "IceMelt-v$want-cli.zip"        = @('icemelt.exe', 'preflight.bat', 'melt.bat') + $runtime
+            "IceMelt-GUI-v$want-gui.zip"    = @('icemelt-gui.exe') + $runtime
+          }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          foreach ($name in $expected.Keys) {
+            $file = Join-Path 'dist' $name
+            if (-not (Test-Path $file)) { throw "missing package: $name" }
+            $entries = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $file).Path).Entries.FullName
+            $missing = @($expected[$name] | Where-Object { $entries -notcontains $_ })
+            if ($missing.Count) { throw "$name is missing: $($missing -join ', ')" }
+            Write-Host "OK: $name carries all $($expected[$name].Count) files"
+          }
+
       - name: Upload packages
         uses: actions/upload-artifact@v4
         with:
