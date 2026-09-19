@@ -1,6 +1,6 @@
 // SecMelt —— 注册表摘除：设备类过滤器值与服务键
 //
-// 只处理三个 Windows 固定设备类（磁盘/键盘/鼠标）的 UpperFilters / LowerFilters，
+// 处理冻结产品会挂过滤器的 Windows 固定设备类（磁盘/卷/键盘/鼠标）的 UpperFilters / LowerFilters，
 // 以及 HKLM\SYSTEM\CurrentControlSet\Services\<name> 服务键。
 //
 // 关键约束：过滤器值是字符串列表，只允许删掉命中名单的项，其余项必须原样保留 ——
@@ -43,17 +43,17 @@ struct FilterProbe {
 
 // 只读预演结果
 struct ProbeReport {
-    std::vector<FilterProbe> filters;  // 三个类 x {Upper,Lower}
+    std::vector<FilterProbe> filters;  // kClasses 每个类 x {Upper,Lower}
     std::vector<std::wstring> existingServiceKeys;
     std::vector<std::wstring> absentServiceKeys;
 };
 
-// 只读探测：读三个类键的过滤器值 + 探测服务键存在性。不调用任何写 API。
+// 只读探测：读 kClasses 里每个类键的过滤器值 + 探测服务键存在性。不调用任何写 API。
 ProbeReport ProbeTargets(const std::vector<std::wstring>& names);
 
 // 摘除逻辑的核心：对**一个**设备类键下的 UpperFilters / LowerFilters 做处理。
 // classKeyPath 是相对 HKEY_LOCAL_MACHINE 的路径，classGuid 只用于报告字符串。
-// StripFilterEntries 用三个真实设备类调用它；--selftest-registry 用一个 scratch 键调用它，
+// StripFilterEntries 用 kClasses 里的真实设备类调用它；--selftest-registry 用一个 scratch 键调用它，
 // 这样写入路径（字符串列表重写 / 整值删除）能在不碰设备类键的前提下被完整验证。
 EditReport StripFilterValueIn(const std::wstring& classKeyPath, const std::wstring& classGuid,
                               const std::vector<std::wstring>& names);

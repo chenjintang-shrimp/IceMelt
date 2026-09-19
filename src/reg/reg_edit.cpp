@@ -9,9 +9,14 @@
 namespace secmelt {
 namespace {
 
-// Windows 固定的设备类 GUID（磁盘/键盘/鼠标）。这三类正是冻结类软件挂过滤器的位置。
+// Windows 固定的设备类 GUID。冻结类软件挂过滤器的位置：
+// 磁盘类（DfDiskLo 式的下过滤）之外还有**卷类**——DeepFreeze 的主驱动直接挂在
+// Volume 类的 UpperFilters（与 volsnap 同列）。漏掉它是 "服务键已删、引用还在"
+// 的经典 INACCESSIBLE_BOOT_DEVICE(0x7B) 死因：PnP 装卷栈时按引用找服务、找到空气。
+// 2026-09-19 两台实体机并排验证：Win7 0x7B 循环 + Win10 IBD，1:1 对应。
 constexpr const wchar_t* kClasses[] = {
     L"{4D36E967-E325-11CE-BFC1-08002BE10318}",  // DiskDrive
+    L"{71A27CDD-812A-11D0-BEC7-08002BE2092F}",  // Storage volumes（DeepFrz 在 UpperFilters）
     L"{4D36E96B-E325-11CE-BFC1-08002BE10318}",  // Keyboard
     L"{4D36E96F-E325-11CE-BFC1-08002BE10318}",  // Mouse
 };
@@ -214,7 +219,7 @@ EditReport StripFilterValueIn(const std::wstring& classKeyPath, const std::wstri
 
         std::wstring error;
         if (kept.empty()) {
-            // 整值删除只发生在过滤后为空时：本机实测三类都保留着系统自身的类驱动
+            // 整值删除只发生在过滤后为空时：本机实测这些类都保留着系统自身的类驱动
             // （partmgr / kbdclass / mouclass），非空结果绝不会走到这里。
             if (!DeleteValue(classKeyPath, valueName, error)) {
                 report.failures.push_back(error);

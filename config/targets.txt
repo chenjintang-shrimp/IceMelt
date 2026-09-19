@@ -11,6 +11,7 @@
 DeepFrz|冰点还原（主驱动）
 DfDiskLo|冰点还原（磁盘下过滤）
 DFServ|冰点还原（服务）
+DFFilter|冰点还原（文件系统过滤驱动）
 SWFreeze|希沃冰点还原
 #SWFrzAlbendazole|希沃冰点还原（备用驱动，原作者亦注释）
 PsVFilt|影子系统 PowerShadow
