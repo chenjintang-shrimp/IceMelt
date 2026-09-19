@@ -160,16 +160,29 @@ jobs:
         with:
           # 产物名跟着产品走（仓库已改名 IceMelt），tag 构建再带上版本号，
           # 这样从 Actions 页面下载时能分清是 main 的快照还是某个 release。
+          # 这里是**未拆包的 release 目录**；两个可直接分发的 zip 见 Upload packages。
           name: IceMelt-windows-x64${{ github.ref_type == 'tag' && format('-{0}', github.ref_name) || '' }}
           path: build/windows/x64/release/**
           if-no-files-found: error
 
-      - name: Package bundle (tag only)
-        if: github.ref_type == 'tag'
+      - name: Package CLI / GUI bundles
         shell: pwsh
         run: |
-          $zip = "IceMelt-${{ github.ref_name }}-windows-x64.zip"
-          Compress-Archive -Path 'build\windows\x64\release\*' -DestinationPath $zip
+          # 两个包：IceMelt-<tag>-cli（命令行 + 两个 .bat）与 IceMelt-GUI-<tag>-gui。
+          # 打包脚本自己也断言资产完整，缺一个就失败。非 tag 运行照跑 —— 这样打包
+          # 这条路径每次 CI 都被验证一次，版本号退回 xmake.lua 里的 set_version。
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            pwsh -File package.ps1 -Version '${{ github.ref_name }}'
+          } else {
+            pwsh -File package.ps1
+          }
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: IceMelt-packages${{ github.ref_type == 'tag' && format('-{0}', github.ref_name) || '' }}
+          path: dist/*.zip
+          if-no-files-found: error
 
       - name: Create release draft (tag only)
         if: github.ref_type == 'tag'
@@ -185,4 +198,4 @@ jobs:
           body: |
             Commit: `${{ github.sha }}`
           generate_release_notes: true
-          files: IceMelt-${{ github.ref_name }}-windows-x64.zip
+          files: dist/*.zip
