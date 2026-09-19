@@ -595,7 +595,7 @@ int InteractiveMode(const fs::path& root) {
     std::vector<std::string> meltLog = {
         Timestamp() + "  ready",
         Timestamp() + "  Dry run: rehearse the whole chain, write nothing",
-        Timestamp() + "  Melt: strip filters, write the hive back, then bugcheck-reset",
+        Timestamp() + "  Melt: strip filters, write the hive back, then reboot by hand",
     };
     // Melt 状态：三个独立的 atomic 会互相打架（例如"刚置 running 又被 finished 覆盖"），
     // 用一个在互斥锁下的枚举就够，而且渲染时能和日志取到同一个快照。
@@ -647,8 +647,9 @@ int InteractiveMode(const fs::path& root) {
                 // 不能从处理器内部再嵌一层循环。
                 opt.confirm = [&](const secmelt::MeltResult& pending) {
                     std::wstring text =
-                        L"About to write the SYSTEM hive to the raw disk, then reset the machine\n"
-                        L"by bugchecking with 0x0D000721 (CTL_REBOOT_SYSTEM).\n\n"
+                        L"About to write the SYSTEM hive to the raw disk. Nothing is reset\n"
+                        L"automatically: once the run reports the writes verified, reboot the\n"
+                        L"machine yourself with a normal restart.\n\n"
                         L"The following actions are irreversible:\n";
                     for (const auto& item : pending.pending) text += L"  - " + item + L"\n";
                     text += L"\nContinue?";
@@ -704,7 +705,7 @@ int InteractiveMode(const fs::path& root) {
         std::string state = "idle";
         switch (snapshotState) {
             case MeltState::Running: state = "running..."; break;
-            case MeltState::FinishedOk: state = "finished OK"; break;
+            case MeltState::FinishedOk: state = "finished OK - reboot to apply"; break;
             case MeltState::FinishedFailed: state = "finished with errors"; break;
             case MeltState::Idle: break;
         }
@@ -763,8 +764,8 @@ void PrintUsage() {
                  "                           tier probing + DiagnoseWritePath breakdown, then stop\n"
                  "  secmelt --melt --yes-i-know\n"
                  "                           non-interactive apply: strip filters, write the hive\n"
-                 "                           (and its RegBack copy), then wait for Enter to reset by\n"
-                 "                           bugcheck 0x0D000721 (the reset is manual in this mode)\n"
+                 "                           (and its RegBack copy), then reboot the machine by hand\n"
+                 "                           once it reports the writes verified (no auto reset)\n"
                  "  secmelt --selftest-hive  verify regf base block offsets and checksum algorithm\n"
                  "  secmelt --selftest-registry\n"
                  "                           exercise the filter-stripping write path on a scratch key\n"
@@ -820,9 +821,10 @@ int main(int argc, char** argv) {
         // 落盘不可逆：没有显式 token 就不执行（这也是唯一的非交互入口，
         // 因此 TUI 那条路的确认对话框仍然保留）。
         if (!yesIKnow) {
-            std::cout << "--melt writes the SYSTEM hive to the raw disk, zeroes SYSTEM.LOG1/LOG2\n"
-                         "and resets the machine by bugcheck 0x0D000721. There is no rollback\n"
-                         "on this machine (System Restore cannot undo it); only a VM snapshot can.\n"
+            std::cout << "--melt writes the SYSTEM hive to the raw disk (and its RegBack copy).\n"
+                         "There is no rollback on this machine (System Restore cannot undo it);\n"
+                         "only a VM snapshot can. Nothing is reset automatically: the machine is\n"
+                         "rebooted by you once the writes verify.\n"
                          "Re-run with --melt --yes-i-know if that is what you want.\n";
             return 2;
         }

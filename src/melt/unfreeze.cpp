@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
-#include <iostream>
 #include <system_error>
 #include <vector>
 
@@ -40,9 +39,6 @@ constexpr const wchar_t* kLogFiles[] = {
     L"C:\\Windows\\System32\\config\\SYSTEM.LOG1",
     L"C:\\Windows\\System32\\config\\SYSTEM.LOG2",
 };
-// 与 third_party/WinDisk/Main.cpp 的 SECMELT_BUGCHECK_CODE 必须一致：
-// CTL_REBOOT_SYSTEM 触发这个 bugcheck，而不是走常规关机路径。
-constexpr unsigned long kBugCheckCode = 0x0D000721;
 
 struct Log {
     MeltResult* result;  // 可为空：只有 sink 的日志也是合法的（例如把 kdu 输出收进一个字符串）
@@ -128,15 +124,6 @@ bool RunKduDseOff(const std::filesystem::path& exeDir, const Log& log, std::wstr
         begin = end + 1;
     }
     return true;
-}
-
-// 触发重启 bugcheck。CTL_REBOOT_SYSTEM 走的是 KeBugCheckEx(0x0D000721)：
-//   * 内核在此停住，不再把内存里的脏 hive 刷回磁盘（这正是写回 hive 之后必须走的路径）；
-//   * 崩溃转储栈会先把内存映像直写磁盘，然后按系统的崩溃设置自动重启。
-// 成功即不返回；返回 FALSE 说明 bugcheck 没能让机器复位。
-bool Trip(const Log& log, WinDiskDevice& device, std::wstring& error) {
-    log.warn(FormatW(L"triggering bugcheck 0x%08X via CTL_REBOOT_SYSTEM", kBugCheckCode));
-    return device.RebootNow(error);
 }
 
 // 写回前的守卫：确认 **ntfs-3g 看到的**那个目标确实是 hive。
@@ -1184,11 +1171,12 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
         L"NO ROLLBACK: the RegBack copy is overwritten too, so no earlier hive generation survives "
         L"on this volume; System Restore is typically disabled by the restore product. Take a VM "
         L"snapshot before continuing if you have not");
+    // 最后一条不是"工具要执行的动作"，而是交回给人的那一步：本版不代替人重启，也没有任何
+    // 会 bugcheck 这台机器的路径。列在这里是因为它同样是"接下来会发生什么"的一部分 ——
+    // 确认框只显示这份清单。
     result.pending.push_back(
-        FormatW(L"trigger bugcheck 0x%08X via CTL_REBOOT_SYSTEM "
-                L"(CRITICAL_STRUCTURE_CORRUPTION-with-custom-code; the machine resets "
-                L"according to its crash settings)",
-                kBugCheckCode));
+        L"hand the reboot back to you: nothing is reset automatically -- restart the machine "
+        L"yourself once the run reports the writes verified (a normal reboot applies the change)");
 
     if (opt.dryRun) {
         emit.step(L"dry-run: no raw disk write, no reboot");
@@ -1516,11 +1504,11 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
         }
     }
 
-    // ---- 10. 复位 --------------------------------------------------------------
+    // ---- 10. 收尾：卸载驱动，把重启交回给操作者 ---------------------------------
     //
-    // 自动复位会把机器立刻打下去 —— 操作者来不及看日志、也来不及用别的工具核对现场。
-    // manualBugcheck 时先等人按一次回车（CLI 模式默认如此），看清了再触发。
-    // 到这里说明主 hive、RegBack（若存在）都已逐字节验证；只有此时才允许置 dirty 和复位。
+    // 到这里说明主 hive、RegBack（若存在）都已逐字节验证、系统卷也已置 dirty。本版**不代替
+    // 人重启**：既没有 bugcheck，也没有任何自动复位 —— 改动是在基线（裸盘）上的，按一次普通
+    // 重启就能生效；把这一步交回给人，他才能先读完日志、再用别的工具核对现场。
 
     // 所有 raw I/O 已完成；现在才关闭设备并卸载 WinDisk。这样活动 SYSTEM 不会留下
     // Services\\WinDisk，也不会在下次启动触发“Windows 要求已数字签名的驱动程序”提示。
@@ -1532,41 +1520,20 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
                   L"registry still contains Services\\WinDisk");
         return result;
     }
-    if (opt.manualBugcheck) {
-        emit.warn(L"all writes are done. The machine has NOT been reset yet -- press Enter to "
-                  L"trigger the bugcheck (0x0D000721 + CTL_REBOOT_SYSTEM)");
 
-        // 复位的作用说清楚（这里以前写着"内存注册表会刷回覆盖我们写的 hive" —— **那是错的**）：
-        // 在冻结的机器上，Windows 自己的任何写入都走磁盘栈、被冰点重定向到增量区，到不了基线，
-        // 所以它**盖不掉**我们写上去的那份 hive。本轮的目的（让过滤驱动下次启动不再加载）
-        // 只取决于基线被写成了什么，**按一次普通重启同样能生效**。
-        // 想看验证结论再决定：普通重启是安全的 —— 它不会丢掉内存里的注册表。
-        emit.warn(L"a normal reboot achieves the same thing here: on a frozen volume Windows' own "
-                  L"writes are redirected, so they cannot overwrite what we put on the baseline. "
-                  L"If the read-back did not verify, prefer the normal reboot -- it cannot lose the "
-                  L"in-memory registry, and whether the filter drivers stop loading afterwards is "
-                  L"the real answer to whether the write landed");
-
-        // 读一行；stdin 不可用（被重定向/没有控制台）时**不**触发，把决定权交回给人。
-        std::string line;
-        if (std::getline(std::cin, line)) {
-            emit.warn(L"resetting now (manual trigger)");
-            error.clear();
-            Trip(emit, device, error);
-            emit.warn(FormatW(L"bugcheck did not reset the machine: %ls", error.c_str()));
-        } else {
-            emit.warn(L"stdin is not readable (no console / redirected) -- the bugcheck was NOT "
-                      L"triggered; reboot whenever you are ready");
-        }
-        return result;
-    }
-
-    emit.warn(L"all writes complete and verified; triggering the reboot bugcheck now");
-    error.clear();
-    const bool tripped = Trip(emit, device, error);
-    // RebootNow 成功即不返回（bugcheck 会停住内核）
-    emit.warn(FormatW(L"bugcheck did not reset the machine: %ls", error.c_str()));
-    (void)tripped;
+    // 为什么不 bugcheck（早期版本在这里读一次回车就 KeBugCheckEx(0x0D000721)）：
+    // 那个动作的理由是"防止内存里的注册表刷回磁盘覆盖我们写上去的 hive"，而它在冻结的机器上
+    // 不成立 —— Windows 自己的任何写入都走磁盘栈、被还原软件重定向到增量区，到不了基线，所以
+    // 内存里那份注册表**盖不掉**我们写上去的 hive。本轮的目的（让过滤驱动下次启动不再加载）
+    // 只取决于基线被写成了什么，**按一次普通重启同样能生效**，而且普通重启不会丢掉内存里的
+    // 注册表 —— 读回校验没通过时它还是更安全的那条路。
+    emit.ok(L"all writes are complete and verified");
+    emit.warn(L"handing the reboot back to you: nothing is reset automatically. Restart the machine "
+              L"yourself when you are ready -- a normal reboot applies this change. If the read-back "
+              L"above did not verify, a normal reboot is the safer choice: it cannot lose the "
+              L"in-memory registry, and whether the filter drivers stop loading afterwards is the "
+              L"real answer to whether the write landed");
+    result.ok = true;
     return result;
 }
 
@@ -1593,9 +1560,7 @@ MeltResult DryRun(const MeltOptions& opt, const MeltLogger& log) {
 //      （4 MiB new file / 同内容全尺寸新名 / 大小二分），把证据全留在日志里。
 // 最后在任何写动作完成前卸载并删除 WinDisk 服务，机器回到它来的样子。
 MeltResult RunPreflightScan(const MeltOptions& opt, const MeltLogger& log) {
-    // 这类选项在本入口里和 reset / confirm 没任何关系：dry-run 日志
-    // 不允许被手动按 Enter（这里也不响是不是有人给了那种选项）。
-    (void)opt.manualBugcheck;
+    // confirm 在本入口里没有意义：这条链路不写 SYSTEM/RegBack，也没有需要人确认的动作。
     (void)opt.confirm;
     MeltResult result;
     const Log emit{&result, log};

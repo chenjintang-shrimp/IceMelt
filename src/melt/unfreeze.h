@@ -12,7 +12,12 @@
 //     → 经 ntfs-3g 读回逐字节校验 + base block 断言
 //   8b 同一份 hive 也写进 config\RegBack\SYSTEM（若存在），让主/备代数一致
 //   9 只读检查 SYSTEM.LOG / .LOG1 / .LOG2（**不改动**：清零在干净 hive 下不改变任何结果）
-//  10 置系统卷的 dirty 标记（autochk 下次启动即检查它）→ 硬重启
+//  10 置系统卷的 dirty 标记（autochk 下次启动即检查它）→ 卸载驱动，把重启交回给操作者
+//
+// **本工具不做任何自动复位**：改动是在基线（裸盘）上的，按一次普通重启就能生效，所以
+// 重启这一步交回给人 —— 他能先读完日志、再用别的工具核对现场。没有任何路径会去 bugcheck
+// 这台机器（早期版本在这里读一次回车就 KeBugCheckEx，已移除：它存在的理由是"防止内存里的
+// 注册表刷回磁盘覆盖我们写的 hive"，而那个理由在冻结的机器上不成立）。
 //
 // 第 7 步与第 10 步之间保证无用户交互：confirm 为空时非 dryRun 直接中止，
 // 拒绝在没有确认回调的情况下落盘。
@@ -59,14 +64,6 @@ struct MeltOptions {
     std::filesystem::path winDiskSysPath;   // 缺省 <exeDir>/WinDisk_x64.sys
     std::filesystem::path hiveOutPath;      // 缺省 %TEMP%\secmelt-system.hive
     std::filesystem::path exeDir;           // 缺省 ExeDir()
-    // 第 10 步的复位是否由人手动触发（而不是写完就自动 bugcheck）。
-    //
-    // 用途：自动复位会立刻把机器打下去，操作者来不及看日志、也来不及用别的工具核对现场。
-    // CLI 模式下因此默认等一次回车再触发。
-    //
-    // **等待是有代价的**：写完裸盘之后，内存里那份注册表迟早会被懒写回覆盖磁盘上刚写好的
-    // hive。所以这是"给你一点时间看清楚"，不是"可以慢慢来"。
-    bool manualBugcheck = false;
     // 非 dryRun 时必需：收到「待确认」清单后返回是否继续。为空即中止。
     std::function<bool(const struct MeltResult&)> confirm;
 };
@@ -78,7 +75,7 @@ struct MeltResult {
     bool wroteDisk = false;
     std::vector<std::wstring> log;      // 全量日志（ASCII）
     std::vector<std::wstring> pending;  // 待用户确认的动作（仅第 7 步）：
-                                        // 将写入的 hive 与其 RegBack 副本、将置的卷标记、复位
+                                        // 将写入的 hive 与其 RegBack 副本、将置的卷标记、重启指引
 };
 
 using MeltLogger = std::function<void(const std::wstring&)>;

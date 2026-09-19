@@ -3,7 +3,6 @@
 // 设备与 IOCTL 契约的唯一来源是 third_party/WinDisk/Public.h：
 //   设备符号链接  \\.\WDLink
 //   CTL_CHANGE_TARGET_DISK  切换目标磁盘（入参为宽字符串 "\Device\HarddiskN\DR0"）
-//   CTL_REBOOT_SYSTEM       直接走 HalReturnToFirmware(HalRebootRoutine) 硬重启
 //
 // 写路径：驱动在 IRP_MJ_WRITE 里做「读整扇区 → 覆盖 → 写回」，因此支持非扇区对齐的
 // 偏移与长度；偏移是**磁盘绝对字节偏移**（卷偏移要由调用方加进去）。
@@ -46,9 +45,6 @@ public:
 
     // 关闭用户态设备句柄；调用方随后可删除 WinDisk 的 SCM 服务项。
     void Close();
-
-    // CTL_REBOOT_SYSTEM：硬重启。调用后不返回（若发生中止即为失败）。
-    bool RebootNow(std::wstring &error);
 
     HANDLE raw() const { return handle_; }
     bool valid() const;

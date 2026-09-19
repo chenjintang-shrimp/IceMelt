@@ -494,28 +494,23 @@ int MeltApply(const std::filesystem::path& exeDir, bool runNtfsFix) {
     opt.exeDir = exeDir;
     opt.runNtfsFix = runNtfsFix;
     opt.winDiskSysPath = exeDir / L"WinDisk_x64.sys";
-    // CLI 模式：复位由人按回车触发，不自动打下去。自动复位会让人来不及看日志、也来不及用别的
-    // 工具核对现场（"--melt 跑完就黑屏，不知道发生了什么"正是这个问题）。代价是这段时间里内存
-    // 中的注册表可能被懒写回覆盖我们刚写进磁盘的 hive —— 所以提示语里明确要求"尽快"。
-    opt.manualBugcheck = true;
+    // 这一版不复位：写完并逐字节验证之后交回给操作者，由他自己重启（理由见 RunMelt 第 10 步）。
     opt.confirm = [](const MeltResult&) { return true; };
 
     Print(L"SecMelt melt (non-interactive; --yes-i-know was given)");
     Print(L"WARNING: this overwrites the SYSTEM hive on the raw disk and also its RegBack copy,");
-    Print(L"         so no earlier hive generation survives on this machine; then it resets the");
-    Print(L"         machine by bugcheck. There is no rollback: System Restore cannot undo it -");
-    Print(L"         only a VM snapshot taken beforehand can.");
-    Print(L"The reset is MANUAL in this mode: after the writes you will be asked to press Enter, so");
-    Print(L"you can read the log first. Until you press it, the registry in memory can overwrite the");
-    Print(L"hive on disk - do not walk away.");
+    Print(L"         so no earlier hive generation survives on this machine. There is no rollback:");
+    Print(L"         System Restore cannot undo it - only a VM snapshot taken beforehand can.");
+    Print(L"No reset is triggered: once the writes verify, reboot the machine yourself with a normal");
+    Print(L"restart - that is what applies the change. The log stays on screen until you do.");
     const MeltResult result = RunMelt(opt, [](const std::wstring& line) { Print(line); });
     if (!result.pending.empty()) {
         Print(L"--- planned actions ---");
         for (const auto& item : result.pending) Print(L"  " + item);
     }
     if (!result.ok) {
-        // ok 仅在 dryRun 时为 true；落盘路径走到 bugcheck 就再也不会返回，
-        // 所以"走到这里且 ok=false"意味着中途失败（日志里已有原因）。
+        // ok=true 只有两种来路：dryRun 预演跑完，或落盘路径写完且逐字节验证通过。
+        // 所以"走到这里且 ok=false"就是中途失败（日志里已有原因）。
         Print(result.wroteDisk
                   ? L"FAILED: the raw disk was already written - state may be inconsistent, "
                     L"reboot now or restore from backup"

@@ -120,21 +120,6 @@ bool WinDiskDevice::ReadAt(uint64_t byteOffset, void* data, size_t len, std::wst
     return true;
 }
 
-bool WinDiskDevice::RebootNow(std::wstring& error) {
-    if (!valid()) {
-        error = L"device is not open";
-        return false;
-    }
-    // HalReturnToFirmware(HalRebootRoutine) 不返回；能返回即说明没重启成功
-    DWORD returned = 0;
-    if (!::DeviceIoControl(handle_, CTL_REBOOT_SYSTEM, nullptr, 0, nullptr, 0, &returned, nullptr)) {
-        error = FormatW(L"CTL_REBOOT_SYSTEM failed: %u", ::GetLastError());
-        return false;
-    }
-    error = L"CTL_REBOOT_SYSTEM returned without rebooting";
-    return false;
-}
-
 DriverLoad LoadDriver(const std::filesystem::path& sysPath, const std::wstring& serviceName,
                       std::wstring& error) {
     if (!secmelt::PathIsRegularFile(sysPath)) {
