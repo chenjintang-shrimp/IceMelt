@@ -8,7 +8,7 @@
 --   * 工具链判定走 get_config("toolchain")
 
 set_project("SecMelt")
-set_version("0.1.0")
+set_version("1.0.0")
 
 -- 整体以 GPLv3 发布。third_party/ntfs-3g 为 GPL-2.0-or-later（允许升到 v3），
 -- third_party/KDU 为 MIT（可并入 GPLv3 作品）。见 LICENSE 与 README 的许可说明。

@@ -1,0 +1,100 @@
+name: build
+
+# 一条 xmake build 驱动四个工具链各异的产物：secmelt.exe（clang-cl）、WinDisk.sys（WDK）、
+# ntfs-3g 工具（mingw-w64 gcc）、KDU（MSVC + MASM）。子工程缺前置时会 skip 并打印原因，
+# 所以这里显式断言"落位后的组合是完整的"——否则构建会"成功"但产物不可用。
+on:
+  push:
+    branches: [main]
+    tags: ["v*", "[0-9]*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    name: secmelt + WinDisk.sys + ntfs-3g tools
+    runs-on: windows-2022
+    env:
+      # 根 xmake.lua 只在没给出 env 时退回 D:\msys64；GH runner 的 MSYS2 装在 C: 下
+      MSYS_ROOT: C:\msys64
+      MINGW_ROOT: C:\msys64\mingw64
+      # 驱动目标系统版本：win7 → 产物最低子系统版本 6.01，Win7 SP1 起都能加载
+      SECMELT_WDK_WINVER: win7
+    steps:
+      - name: Checkout (submodules included)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          # 与 xmake.lua 里记录的 v3 约束对齐：v2 没有这些行为（add_requires 必须在根作用域、
+          # 没有 check_cxflags/import、get_config 语义不同）
+          xmake-version: '3.0.9'
+
+      - name: Install mingw-w64 toolchain (msvcrt, not ucrt64)
+        shell: cmd
+        run: C:\msys64\usr\bin\bash.exe -lc "pacman -S --noconfirm --needed mingw-w64-x86_64-gcc"
+
+      - name: Report toolchain versions
+        shell: pwsh
+        run: |
+          xmake --version
+          clang-cl --version
+          & "$env:MINGW_ROOT\bin\gcc.exe" --version | Select-Object -First 1
+
+      - name: Preflight dependency check
+        shell: pwsh
+        run: pwsh -File configure.ps1
+
+      - name: Configure
+        run: xmake f --yes -p windows -a x64 --toolchain=clang-cl
+
+      - name: Build
+        run: xmake build
+
+      - name: Assert the bundle is complete
+        shell: pwsh
+        run: |
+          $out = 'build\windows\x64\release'
+          $required = @(
+            'secmelt.exe', 'WinDisk_x64.sys', 'kdu.exe', 'drv64.dll', 'targets.txt',
+            'tools\ntfscp.exe', 'tools\ntfsfix.exe', 'tools\ntfs-3g-cli.exe', 'tools\mkntfs.exe'
+          )
+          $missing = @($required | Where-Object { -not (Test-Path (Join-Path $out $_)) })
+          if ($missing.Count) { throw "bundle incomplete, missing: $($missing -join ', ')" }
+          Get-ChildItem $out -Recurse -File | Select-Object @{n = 'File'; e = { $_.FullName } },
+              @{n = 'Bytes'; e = { $_.Length } } | Format-Table -AutoSize
+
+      - name: "Smoke test (non-elevated: no driver load, no hive, no raw disk)"
+        shell: pwsh
+        run: |
+          # --dump 是纯报告：非提权时驱动装载探测与 RegLoadKey 路径都不会被执行，
+          # 因此在 runner 上也不可能碰到驱动或注册表 hive。
+          $exe = 'build\windows\x64\release\secmelt.exe'
+          & $exe --help | Out-String | Write-Host
+          $dump = (& $exe --dump 2>&1 | Out-String)
+          $dump | Write-Host
+          if ($dump -notmatch 'SecMelt :: Melt') { throw 'dump did not render the melt frame' }
+          if ($dump -notmatch 'state on this machine') { throw 'dump did not probe the target list' }
+          # 退出码 = 自检是否全绿；runner 上必然有一条不绿（进程非提权），故只断言自检真的跑了
+          if ($dump -notmatch 'CHECK FAILED|ALL SYSTEMS GO') { throw 'dump did not run the self-check' }
+
+      - name: Assert the driver cannot reset the machine
+        shell: pwsh
+        run: |
+          # 本版移除了整条 bugcheck 路径，复位交给操作者：驱动不得再引用 KeBugCheckEx
+          $sys = 'build\windows\x64\release\WinDisk_x64.sys'
+          $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($sys))
+          if ($text.Contains('KeBugCheckEx')) { throw "$sys still imports KeBugCheckEx" }
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: secmelt-windows-x64
+          path: build/windows/x64/release/**
+          if-no-files-found: error
