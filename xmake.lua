@@ -7,8 +7,36 @@
 --   * 没有 check_cxflags / import / os.run，无法在 xmake.lua 里探测 flag 支持
 --   * 工具链判定走 get_config("toolchain")
 
+-- xmake pack 的 DSL（xpack()）。只有打包时才用得到，但必须在这里 include：
+-- 不 include 的话 xmake.lua 里写 xpack() 会直接报 nil。
+includes("@builtin/xpack")
+
 set_project("IceMelt")
-set_version("1.0.0")
+
+-- 版本：本文件固定 0.0.0（开发/自建态）。发版时由 CI 在 configure 阶段临时覆盖：
+--     xmake f --app_version=1.0.0      # tag 去掉前缀 v 的纯数字三段
+-- 它是唯一的版本源，同时决定两处：exe 的版本资源（resource/version-*.rc.in）与
+-- xmake pack 的包名（IceMelt-v<版本>-cli / IceMelt-GUI-v<版本>-gui）。
+--
+-- 注意用字典型声明：xmake 的 DSL 作用域是"粘"的，`option("x") ... end` 那种块写法
+-- 之后，根作用域的函数（set_project/set_version/...）会解析成 nil 直接报错。
+option("app_version", {
+    default = "0.0.0",
+    description = "覆盖项目版本（发版时传 tag 去掉前缀 v）；默认 0.0.0"
+})
+
+local APP_VERSION = get_config("app_version")
+if not APP_VERSION or APP_VERSION == "" then
+    APP_VERSION = "0.0.0"
+end
+set_version(APP_VERSION)
+
+-- 版本资源：模板生成到 $(builddir)/version-{cli,gui}.rc，再由两个前端各自编译进自己的
+-- exe（图形前端还有一份 manifest rc，两者各管一件事）。变量名是 xmake 内置的
+-- @VERSION@ / @VERSION_MAJOR@ / @VERSION_MINOR@ / @VERSION_ALTER@（第三段叫 ALTER，
+-- 没有 PATCH），且必须显式给 pattern —— 默认只替换 ${VAR} 语法。
+add_configfiles("resource/version-cli.rc.in", {pattern = "@([%w_]+)@"})
+add_configfiles("resource/version-gui.rc.in", {pattern = "@([%w_]+)@"})
 
 -- 整体以 GPLv3 发布。third_party/ntfs-3g 为 GPL-2.0-or-later（允许升到 v3），
 -- third_party/KDU 为 MIT（可并入 GPLv3 作品）。见 LICENSE 与 README 的许可说明。
@@ -192,6 +220,21 @@ end
     end
 end
 
+-- ============================================================================
+-- 运行期资产（exe 旁边那一套组合）：after_build 把它们从三方产物复制到目标目录，
+-- 下面这份清单再把它们登记成"安装文件"—— xmake pack 出的 zip 因此自带完整组合，
+-- `xmake install` 也能得到同一套布局。清单与 after_build 的落位一一对应，改一处要改两处。
+-- ============================================================================
+local RUNTIME_STAGE = "$(builddir)/$(plat)/$(arch)/$(mode)"
+local RUNTIME_ASSETS = {"WinDisk_x64.sys", "kdu.exe", "drv64.dll", "targets.txt"}
+
+local function install_runtime_assets()
+    for _, name in ipairs(RUNTIME_ASSETS) do
+        add_installfiles(RUNTIME_STAGE .. "/" .. name)
+    end
+    add_installfiles(RUNTIME_STAGE .. "/tools/*.exe", {prefixdir = "tools"})
+end
+
 target("icemelt")
     set_kind("binary")
     -- 显式列目录而不是 src/**.cpp：src/gui 是独立 target（有自己的入口点，且要
@@ -202,6 +245,15 @@ target("icemelt")
         "src/reg/*.cpp",
         "src/melt/*.cpp"
     )
+
+    -- 版本资源（生成的 rc）：没有它，exe 的"属性 → 详细信息"里就没有版本号。
+    -- always_added：配置阶段这个文件还没生成，靠它才能进文件列表。
+    add_files("$(builddir)/version-cli.rc", {always_added = true})
+
+    -- 双击即用的两个入口，随 CLI 包分发（内容见仓库根的 preflight.bat / melt.bat）
+    add_installfiles("preflight.bat", "melt.bat")
+
+    install_runtime_assets()
 
     -- 源码按 reg/ raw/ melt/ 分目录，内部一律用 "目录/头文件.h" 形式互相引用，
     -- 因此 src 本身要在搜索路径上。
@@ -246,6 +298,11 @@ target("icemelt-gui")
         add_files("src/gui/icemelt.rc")
     end
 
+    -- 版本资源（生成的 rc），与上面的 manifest rc 各管一件事
+    add_files("$(builddir)/version-gui.rc", {always_added = true})
+
+    install_runtime_assets()
+
     add_packages("imgui")
 
     -- src/gui 同时进 rc.exe 的 /I：RT_MANIFEST 里的文件名按包含路径解析
@@ -267,3 +324,28 @@ target("icemelt-gui")
                      "d3d9", "imm32", "dwmapi")
         add_ldflags("/subsystem:windows,6.01")
     end
+
+-- ============================================================================
+-- 发布包：xmake pack -f zip -o dist
+--
+--   IceMelt-v<版本>-cli.zip        命令行前端：icemelt.exe + preflight.bat / melt.bat
+--   IceMelt-GUI-v<版本>-gui.zip    图形前端：icemelt-gui.exe
+--
+-- 两个包都自带一份完整的运行期资产（驱动 / kdu / 名单 / ntfs-3g 工具）—— 内容取自
+-- 各 target 的安装文件清单（见 install_runtime_assets），所以"包里有什么"与
+-- "exe 旁边有什么"是同一份定义，不会各自漂移。版本来自 set_version（CI 用
+-- --app_version 覆盖），zip 名里的 v 只是命名习惯，版本资源里不带 v。
+--
+-- 平铺到包根（set_bindir(".")）：目标机上是"解压即用"的一套组合，不套 bin/ 层。
+-- ============================================================================
+xpack("cli")
+    set_formats("zip")
+    set_bindir(".")
+    set_basename("IceMelt-v$(version)-cli")
+    add_targets("icemelt")
+
+xpack("gui")
+    set_formats("zip")
+    set_bindir(".")
+    set_basename("IceMelt-GUI-v$(version)-gui")
+    add_targets("icemelt-gui")
