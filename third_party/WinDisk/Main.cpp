@@ -2,6 +2,10 @@
 #include "DataList.h"
 #include "FileUnlock.h"
 
+/* 这套 Win7 WDK 头没有导出的 MmIsAddressValid 原型（NT 导出，老驱动通吃）。
+ * 手动声明；语义：虚址当前可安全解引用（映射可用）返回 TRUE。 */
+extern "C" NTKERNELAPI BOOLEAN NTAPI MmIsAddressValid(_In_ PVOID VirtualAddress);
+
 // CTL_REBOOT_SYSTEM 直接触发 bugcheck，而不是走 HalReturnToFirmware(HalRebootRoutine)。
 //
 // 两条路都会立刻复位机器，区别在于 bugcheck 之后内核不再有机会把内存里脏的注册表
@@ -74,7 +78,7 @@ namespace FSDAntiHook
 			 * 顺着 SizeOfImage 扫到映像尾部必然 PAGE_FAULT_IN_NONPAGED_AREA。
 			 * 逐页探活，第一个不可映射点即止步；截断点本身也是情报：
 			 * saved-original 只可能藏在它之前的 .data 里。 */
-			if (!MmIsAddressValid(img + off))
+			if (!MmIsAddressValid((PVOID)(img + off)))
 			{
 				LogWarn("  %wZ image unmapped past +0x%llX (size 0x%X includes discarded pages); "
 				        "stopping scan here\n",
