@@ -1,18 +1,18 @@
-// SecMelt —— 命令行前端（无交互界面）
+// IceMelt —— 命令行前端（无交互界面）
 //
 // 每条子命令都是"跑完打印报告就退出"的进程，不需要任何可交互终端 —— 这正是 Windows 7
 // 原生 conhost（不解释 VT 转义序列）上唯一能工作的形态。需要点按式交互时用图形前端
-// secmelt-gui（源码在 src/gui），它与这里共用同一份 pipeline 源码。
+// icemelt-gui（源码在 src/gui），它与这里共用同一份 pipeline 源码。
 //
 // 用法：
-//   secmelt --help          本说明
-//   secmelt --dump          自检报告：环境 + 构建期资产 + 名单的实测存在状态（只读，不碰盘）
-//   secmelt --dry-run       只读预演整条链路：预检 + 只读注册表探测 + 导出/校验 hive
-//   secmelt --preflight     melt 前的根因扫描（logstate 守卫 + 目录层级探针 + 拆解报告）
-//   secmelt --melt --yes-i-know 非交互执行整条链路（破坏性；不自动复位）
-//   secmelt --selftest-hive 校验 hive base block 偏移与校验和算法
-//   secmelt --selftest-registry 在 scratch 键上验证过滤器摘除的写入路径
-//   secmelt --selftest-raw  裸盘写入/读回判定（会装载内核驱动、写系统卷，仅限虚拟机）
+//   icemelt --help          本说明
+//   icemelt --dump          自检报告：环境 + 构建期资产 + 名单的实测存在状态（只读，不碰盘）
+//   icemelt --dry-run       只读预演整条链路：预检 + 只读注册表探测 + 导出/校验 hive
+//   icemelt --preflight     melt 前的根因扫描（logstate 守卫 + 目录层级探针 + 拆解报告）
+//   icemelt --melt --yes-i-know 非交互执行整条链路（破坏性；不自动复位）
+//   icemelt --selftest-hive 校验 hive base block 偏移与校验和算法
+//   icemelt --selftest-registry 在 scratch 键上验证过滤器摘除的写入路径
+//   icemelt --selftest-raw  裸盘写入/读回判定（会装载内核驱动、写系统卷，仅限虚拟机）
 //
 // 文案刻意保持 ASCII —— Windows 控制台默认代码页多为 936(GBK)，非 ASCII 文案在部分
 // 终端会花屏；宽字符只用于 Win32 API 边界与 UTF-8 名单文件。着色规则见 util.h::CliPaint。
@@ -47,16 +47,16 @@ struct Check {
 // 所有 CLI 输出都从这里走：着色规则（出错醒目红色、[!] 琥珀、其余白色）与
 // --preflight/--selftest-* 是同一套，判定在 util.cpp::CliPaint 里。
 void Print(const std::wstring& line) {
-    std::cout << secmelt::Narrow(secmelt::CliPaint(line)) << "\n";
+    std::cout << icemelt::Narrow(icemelt::CliPaint(line)) << "\n";
 }
 
-std::wstring W(const std::string& s) { return secmelt::Widen(s); }
+std::wstring W(const std::string& s) { return icemelt::Widen(s); }
 
 // 一行检查结果：`[+] 标签  细节`；不通过时再补一行处置动作。
 void PrintCheck(const Check& c) {
-    Print(secmelt::FormatW(L"%ls %-34ls %ls", c.ok ? L"[+]" : L"[x]", W(c.label).c_str(),
+    Print(icemelt::FormatW(L"%ls %-34ls %ls", c.ok ? L"[+]" : L"[x]", W(c.label).c_str(),
                            W(c.detail).c_str()));
-    if (!c.ok && !c.hint.empty()) Print(secmelt::FormatW(L"    -> %ls", W(c.hint).c_str()));
+    if (!c.ok && !c.hint.empty()) Print(icemelt::FormatW(L"    -> %ls", W(c.hint).c_str()));
 }
 
 std::wstring RegReadString(HKEY root, const wchar_t* subkey, const wchar_t* name) {
@@ -75,13 +75,13 @@ fs::path FindProjectRoot() {
     if (::GetModuleFileNameW(nullptr, exe, MAX_PATH) > 0) {
         fs::path dir = fs::path(exe).parent_path();
         for (int i = 0; i < 8 && !dir.empty(); ++i) {
-            if (secmelt::PathIsDirectory(dir / "third_party")) return dir;
+            if (icemelt::PathIsDirectory(dir / "third_party")) return dir;
             const fs::path parent = dir.parent_path();
             if (parent == dir) break;
             dir = parent;
         }
     }
-    return secmelt::CurrentDirectory();
+    return icemelt::CurrentDirectory();
 }
 
 // 用一次真实的装载尝试来判断"签名强制有没有在拦"，被拦下就 kdu -dse 0 再复测 ——
@@ -96,14 +96,14 @@ fs::path FindProjectRoot() {
 // 而不只是"DSE 开没开"——那正好就是 melt 下一步要依赖的事实。
 //
 // allowDseFix=false（--dump）：只探测不动系统，报告里说清"这一步由 Melt 完成"。
-secmelt::DriverLoadOutcome ProbeDriverLoad(const fs::path& exeDir, bool allowDseFix) {
-    return secmelt::EnsureUnsignedDriverLoads(exeDir, allowDseFix);
+icemelt::DriverLoadOutcome ProbeDriverLoad(const fs::path& exeDir, bool allowDseFix) {
+    return icemelt::EnsureUnsignedDriverLoads(exeDir, allowDseFix);
 }
 
 std::vector<Check> RunEnvironmentChecks(bool allowDseFix) {
     std::vector<Check> out;
 
-    const bool elevated = secmelt::IsProcessElevated();
+    const bool elevated = icemelt::IsProcessElevated();
     out.push_back({"Administrator token", elevated,
                    elevated ? "elevated" : "NOT elevated (driver load / raw disk I/O will fail)",
                    elevated ? "" : "relaunch from an elevated prompt (Run as administrator)"});
@@ -133,10 +133,10 @@ std::vector<Check> RunEnvironmentChecks(bool allowDseFix) {
         if (product.rfind(kWin10, 0) == 0) product = L"Windows 11" + product.substr(kWin10.size());
     }
 
-    std::string version = secmelt::Narrow(product);
+    std::string version = icemelt::Narrow(product);
     if (!build.empty()) {
-        version += "  build " + secmelt::Narrow(build);
-        if (!ubr.empty()) version += "." + secmelt::Narrow(ubr);
+        version += "  build " + icemelt::Narrow(build);
+        if (!ubr.empty()) version += "." + icemelt::Narrow(ubr);
     }
     out.push_back({"Windows version", !product.empty(), version.empty() ? "unknown" : version,
                    "cannot read HKLM\\...\\Windows NT\\CurrentVersion"});
@@ -147,9 +147,9 @@ std::vector<Check> RunEnvironmentChecks(bool allowDseFix) {
         out.push_back({"Driver signature enforcement", true,
                        "not probed (the load probe needs an elevated prompt)", ""});
     } else {
-        const secmelt::DriverLoadOutcome load = ProbeDriverLoad(secmelt::ExeDir(), allowDseFix);
+        const icemelt::DriverLoadOutcome load = ProbeDriverLoad(icemelt::ExeDir(), allowDseFix);
         switch (load.result) {
-            case secmelt::DriverLoad::Loaded:
+            case icemelt::DriverLoad::Loaded:
                 if (load.kduRan) {
                     // 这次探测自己把 DSE 关掉了 —— 这是结论，不是预测。
                     out.push_back({"Driver signature enforcement", true,
@@ -161,7 +161,7 @@ std::vector<Check> RunEnvironmentChecks(bool allowDseFix) {
                                    "not blocking: the unsigned WinDisk.sys is loaded", ""});
                 }
                 break;
-            case secmelt::DriverLoad::SignatureRejected:
+            case icemelt::DriverLoad::SignatureRejected:
                 // 想关但没关成：要么被允许去关却没成功，要么这条路径不许动系统。
                 if (load.kduRan) {
                     out.push_back({"Driver signature enforcement", false,
@@ -177,11 +177,11 @@ std::vector<Check> RunEnvironmentChecks(bool allowDseFix) {
                                    ""});
                 }
                 break;
-            case secmelt::DriverLoad::Failed:
+            case icemelt::DriverLoad::Failed:
                 // 577 以外的失败与签名无关（服务注册、驱动文件、权限…），要人去处理。
                 out.push_back({"Driver signature enforcement", false,
-                               secmelt::Narrow(load.firstError),
-                               "run: secmelt --selftest-raw (in a VM) to see the full error"});
+                               icemelt::Narrow(load.firstError),
+                               "run: icemelt --selftest-raw (in a VM) to see the full error"});
                 break;
         }
     }
@@ -207,7 +207,7 @@ std::vector<Check> RunAssetChecks(const fs::path& root) {
     // 运行时不需要它们（运行时要的是 exe 旁边的 WinDisk_x64.sys / kdu.exe / drv64.dll /
     // targets.txt / tools）。源码树不在时只报一行，否则部署包里会刷出 6 条"缺失"故障，
     // 把真正需要人处理的问题淹掉。
-    if (!secmelt::PathIsDirectory(root / "third_party")) {
+    if (!icemelt::PathIsDirectory(root / "third_party")) {
         return {{"Source tree", true,
                  "not present (deployed bundle: build-time assets are not checked here)", ""}};
     }
@@ -215,7 +215,7 @@ std::vector<Check> RunAssetChecks(const fs::path& root) {
     std::vector<Check> out;
     for (const auto& asset : kAssets) {
         const fs::path full = root / asset.relative;
-        const bool exists = secmelt::PathIsRegularFile(full);
+        const bool exists = icemelt::PathIsRegularFile(full);
         out.push_back({asset.label, exists,
                        exists ? std::string("present")
                               : (std::string("missing: ") + asset.relative),
@@ -233,29 +233,29 @@ struct TargetRow {
 };
 
 std::vector<TargetRow> ProbeTargetRows(const fs::path& exeDir) {
-    const auto targets = secmelt::LoadTargets(exeDir);
-    const auto names = secmelt::TargetNames(targets);
-    const secmelt::ProbeReport probe = secmelt::ProbeTargets(names);
+    const auto targets = icemelt::LoadTargets(exeDir);
+    const auto names = icemelt::TargetNames(targets);
+    const icemelt::ProbeReport probe = icemelt::ProbeTargets(names);
 
     std::vector<TargetRow> rows;
     rows.reserve(targets.size());
     for (const auto& t : targets) {
         TargetRow row;
-        row.name = secmelt::Narrow(t.name);
-        row.label = secmelt::Narrow(t.label);
+        row.name = icemelt::Narrow(t.name);
+        row.label = icemelt::Narrow(t.label);
 
         std::vector<std::string> where;
         for (const auto& f : probe.filters) {
             for (const auto& item : f.items) {
                 if (_wcsicmp(item.c_str(), t.name.c_str()) == 0) {
-                    where.push_back("Class\\" + secmelt::Narrow(f.classGuid) + "\\" +
-                                    secmelt::Narrow(f.valueName));
+                    where.push_back("Class\\" + icemelt::Narrow(f.classGuid) + "\\" +
+                                    icemelt::Narrow(f.valueName));
                 }
             }
         }
         for (const auto& key : probe.existingServiceKeys) {
             if (_wcsicmp(key.c_str(), t.name.c_str()) == 0)
-                where.push_back("Services\\" + secmelt::Narrow(key));
+                where.push_back("Services\\" + icemelt::Narrow(key));
         }
 
         row.present = !where.empty();
@@ -278,16 +278,16 @@ std::vector<TargetRow> ProbeTargetRows(const fs::path& exeDir) {
 int DumpMode(const fs::path& root) {
     // 运行期资产（targets.txt）相对 exe 目录解析，源码树根 root 只用于构建期资产自检
     // 与报告里的路径显示 —— 两者在部署包里不是一回事。
-    const fs::path exeDir = secmelt::ExeDir();
+    const fs::path exeDir = icemelt::ExeDir();
     // --dump 是纯报告：探测装载（判 DSE），但**不动系统** —— 不去调用 kdu。
     const auto environment = RunEnvironmentChecks(/*allowDseFix=*/false);
     const auto assets = RunAssetChecks(root);
     const auto rows = ProbeTargetRows(exeDir);
 
-    Print(L" SecMelt :: Melt - self-check (dump mode)");
-    Print(secmelt::FormatW(L" %ls  checks executed", secmelt::Timestamp().c_str()));
-    Print(secmelt::FormatW(L" project root : %ls", root.c_str()));
-    Print(secmelt::FormatW(L" exe dir      : %ls", exeDir.c_str()));
+    Print(L" IceMelt :: Melt - self-check (dump mode)");
+    Print(icemelt::FormatW(L" %ls  checks executed", icemelt::Timestamp().c_str()));
+    Print(icemelt::FormatW(L" project root : %ls", root.c_str()));
+    Print(icemelt::FormatW(L" exe dir      : %ls", exeDir.c_str()));
 
     size_t failed = 0;
     Print(L"--- environment ---");
@@ -305,7 +305,7 @@ int DumpMode(const fs::path& root) {
     for (const auto& row : rows) {
         // 名单里的项存在 = 需要处理，用 [x] 让它在支持 ANSI 的终端里醒目（红）。
         // 只给 ASCII 的 name 列做定宽：label 是中文，按 UTF-16 单元补齐反而会对不齐。
-        Print(secmelt::FormatW(L"%ls %-16ls %ls  %ls", row.present ? L"[x]" : L"[ ]",
+        Print(icemelt::FormatW(L"%ls %-16ls %ls  %ls", row.present ? L"[x]" : L"[ ]",
                                W(row.name).c_str(), W(row.label).c_str(), W(row.status).c_str()));
     }
 
@@ -313,25 +313,25 @@ int DumpMode(const fs::path& root) {
     if (failed == 0) {
         Print(L"[+] ALL SYSTEMS GO");
     } else {
-        Print(secmelt::FormatW(L"[x] CHECK FAILED: %zu unsatisfied", failed));
+        Print(icemelt::FormatW(L"[x] CHECK FAILED: %zu unsatisfied", failed));
     }
     return failed == 0 ? 0 : 1;
 }
 
 void PrintUsage() {
-    std::cout << "SecMelt - command line front end (the graphical front end is secmelt-gui)\n"
-                 "  secmelt --dump           self-check report, then exit (no TTY needed)\n"
-                 "  secmelt --dry-run        rehearse the whole chain without writing the disk\n"
-                 "  secmelt --preflight      one-shot root-cause scan: logstate + directory\n"
+    std::cout << "IceMelt - command line front end (the graphical front end is icemelt-gui)\n"
+                 "  icemelt --dump           self-check report, then exit (no TTY needed)\n"
+                 "  icemelt --dry-run        rehearse the whole chain without writing the disk\n"
+                 "  icemelt --preflight      one-shot root-cause scan: logstate + directory\n"
                  "                           tier probing + DiagnoseWritePath breakdown, then stop\n"
-                 "  secmelt --melt --yes-i-know\n"
+                 "  icemelt --melt --yes-i-know\n"
                  "                           non-interactive apply: strip filters, write the hive\n"
                  "                           (and its RegBack copy), then reboot the machine by hand\n"
                  "                           once it reports the writes verified (no auto reset)\n"
-                 "  secmelt --selftest-hive  verify regf base block offsets and checksum algorithm\n"
-                 "  secmelt --selftest-registry\n"
+                 "  icemelt --selftest-hive  verify regf base block offsets and checksum algorithm\n"
+                 "  icemelt --selftest-registry\n"
                  "                           exercise the filter-stripping write path on a scratch key\n"
-                 "  secmelt --selftest-raw   raw disk write/read-back check (loads a kernel driver,\n"
+                 "  icemelt --selftest-raw   raw disk write/read-back check (loads a kernel driver,\n"
                  "                           writes the system volume: run in a VM only)\n";
 }
 
@@ -362,8 +362,8 @@ int main(int argc, char** argv) {
         else if (arg == "--selftest-raw") selftestRaw = true;
         else if (arg == "--help" || arg == "-h") help = true;
         else {
-            std::cout << secmelt::Narrow(
-                             secmelt::CliPaint(L"unknown option: " + secmelt::Widen(std::string(arg))))
+            std::cout << icemelt::Narrow(
+                             icemelt::CliPaint(L"unknown option: " + icemelt::Widen(std::string(arg))))
                       << "\n";
             PrintUsage();
             return 2;
@@ -378,7 +378,7 @@ int main(int argc, char** argv) {
     }
 
     const fs::path root = FindProjectRoot();
-    const fs::path exeDir = secmelt::ExeDir();
+    const fs::path exeDir = icemelt::ExeDir();
 
     if (melt) {
         // 落盘不可逆：没有显式 token 就不执行（这是唯一能执行落盘的入口）。
@@ -390,13 +390,13 @@ int main(int argc, char** argv) {
                          "Re-run with --melt --yes-i-know if that is what you want.\n";
             return 2;
         }
-        return secmelt::MeltApply(exeDir);
+        return icemelt::MeltApply(exeDir);
     }
-    if (preflight) return secmelt::PreflightScan(exeDir);
-    if (selftestHive) return secmelt::HiveSelfTest(exeDir);
-    if (selftestRegistry) return secmelt::RegistrySelfTest(exeDir);
-    if (selftestRaw) return secmelt::RawSelfTest(exeDir);
-    if (dryRun) return secmelt::MeltDryRun(exeDir.empty() ? root : exeDir);
+    if (preflight) return icemelt::PreflightScan(exeDir);
+    if (selftestHive) return icemelt::HiveSelfTest(exeDir);
+    if (selftestRegistry) return icemelt::RegistrySelfTest(exeDir);
+    if (selftestRaw) return icemelt::RawSelfTest(exeDir);
+    if (dryRun) return icemelt::MeltDryRun(exeDir.empty() ? root : exeDir);
     if (dump) return DumpMode(root);
 
     // 只给了修饰选项（如 --yes-i-know）而没有动作：同样按缺命令处理。
