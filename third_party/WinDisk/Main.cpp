@@ -105,7 +105,12 @@ namespace FSDAntiHook
 	 *   node+0x98 是被存下的原始 IRP_MJ_SCSI dispatch（DfDiskLo 自己的解析器
 	 *   0x1303c 就是这样按 PDO 查表的）。
 	 * 冰点升级换版本时这些偏移都会变 —— 出缓之前必须打印并验证。 */
-	static const ULONG_PTR kDfHookListGlobal = 0x153b0;
+	/* 注意单位：objdump 里 rip 相对寻址的注释给的是**带 ImageBase 的 VA**
+	 * （样本 ImageBase=0x10000），活动映像要用的是 **RVA**（= VA - ImageBase）。
+	 * 之前误把 0x153B0(VA) 直接加在活动基址上，等于戳到映像外未映射页，
+	 * 以 0x50 收场 —— 这个错误不再犯第二次（崩点地址反推更是如此：
+	 * faultAddr - 0x153B0 恰好等于该次启动的 DfBase）。 */
+	static const ULONG_PTR kDfHookListGlobal = 0x53b0;   /* RVA */
 	static const ULONG_PTR kDfNodeListLink   = 0x100;
 	static const ULONG_PTR kDfNodeDevice     = 0x00;
 	static const ULONG_PTR kDfNodeOriginal   = 0x98;
@@ -115,6 +120,8 @@ namespace FSDAntiHook
 		PLIST_ENTRY* headPtr = (PLIST_ENTRY*)((UCHAR*)hooker->DllBase + kDfHookListGlobal);
 		__try
 		{
+			if (!MmIsAddressValid(headPtr))
+				return NULL;
 			PLIST_ENTRY head = (PLIST_ENTRY)*headPtr;
 			if (!MmIsAddressValid(head))
 				return NULL;
