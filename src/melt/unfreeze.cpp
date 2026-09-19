@@ -940,7 +940,7 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
         emit.step(L"dry-run: the driver is not loaded; whether DSE must be turned off is only "
                   L"decided by an actual load attempt (577 = still enforced)");
     } else {
-        // 装载 + 必要时 kdu -dse 0 + 重新装载复测（与 TUI 的环境自检共用一份实现）
+        // 装载 + 必要时 kdu -dse 0 + 重新装载复测（与两个前端的环境自检共用一份实现）
         const DriverLoadOutcome load = EnsureUnsignedDriverLoads(exeDir, /*allowKdu=*/true);
         if (!load.firstError.empty()) emit.warn(Fail(L"load driver", load.firstError));
         if (load.kduRan) {
@@ -1166,7 +1166,7 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
         L"boot, exactly as chkdsk /f would");
     // 这一条不是"动作"而是必须让人看见的**前提**：写进 RegBack 之后，这个卷上不再存在上一代
     // 副本。而这类机器上系统还原通常被还原类软件禁掉（"系统还原修不动"），本机的自恢复路径
-    // 是死的 —— 唯一的回退手段是虚拟机/宿主机快照。TUI 的确认框只显示 pending，所以放在这里。
+    // 是死的 —— 唯一的回退手段是虚拟机/宿主机快照。前端的确认框只显示 pending，所以放在这里。
     result.pending.push_back(
         L"NO ROLLBACK: the RegBack copy is overwritten too, so no earlier hive generation survives "
         L"on this volume; System Restore is typically disabled by the restore product. Take a VM "

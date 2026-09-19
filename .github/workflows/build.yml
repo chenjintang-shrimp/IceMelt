@@ -116,7 +116,7 @@ jobs:
           & $exe --help | Out-String | Write-Host
           $dump = (& $exe --dump 2>&1 | Out-String)
           $dump | Write-Host
-          if ($dump -notmatch 'SecMelt :: Melt') { throw 'dump did not render the melt frame' }
+          if ($dump -notmatch 'SecMelt :: Melt') { throw 'dump did not print the report header' }
           if ($dump -notmatch 'state on this machine') { throw 'dump did not probe the target list' }
           # 退出码 = 自检是否全绿；runner 上必然有一条不绿（进程非提权），故只断言自检真的跑了
           if ($dump -notmatch 'CHECK FAILED|ALL SYSTEMS GO') { throw 'dump did not run the self-check' }

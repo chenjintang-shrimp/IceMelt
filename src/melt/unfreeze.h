@@ -83,7 +83,7 @@ using MeltLogger = std::function<void(const std::wstring&)>;
 // 执行整条链路。log 可为空；只读阶段（dryRun / 预检 / 第 6 步）不需要提权以外的条件。
 MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log);
 
-// 供 TUI 复用的只读预演（等价于 RunMelt(opt{dryRun=true})）
+// 供两个前端复用的只读预演（等价于 RunMelt(opt{dryRun=true})）
 MeltResult DryRun(const MeltOptions& opt, const MeltLogger& log);
 
 // --preflight 一次性位置扫描：装驱动 + 打开设备后跳过注册表与 hive 写回，只做

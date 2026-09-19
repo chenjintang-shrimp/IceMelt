@@ -30,9 +30,6 @@ local function using_clang_cl()
     return DEFAULT_TOOLCHAIN == "clang-cl"
 end
 
--- FTXUI v7.0.3（xmake-repo，MIT）
-add_requires("ftxui v7.0.3")
-
 -- Dear ImGui（xmake-repo，MIT）：图形前端。后端 Win32 + D3D9 —— D3D9 从 Vista 起
 -- 随系统提供，Win7 SP1 → Win11 都预装，无任何可再发行组件；1.92 起动态字形加载，
 -- CJK 不需要预烘焙 glyph ranges。
@@ -206,8 +203,6 @@ target("secmelt")
         "src/melt/*.cpp"
     )
 
-    add_packages("ftxui")
-
     -- 源码按 reg/ raw/ melt/ 分目录，内部一律用 "目录/头文件.h" 形式互相引用，
     -- 因此 src 本身要在搜索路径上。
     add_includedirs("src", "third_party")
@@ -227,8 +222,8 @@ target("secmelt")
 -- ============================================================================
 -- 图形前端：Dear ImGui + Win32 + Direct3D9（设计取舍见 src/gui/gui_main.cpp 头部）
 --
--- 与 TUI 共用同一份 pipeline 源码（src/{raw,reg,melt} + util.cpp），只排除两个
--- 入口：main.cpp（FTXUI 前端）与 selftest.cpp（CLI 专用包装）。产物与
+-- 与 CLI 共用同一份 pipeline 源码（src/{raw,reg,melt} + util.cpp），只排除两个
+-- 入口：main.cpp（命令行前端）与 selftest.cpp（子命令包装）。产物与
 -- secmelt.exe 同目录；after_build 与 secmelt 共用同一段落位逻辑，因此
 -- `xmake build secmelt-gui` 单独构建时同样会产出 WinDisk.sys / ntfs-3g 工具 /
 -- KDU / targets.txt，并复制到本目标的输出目录旁边。

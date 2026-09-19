@@ -488,7 +488,7 @@ int RawSelfTest(const std::filesystem::path& exeDir) {
 int MeltApply(const std::filesystem::path& exeDir, bool runNtfsFix) {
     // 非交互落盘。确认契约在这里的体现：调用方必须先给出 --yes-i-know，
     // 否则 main() 根本不会走到这里；因此这个回调恒为 true 是"用户已确认"的直接后果，
-    // 而不是把确认步骤删掉（TUI 那条路仍然弹框）。
+    // 而不是把确认步骤删掉（图形前端那条路仍然弹框）。
     MeltOptions opt;
     opt.dryRun = false;
     opt.exeDir = exeDir;
@@ -537,8 +537,8 @@ int MeltDryRun(const std::filesystem::path& exeDir, bool runNtfsFix) {
 }
 
 int PreflightScan(const std::filesystem::path& exeDir) {
-    // --preflight: melt 的自动位置扫描入口。参数形状与 --melt 相同：不走 TUI
-    // 的注册表编辑/hive 写回，不触发复位；唯一共享的粘合是：
+    // --preflight: melt 的自动位置扫描入口。参数形状与 --melt 相同：不做注册表
+    // 编辑/hive 写回，不触发复位；唯一共享的粘合是：
     //   A) 驱动装载（可能 kdu -dse 0）
     //   B) 打开 handle: 设备做 raw I/O。
     // 输出与 melt 相同的行级日志，方便与 melt 同一番话术。
