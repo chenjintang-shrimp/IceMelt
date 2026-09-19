@@ -89,10 +89,36 @@ jobs:
         run: pwsh -File configure.ps1
 
       - name: Configure
-        run: xmake f --yes -p windows -a x64 --toolchain=clang-cl
+        shell: pwsh
+        run: |
+          # 版本在 configure 阶段临时覆盖：tag v1.2.3 → --app_version=1.2.3。
+          # 它同时决定 exe 的版本资源与两个发布包的名字（xmake.lua 里默认 0.0.0）。
+          # 版本资源是三个纯数字，所以 tag 必须是 vX.Y.Z 形态，这里先挡住不合规的。
+          $version = '0.0.0'
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $version = '${{ github.ref_name }}' -replace '^v', ''
+            if ($version -notmatch '^\d+\.\d+\.\d+$') {
+              throw "tag '${{ github.ref_name }}' must be vX.Y.Z (the version resource needs three plain numbers)"
+            }
+          }
+          xmake f --yes -p windows -a x64 --toolchain=clang-cl --app_version=$version
+          Write-Host "configured with version $version"
 
       - name: Build
         run: xmake build
+
+      - name: Assert the version resources match the configured version
+        shell: pwsh
+        run: |
+          # 覆盖没生效的话，包里就会是一个 0.0.0 的 exe —— 宁可在打包前就炸掉
+          $want = '0.0.0'
+          if ('${{ github.ref_type }}' -eq 'tag') { $want = '${{ github.ref_name }}' -replace '^v', '' }
+          foreach ($exe in @('build\windows\x64\release\icemelt.exe',
+                             'build\windows\x64\release\icemelt-gui.exe')) {
+            $got = (Get-Item $exe).VersionInfo.FileVersion
+            if ($got -ne $want) { throw "$exe reports version $got, expected $want" }
+            Write-Host "OK: $exe -> $got"
+          }
 
       - name: Assert the bundle is complete
         shell: pwsh
@@ -165,16 +191,20 @@ jobs:
           path: build/windows/x64/release/**
           if-no-files-found: error
 
-      - name: Package CLI / GUI bundles
+      - name: Package CLI / GUI bundles (xmake pack)
         shell: pwsh
         run: |
-          # 两个包：IceMelt-<tag>-cli（命令行 + 两个 .bat）与 IceMelt-GUI-<tag>-gui。
-          # 打包脚本自己也断言资产完整，缺一个就失败。非 tag 运行照跑 —— 这样打包
-          # 这条路径每次 CI 都被验证一次，版本号退回 xmake.lua 里的 set_version。
-          if ('${{ github.ref_type }}' -eq 'tag') {
-            pwsh -File package.ps1 -Version '${{ github.ref_name }}'
-          } else {
-            pwsh -File package.ps1
+          # 两个包都由 xmake pack 出：内容取自 xmake.lua 里各 target 的安装文件清单
+          # （见 install_runtime_assets），包名取 set_version —— 也就是上面覆盖过的版本。
+          xmake pack -f zip -o dist
+
+          $want = '0.0.0'
+          if ('${{ github.ref_type }}' -eq 'tag') { $want = '${{ github.ref_name }}' -replace '^v', '' }
+          $zips = @(Get-ChildItem dist/*.zip)
+          if ($zips.Count -ne 2) { throw "expected 2 packages, got $($zips.Count)" }
+          foreach ($zip in $zips) {
+            if ($zip.Name -notmatch [regex]::Escape($want)) { throw "$($zip.Name) does not carry version $want" }
+            Write-Host ("packaged {0} ({1:N1} MB)" -f $zip.Name, ($zip.Length / 1MB))
           }
 
       - name: Upload packages
