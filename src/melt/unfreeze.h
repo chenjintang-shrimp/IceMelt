@@ -8,7 +8,7 @@
 //   5 注册表摘除（dryRun 时改为只读探测）
 //   6 导出 hive → 从副本里离线摘掉装载用的服务键 → 置干净并修校验和 → 可加载性校验
 //   7 用户确认（仅非 dryRun；此前尚未发生任何裸盘写入）
-//   8 写回 hive：写前守卫（ntfs-3g 视图确认目标是 regf hive）→ 可选 ntfsfix → ntfscp
+//   8 写回 hive：写前守卫（ntfs-3g 视图确认目标是 regf hive）→ ntfsfix → ntfscp
 //     → 经 ntfs-3g 读回逐字节校验 + base block 断言
 //   8b 同一份 hive 也写进 config\RegBack\SYSTEM（若存在），让主/备代数一致
 //   9 只读检查 SYSTEM.LOG / .LOG1 / .LOG2（**不改动**：清零在干净 hive 下不改变任何结果）
@@ -60,7 +60,6 @@ DriverLoadOutcome EnsureUnsignedDriverLoads(const std::filesystem::path& exeDir,
 
 struct MeltOptions {
     bool dryRun = false;
-    bool runNtfsFix = true;
     std::filesystem::path winDiskSysPath;   // 缺省 <exeDir>/WinDisk_x64.sys
     std::filesystem::path hiveOutPath;      // 缺省 %TEMP%\secmelt-system.hive
     std::filesystem::path exeDir;           // 缺省 ExeDir()

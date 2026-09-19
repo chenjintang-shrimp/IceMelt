@@ -1264,26 +1264,24 @@ MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log) {
     //
     // 只跑一次：它曾经被重复贴成两块（日志里能看到两遍输出）—— 那是把守卫挪到前面时插入了
     // 一份而不是移动造成的。
-    if (opt.runNtfsFix) {
-        if (ResolveTool(L"ntfsfix.exe").empty()) {
-            emit.warn(Fail(L"ntfsfix", L"ntfsfix.exe not found; continuing without it"));
+    if (ResolveTool(L"ntfsfix.exe").empty()) {
+        emit.warn(Fail(L"ntfsfix", L"ntfsfix.exe not found; continuing without it"));
+    } else {
+        int exitCode = -1;
+        std::wstring output;
+        if (!NtfsFix(device.raw(), vol, exitCode, output, error)) {
+            emit.warn(Fail(L"ntfsfix", error + L" (continuing without it)"));
         } else {
-            int exitCode = -1;
-            std::wstring output;
-            if (!NtfsFix(device.raw(), vol, exitCode, output, error)) {
-                emit.warn(Fail(L"ntfsfix", error + L" (continuing without it)"));
+            emit.step(L"ntfsfix output:\n" + output);
+            if (exitCode != 0) {
+                emit.warn(FormatW(
+                    L"ntfsfix exited with %d -- expected here, not fatal: its "
+                    L"alternate-boot-sector check only passes when the file system is smaller "
+                    L"than the partition, and the handle: length is derived from the boot "
+                    L"sector itself. The hive write below is unaffected.",
+                    exitCode));
             } else {
-                emit.step(L"ntfsfix output:\n" + output);
-                if (exitCode != 0) {
-                    emit.warn(FormatW(
-                        L"ntfsfix exited with %d -- expected here, not fatal: its "
-                        L"alternate-boot-sector check only passes when the file system is smaller "
-                        L"than the partition, and the handle: length is derived from the boot "
-                        L"sector itself. The hive write below is unaffected.",
-                        exitCode));
-                } else {
-                    emit.ok(L"ntfsfix reported success");
-                }
+                emit.ok(L"ntfsfix reported success");
             }
         }
     }

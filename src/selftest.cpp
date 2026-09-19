@@ -485,14 +485,13 @@ int RawSelfTest(const std::filesystem::path& exeDir) {
     return ok ? 0 : 1;
 }
 
-int MeltApply(const std::filesystem::path& exeDir, bool runNtfsFix) {
+int MeltApply(const std::filesystem::path& exeDir) {
     // 非交互落盘。确认契约在这里的体现：调用方必须先给出 --yes-i-know，
     // 否则 main() 根本不会走到这里；因此这个回调恒为 true 是"用户已确认"的直接后果，
     // 而不是把确认步骤删掉（图形前端那条路仍然弹框）。
     MeltOptions opt;
     opt.dryRun = false;
     opt.exeDir = exeDir;
-    opt.runNtfsFix = runNtfsFix;
     opt.winDiskSysPath = exeDir / L"WinDisk_x64.sys";
     // 这一版不复位：写完并逐字节验证之后交回给操作者，由他自己重启（理由见 RunMelt 第 10 步）。
     opt.confirm = [](const MeltResult&) { return true; };
@@ -521,11 +520,10 @@ int MeltApply(const std::filesystem::path& exeDir, bool runNtfsFix) {
     return 0;
 }
 
-int MeltDryRun(const std::filesystem::path& exeDir, bool runNtfsFix) {
+int MeltDryRun(const std::filesystem::path& exeDir) {
     MeltOptions opt;
     opt.dryRun = true;
     opt.exeDir = exeDir;
-    opt.runNtfsFix = runNtfsFix;
     opt.winDiskSysPath = exeDir / L"WinDisk_x64.sys";
 
     MeltResult result = DryRun(opt, nullptr);
@@ -545,7 +543,6 @@ int PreflightScan(const std::filesystem::path& exeDir) {
     MeltOptions opt;
     opt.dryRun = false;
     opt.exeDir = exeDir;
-    opt.runNtfsFix = false;  // 这个入口里不走 ntfsfix：判读本来就围绕它的副作用展开
     opt.winDiskSysPath = exeDir / L"WinDisk_x64.sys";
 
     Print(L"SecMelt preflight scan (non-interactive)");

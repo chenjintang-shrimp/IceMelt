@@ -8,7 +8,6 @@
 //   secmelt --help          本说明
 //   secmelt --dump          自检报告：环境 + 构建期资产 + 名单的实测存在状态（只读，不碰盘）
 //   secmelt --dry-run       只读预演整条链路：预检 + 只读注册表探测 + 导出/校验 hive
-//   secmelt --no-ntfsfix    与 --dry-run/--melt 组合：落盘时不跑 ntfsfix
 //   secmelt --preflight     melt 前的根因扫描（logstate 守卫 + 目录层级探针 + 拆解报告）
 //   secmelt --melt --yes-i-know 非交互执行整条链路（破坏性；不自动复位）
 //   secmelt --selftest-hive 校验 hive base block 偏移与校验和算法
@@ -323,7 +322,6 @@ void PrintUsage() {
     std::cout << "SecMelt - command line front end (the graphical front end is secmelt-gui)\n"
                  "  secmelt --dump           self-check report, then exit (no TTY needed)\n"
                  "  secmelt --dry-run        rehearse the whole chain without writing the disk\n"
-                 "  secmelt --no-ntfsfix     skip the ntfsfix step (works with --dry-run/--melt)\n"
                  "  secmelt --preflight      one-shot root-cause scan: logstate + directory\n"
                  "                           tier probing + DiagnoseWritePath breakdown, then stop\n"
                  "  secmelt --melt --yes-i-know\n"
@@ -343,7 +341,6 @@ int main(int argc, char** argv) {
     ::SetConsoleOutputCP(CP_UTF8);
 
     bool dryRun = false;
-    bool noNtfsFix = false;
     bool selftestHive = false;
     bool selftestRegistry = false;
     bool selftestRaw = false;
@@ -357,7 +354,6 @@ int main(int argc, char** argv) {
         const std::string_view arg(argv[i]);
         if (arg == "--dump") dump = true;
         else if (arg == "--dry-run") dryRun = true;
-        else if (arg == "--no-ntfsfix") noNtfsFix = true;
         else if (arg == "--melt") melt = true;
         else if (arg == "--preflight") preflight = true;
         else if (arg == "--yes-i-know") yesIKnow = true;
@@ -394,16 +390,16 @@ int main(int argc, char** argv) {
                          "Re-run with --melt --yes-i-know if that is what you want.\n";
             return 2;
         }
-        return secmelt::MeltApply(exeDir, !noNtfsFix);
+        return secmelt::MeltApply(exeDir);
     }
     if (preflight) return secmelt::PreflightScan(exeDir);
     if (selftestHive) return secmelt::HiveSelfTest(exeDir);
     if (selftestRegistry) return secmelt::RegistrySelfTest(exeDir);
     if (selftestRaw) return secmelt::RawSelfTest(exeDir);
-    if (dryRun) return secmelt::MeltDryRun(exeDir.empty() ? root : exeDir, !noNtfsFix);
+    if (dryRun) return secmelt::MeltDryRun(exeDir.empty() ? root : exeDir);
     if (dump) return DumpMode(root);
 
-    // 只给了修饰选项（如 --no-ntfsfix）而没有动作：同样按缺命令处理。
+    // 只给了修饰选项（如 --yes-i-know）而没有动作：同样按缺命令处理。
     PrintUsage();
     return 2;
 }

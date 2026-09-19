@@ -110,8 +110,6 @@ struct App {
     FileStamp targetsStamp;
     double nextTargetsCheck = 0.0;
 
-    bool runNtfsFix = true;
-
     JobKind kind = JobKind::None;
     JobKind lastKind = JobKind::None;
     bool running = false;
@@ -308,12 +306,11 @@ ImU32 LineColor(const std::string& s) {
 
 // ---- 任务启停 ---------------------------------------------------------------
 
-void RunJob(Shared& sh, fs::path exeDir, JobKind kind, bool runNtfsFix) {
+void RunJob(Shared& sh, fs::path exeDir, JobKind kind) {
     secmelt::MeltOptions opt;
     opt.exeDir = std::move(exeDir);
     opt.winDiskSysPath = opt.exeDir / L"WinDisk_x64.sys";
     opt.dryRun = (kind == JobKind::DryRun);
-    opt.runNtfsFix = runNtfsFix;
 
     const secmelt::MeltLogger logger = [&sh](const std::wstring& w) {
         std::lock_guard<std::mutex> guard(sh.mu);
@@ -372,7 +369,7 @@ void StartJob(App& app, JobKind kind) {
         app.shared.result = secmelt::MeltResult{};
     }
 
-    app.worker = std::thread(RunJob, std::ref(app.shared), secmelt::ExeDir(), kind, app.runNtfsFix);
+    app.worker = std::thread(RunJob, std::ref(app.shared), secmelt::ExeDir(), kind);
 }
 
 void PollWorker(App& app) {
@@ -763,9 +760,6 @@ void RenderUI(App& app) {
         ImGui::TextDisabled("写回 hive 并置 dirty 标记");
 
         ImGui::EndDisabled();
-
-        ImGui::Spacing();
-        ImGui::Checkbox("运行 ntfsfix（置 $LogFile dirty）", &app.runNtfsFix);
 
         ImGui::Spacing();
         ImGui::Separator();
