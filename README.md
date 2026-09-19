@@ -1,4 +1,4 @@
-<h1 align="center">SecMelt</h1>
+<h1 align="center">IceMelt</h1>
 
 <p align="center">用 KDU 与 WinDisk 破防各类冰点 / 还原软件</p>
 
@@ -6,7 +6,7 @@
 **KDU** 关掉驱动签名强制，让没有签名的 WinDisk 能加载 —— 只在装载真的被 577 拒绝时才用得上
 （判据见下：装载返回码，不是任何查询接口的读数）。
 
-两者配合，在 NTFS 层面摘掉还原软件的注册表痕迹、换掉 SYSTEM hive，然后立刻复位。不替换任何驱动文件。
+两者配合，在 NTFS 层面摘掉还原软件的注册表痕迹、换掉 SYSTEM hive，然后交回给你重启。不替换任何驱动文件。
 
 ## 它做什么
 
@@ -30,8 +30,8 @@
             → 任何一步失败：**回滚 + 不复位 + 退出**（见下）
 8b 备份同步  同一份 hive 也写进 config\RegBack\SYSTEM（若存在），让主/备代数一致
 9 日志       只读检查 SYSTEM.LOG / .LOG1 / .LOG2，**不改动**（见下：清零不改变任何结果）
-10 复位      置系统卷的 dirty 标记（autochk 下次启动即检查它，同 chkdsk /f）
-            → bugcheck 0x0D000721（内核停住，不给注册表懒写回覆盖刚写入内容的机会）
+10 收尾      置系统卷的 dirty 标记（autochk 下次启动即检查它，同 chkdsk /f）
+            → 卸载驱动，把重启交回给你：**不自动复位**（普通重启同样生效，见下）
 ```
 
 第 5 步之后若因故中止（hive 导出/校验失败、确认被拒），日志会明确点出：**活动注册表已经
@@ -109,7 +109,7 @@ KDU 的构建工程在 `third_party/KDU.build`（源码在 `third_party/KDU` sub
 | `secmelt` | 交互式界面（Environment / Melt 两屏；`1`/`2` 切屏，`d` 预演，`m` 执行，`q` 退出） |
 | `secmelt --dump` | 渲染一帧到 stdout 后退出，可用于 CI |
 | `secmelt --dry-run` | 只读预演整条链路 |
-| `secmelt --melt --yes-i-know` | 非交互执行整条链路；破坏性、不可回滚（ntfsfix 的非 0 退出不中止；**复位需按回车手动触发**，见下） |
+| `secmelt --melt --yes-i-know` | 非交互执行整条链路；破坏性、不可回滚（ntfsfix 的非 0 退出不中止；**不自动复位，写完自己重启**，见下） |
 | `secmelt --selftest-hive` | 校验 hive base block 偏移与校验和算法 |
 | `secmelt --selftest-registry` | 验证过滤器摘除的写入路径 |
 | `secmelt --selftest-raw` | 裸盘写入/读回判定：底层通路是硬断言，OS 通路只做分类（**只在虚拟机里跑**） |
@@ -389,23 +389,25 @@ ntfs-3g-cli "handle:H:OFF:LEN" setdirty
 验证：重启前 `fsutil dirty query C:` 应报 `Volume - C: is Dirty`，重启时应出现磁盘检查界面
 （"To skip disk checking, press any key within N seconds"）。跑完 chkdsk 会自己把标记清掉。
 
-### CLI 的复位是**手动**触发的
+### 不自动复位：写完自己重启
 
-`--melt --yes-i-know` 写完并校验完之后**不会**立刻 bugcheck，而是打印日志摘要、等你按一次回车：
+`--melt --yes-i-know` 与 TUI 的 Melt 写完、逐字节校验、置好 dirty 标记之后就**结束**了 ——
+不 bugcheck、没有任何自动复位路径，只打印结论并提示你重启：
 
 ```
-[!] all writes are done. The machine has NOT been reset yet -- the reboot bugcheck is waiting for you to confirm
-[!] look at the log above now: after the reset this console is gone. Press Enter to trigger the bugcheck ...
-[!] do it promptly: while Windows keeps running, the registry it holds in memory will eventually be flushed over the hive we just wrote to the raw disk
+[+] all writes are complete and verified
+[!] handing the reboot back to you: nothing is reset automatically. Restart the machine yourself when you are ready -- a normal reboot applies this change.
 ```
 
-理由：自动复位会立刻把机器打下去，**操作者来不及看日志、也来不及用别的工具核对现场**。
+理由有两个，都指向同一件事：
 
-代价要说清：**等待期间内存里的注册表迟早会懒写回，把磁盘上刚写好的 hive 覆盖掉** —— 所以它是
-"给你一点时间看清楚"，不是"可以慢慢来"。stdin 不可读（被重定向、没有控制台）时**不会**触发，
-而是明确告知"复位没执行、请尽快自己重启"。
+* 改动是在**基线**（裸盘）上的，按一次**普通重启**就能生效 —— 不需要用 bugcheck 去"抢在注册表
+  懒写回之前复位"（那个理由在冻结的机器上不成立，见下节）；
+* bugcheck 会在你读完日志、用别的工具核对现场之前把机器打下去。
 
-交互式 TUI 的 Melt 仍是写完之后自动复位（那条路在写之前已有确认对话框）。
+早期版本在 CLI 模式下读一次回车就 `KeBugCheckEx(0x0D000721)`，交互模式更是写完就自动打下去。
+整条 bugcheck 路径**已经移除**：驱动侧的 `CTL_REBOOT_SYSTEM`（`KeBugCheckEx`）与用户态的
+`RebootNow`、以及那段"按回车触发蓝屏"的提示全部删掉了 —— 任何入口都不会复位这台机器。
 
 ### 不进系统也能查：用设备名直接读（不需要驱动）
 
@@ -490,15 +492,15 @@ resolve: /Windows/System32/config/SYSTEM -> /Windows/System32/config/system
 | 回滚镜像取不到 | 只告警，**继续**（读路径的问题不该阻止写基线） |
 | 预演（同字节写到临时名字）没通过 | 只报告，**继续**写真 SYSTEM |
 | 写后读回不一致 | 只报告 + 保留回滚镜像的路径，**不自动回滚、不中止** |
-| 完成后 | 等回车再复位；并提示"普通重启同样有效，且更安全" |
+| 完成后 | 打印结论并提示**自行普通重启**（本工具不做任何自动复位） |
 
 **为什么不做自动回滚**：如果读回校验是误报而写入其实成功了，把 SYSTEM 恢复成写之前的样子就等于
 把我们写上去的 filter 摘除**撤销掉** —— 那正是本轮要做的事。回滚在关键时刻是有害的。
 
-**为什么"写回不一致"和"能不能开机"是两件事**：复位（bugcheck）会丢掉内核内存里那份**仍然可用**
-的注册表，而磁盘上留下的是一份读回不一致的 hive —— 引导器只能去读它。所以**读回不一致时不要
-复位**：普通重启是安全的（不会丢内存注册表），而"重启后过滤驱动是否还在加载"才是
-"写到底有没有落上"的真正答案。
+**为什么"写回不一致"和"能不能开机"是两件事**：磁盘上留下的是一份读回不一致的 hive —— 引导器
+只能去读它；而内核内存里那份注册表仍然是**可用**的替代品。所以**读回不一致时不要 bugcheck**
+（本版已经没有任何自动复位路径）：普通重启是安全的（不会丢内存注册表），而"重启后过滤驱动是否
+还在加载"才是"写到底有没有落上"的真正答案。
 
 ### 读回"一大片连续的 0x00"意味着什么（`info:<path>`）
 
@@ -741,9 +743,9 @@ MSYS2 里是 `pacman -S mingw-w64-x86_64-gcc`，或者用 `MINGW_ROOT` 指向别
 
 ## 免责声明
 
-涉及内核驱动加载与裸盘写入，误用可导致数据损坏或系统无法启动（BSOD）。仅在你有权操作的机器与
-磁盘上使用。第 8 步之后一旦开始写入就没有回滚路径：出错时程序会立刻触发 bugcheck 复位并报出
-"系统状态未知"。
+涉及内核驱动加载与裸盘写入，误用可导致数据损坏或系统无法启动。仅在你有权操作的机器与磁盘上
+使用。第 8 步之后一旦开始写入就没有回滚路径：出错时程序会中止并报出"系统状态未知"，然后提示
+你自行重启（本工具不触发任何复位）。
 
 ## 后记
 
