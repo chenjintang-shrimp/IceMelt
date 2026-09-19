@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <!-- 仅 debug 冒烟构建用：宿主开发机上当 xmake 会话本身不提权时，使 GUI 能起来渲染。
      界面对非提权做了降级（动作按钮禁用），因此这份 manifest 不是绕过安全检查的后门。
-     release 构建永远使用 secmelt.manifest（requireAdministrator）。 -->
+     release 构建永远使用 icemelt.manifest（requireAdministrator）。 -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity version="1.0.0.0" name="SecMelt.Gui" type="win32"/>
+  <assemblyIdentity version="1.0.0.0" name="IceMelt.Gui" type="win32"/>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>

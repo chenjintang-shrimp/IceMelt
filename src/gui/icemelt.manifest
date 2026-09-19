@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity version="1.0.0.0" name="SecMelt.Gui" type="win32"/>
+  <assemblyIdentity version="1.0.0.0" name="IceMelt.Gui" type="win32"/>
   <!-- 装载内核驱动与写裸盘都是硬前提：不弹第二道UAC，进程一开始就要求提权 -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>

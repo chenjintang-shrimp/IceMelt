@@ -1,4 +1,4 @@
-// SecMelt —— 图形前端（Dear ImGui · Win32 + Direct3D9）
+// IceMelt —— 图形前端（Dear ImGui · Win32 + Direct3D9）
 //
 // 设计取舍：
 //   * 与 TUI（src/main.cpp）共用同一条 pipeline（melt/unfreeze.h），不包壳子进程；
@@ -69,7 +69,7 @@ struct Shared {
     bool confirmAnswer = false;
     std::vector<std::string> pending;  // 待确认清单（第 7 步）
     bool done = false;
-    secmelt::MeltResult result;
+    icemelt::MeltResult result;
 };
 
 struct AssetRow {
@@ -170,10 +170,10 @@ std::string WindowsVersionString() {
             product = std::wstring(L"Windows 11") + product.substr(kWin10Len);
     }
 
-    std::string version = secmelt::Narrow(product);
+    std::string version = icemelt::Narrow(product);
     if (!build.empty()) {
-        version += "  build " + secmelt::Narrow(build);
-        if (!ubr.empty()) version += "." + secmelt::Narrow(ubr);
+        version += "  build " + icemelt::Narrow(build);
+        if (!ubr.empty()) version += "." + icemelt::Narrow(ubr);
     }
     return version.empty() ? "unknown" : version;
 }
@@ -192,7 +192,7 @@ void RefreshAssets(App& app, const fs::path& exeDir) {
     app.assets.clear();
     for (const auto& a : kAssets) {
         AssetRow row = a;
-        row.present = secmelt::PathIsRegularFile(exeDir / a.rel);
+        row.present = icemelt::PathIsRegularFile(exeDir / a.rel);
         app.assets.push_back(row);
     }
 }
@@ -201,9 +201,9 @@ void RefreshAssets(App& app, const fs::path& exeDir) {
 // 返回空表示两个都没有，实际用的是编译内置名单。
 fs::path ResolveTargetsFile(const fs::path& exeDir) {
     const fs::path first = exeDir / L"targets.txt";
-    if (secmelt::PathIsRegularFile(first)) return first;
+    if (icemelt::PathIsRegularFile(first)) return first;
     const fs::path second = exeDir / L"config" / L"targets.txt";
-    if (secmelt::PathIsRegularFile(second)) return second;
+    if (icemelt::PathIsRegularFile(second)) return second;
     return {};
 }
 
@@ -221,9 +221,9 @@ FileStamp StatFile(const fs::path& p) {
 
 // 重新读名单文件并重解析。announce=true 时把来源写进日志（启动/重载/手动刷新用）。
 void RefreshTargets(App& app, const fs::path& exeDir, bool announce) {
-    const auto targets = secmelt::LoadTargets(exeDir);
-    const auto names = secmelt::TargetNames(targets);
-    const secmelt::ProbeReport probe = secmelt::ProbeTargets(names);
+    const auto targets = icemelt::LoadTargets(exeDir);
+    const auto names = icemelt::TargetNames(targets);
+    const icemelt::ProbeReport probe = icemelt::ProbeTargets(names);
 
     app.targetsFile = ResolveTargetsFile(exeDir);
     app.targetsStamp = StatFile(app.targetsFile);
@@ -232,20 +232,20 @@ void RefreshTargets(App& app, const fs::path& exeDir, bool announce) {
     app.targets.reserve(targets.size());
     for (const auto& t : targets) {
         TargetRowUI row;
-        row.name = secmelt::Narrow(t.name);
-        row.label = secmelt::Narrow(t.label);
+        row.name = icemelt::Narrow(t.name);
+        row.label = icemelt::Narrow(t.label);
 
         std::vector<std::string> where;
         for (const auto& f : probe.filters) {
             for (const auto& item : f.items) {
                 if (_wcsicmp(item.c_str(), t.name.c_str()) == 0)
-                    where.push_back("Class\\" + secmelt::Narrow(f.classGuid) + "\\" +
-                                    secmelt::Narrow(f.valueName));
+                    where.push_back("Class\\" + icemelt::Narrow(f.classGuid) + "\\" +
+                                    icemelt::Narrow(f.valueName));
             }
         }
         for (const auto& key : probe.existingServiceKeys) {
             if (_wcsicmp(key.c_str(), t.name.c_str()) == 0)
-                where.push_back("Services\\" + secmelt::Narrow(key));
+                where.push_back("Services\\" + icemelt::Narrow(key));
         }
         row.present = !where.empty();
         if (where.empty()) {
@@ -261,7 +261,7 @@ void RefreshTargets(App& app, const fs::path& exeDir, bool announce) {
         if (app.targetsFile.empty()) {
             UiLog(app, "[!] 目标名单: 未找到 targets.txt，使用内置默认名单");
         } else {
-            UiLog(app, "[*] 目标名单已加载: " + secmelt::Narrow(app.targetsFile.wstring()));
+            UiLog(app, "[*] 目标名单已加载: " + icemelt::Narrow(app.targetsFile.wstring()));
         }
     }
 }
@@ -271,7 +271,7 @@ void RefreshTargets(App& app, const fs::path& exeDir, bool announce) {
 void TickTargetsReload(App& app, double now) {
     if (now < app.nextTargetsCheck) return;
     app.nextTargetsCheck = now + 0.5;
-    const fs::path exeDir = secmelt::ExeDir();
+    const fs::path exeDir = icemelt::ExeDir();
     const FileStamp current = StatFile(ResolveTargetsFile(exeDir));
     if (current != app.targetsStamp) {
         RefreshTargets(app, exeDir, true);
@@ -307,23 +307,23 @@ ImU32 LineColor(const std::string& s) {
 // ---- 任务启停 ---------------------------------------------------------------
 
 void RunJob(Shared& sh, fs::path exeDir, JobKind kind) {
-    secmelt::MeltOptions opt;
+    icemelt::MeltOptions opt;
     opt.exeDir = std::move(exeDir);
     opt.winDiskSysPath = opt.exeDir / L"WinDisk_x64.sys";
     opt.dryRun = (kind == JobKind::DryRun);
 
-    const secmelt::MeltLogger logger = [&sh](const std::wstring& w) {
+    const icemelt::MeltLogger logger = [&sh](const std::wstring& w) {
         std::lock_guard<std::mutex> guard(sh.mu);
-        sh.lines.push_back(secmelt::Narrow(w));
+        sh.lines.push_back(icemelt::Narrow(w));
         if (sh.lines.size() > 4000) sh.lines.pop_front();
         ++sh.totalLines;
     };
 
     if (kind == JobKind::Melt) {
-        opt.confirm = [&sh](const secmelt::MeltResult& pending) -> bool {
+        opt.confirm = [&sh](const icemelt::MeltResult& pending) -> bool {
             std::unique_lock<std::mutex> lock(sh.mu);
             sh.pending.clear();
-            for (const auto& item : pending.pending) sh.pending.push_back(secmelt::Narrow(item));
+            for (const auto& item : pending.pending) sh.pending.push_back(icemelt::Narrow(item));
             sh.confirmAnswered = false;
             sh.confirmAnswer = false;
             sh.confirmRequested = true;
@@ -335,11 +335,11 @@ void RunJob(Shared& sh, fs::path exeDir, JobKind kind) {
         };
     }
 
-    secmelt::MeltResult result;
+    icemelt::MeltResult result;
     if (kind == JobKind::Preflight) {
-        result = secmelt::RunPreflightScan(opt, logger);
+        result = icemelt::RunPreflightScan(opt, logger);
     } else {
-        result = secmelt::RunMelt(opt, logger);
+        result = icemelt::RunMelt(opt, logger);
     }
 
     std::lock_guard<std::mutex> guard(sh.mu);
@@ -366,10 +366,10 @@ void StartJob(App& app, JobKind kind) {
         app.shared.confirmAnswer = false;
         app.shared.pending.clear();
         app.shared.done = false;
-        app.shared.result = secmelt::MeltResult{};
+        app.shared.result = icemelt::MeltResult{};
     }
 
-    app.worker = std::thread(RunJob, std::ref(app.shared), secmelt::ExeDir(), kind);
+    app.worker = std::thread(RunJob, std::ref(app.shared), icemelt::ExeDir(), kind);
 }
 
 void PollWorker(App& app) {
@@ -577,7 +577,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_CLOSE:
             // 运行中禁止关闭窗口（防止 worker 线程持有驱动句柄时进程退出导致蓝屏）
             if (g_app && g_app->running) {
-                ::MessageBoxW(hWnd, L"任务正在运行，请等待完成后再关闭。", L"SecMelt", MB_OK | MB_ICONWARNING);
+                ::MessageBoxW(hWnd, L"任务正在运行，请等待完成后再关闭。", L"IceMelt", MB_OK | MB_ICONWARNING);
                 return 0;
             }
             break;
@@ -603,7 +603,7 @@ void RenderUI(App& app) {
                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    ImGui::TextColored(ImVec4(0.9f, 0.9f, 1.0f, 1.0f), "SecMelt");
+    ImGui::TextColored(ImVec4(0.9f, 0.9f, 1.0f, 1.0f), "IceMelt");
     ImGui::SameLine();
     ImGui::TextDisabled("—— 裸盘级冻结解除");
 
@@ -672,16 +672,16 @@ void RenderUI(App& app) {
         ImGui::Spacing();
         // 标题一行、操作一行（左对齐）；按钮同排的来源文字按 frame 高度对齐基线
         if (ImGui::Button("重新加载名单")) {
-            RefreshTargets(app, secmelt::ExeDir(), true);
+            RefreshTargets(app, icemelt::ExeDir(), true);
         }
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
         if (app.targetsFile.empty()) {
             ImGui::TextDisabled("内置默认（未找到 targets.txt）");
         } else {
-            ImGui::TextDisabled("%s", secmelt::Narrow(app.targetsFile.filename().wstring()).c_str());
+            ImGui::TextDisabled("%s", icemelt::Narrow(app.targetsFile.filename().wstring()).c_str());
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("%s", secmelt::Narrow(app.targetsFile.wstring()).c_str());
+                ImGui::SetTooltip("%s", icemelt::Narrow(app.targetsFile.wstring()).c_str());
             }
         }
         ImGui::Spacing();
@@ -876,9 +876,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
 
     // 创建窗口
     WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC,     WndProc, 0L,     0L, hInstance, nullptr,
-                      nullptr,     nullptr,        nullptr, L"SecMelt", nullptr};
+                      nullptr,     nullptr,        nullptr, L"IceMelt", nullptr};
     ::RegisterClassExW(&wc);
-    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"SecMelt — 裸盘级冻结解除", WS_OVERLAPPEDWINDOW,
+    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"IceMelt — 裸盘级冻结解除", WS_OVERLAPPEDWINDOW,
                                 100, 100, (int)(1280 * mainScale), (int)(800 * mainScale),
                                 nullptr, nullptr, wc.hInstance, nullptr);
 
@@ -919,8 +919,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
                                         L"simsun.ttc"};
         for (const wchar_t* name : kCandidates) {
             const fs::path candidate = fs::path(fontsDir) / name;
-            if (!secmelt::PathIsRegularFile(candidate)) continue;
-            if (io.Fonts->AddFontFromFileTTF(secmelt::Narrow(candidate.wstring()).c_str(),
+            if (!icemelt::PathIsRegularFile(candidate)) continue;
+            if (io.Fonts->AddFontFromFileTTF(icemelt::Narrow(candidate.wstring()).c_str(),
                                              18.0f) != nullptr)
                 break;
         }
@@ -931,14 +931,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     App app;
     app.hwnd = hwnd;
     app.dpiScale = mainScale;
-    app.elevated = secmelt::IsProcessElevated();
+    app.elevated = icemelt::IsProcessElevated();
     app.osVersion = WindowsVersionString();
-    const fs::path exeDir = secmelt::ExeDir();
-    app.exeDirUtf8 = secmelt::Narrow(exeDir.wstring());
+    const fs::path exeDir = icemelt::ExeDir();
+    app.exeDirUtf8 = icemelt::Narrow(exeDir.wstring());
     RefreshAssets(app, exeDir);
     g_app = &app;
 
-    UiLog(app, "[*] SecMelt GUI initialized");
+    UiLog(app, "[*] IceMelt GUI initialized");
     if (!app.elevated) {
         UiLog(app, "[!] NOT elevated: all action buttons are disabled");
     }
