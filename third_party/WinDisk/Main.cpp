@@ -70,6 +70,17 @@ namespace FSDAntiHook
 			return;
 		for (ULONG_PTR off = 0; off + sizeof(ULONG_PTR) <= hooker->SizeOfImage; off += sizeof(ULONG_PTR))
 		{
+			/* SizeOfImage 把 INIT 等已丢弃段也计入，而那些页面加载后早被回收 —
+			 * 顺着 SizeOfImage 扫到映像尾部必然 PAGE_FAULT_IN_NONPAGED_AREA。
+			 * 逐页探活，第一个不可映射点即止步；截断点本身也是情报：
+			 * saved-original 只可能藏在它之前的 .data 里。 */
+			if (!MmIsAddressValid(img + off))
+			{
+				LogWarn("  %wZ image unmapped past +0x%llX (size 0x%X includes discarded pages); "
+				        "stopping scan here\n",
+				        &hooker->BaseDllName, (unsigned long long)off, hooker->SizeOfImage);
+				break;
+			}
 			const ULONG_PTR v = *(const ULONG_PTR*)(img + off);
 			if (v >= vBase && v < vEnd)
 			{
