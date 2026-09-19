@@ -47,6 +47,34 @@ jobs:
           clang-cl --version
           & "$env:MINGW_ROOT\bin\gcc.exe" --version | Select-Object -First 1
 
+      - name: Diagnose mingw toolchain (temporary)
+        shell: pwsh
+        run: |
+          Write-Host "PATH=$env:PATH"
+          Write-Host "TEMP=$env:TEMP"
+          $gcc = Join-Path $env:MINGW_ROOT 'bin\gcc.exe'
+          Write-Host "gcc=$gcc exists=$(Test-Path $gcc)"
+          foreach ($dll in 'libwinpthread-1.dll', 'libintl-8.dll', 'libiconv-2.dll', 'libgcc_s_seh-1.dll') {
+            Write-Host ("  {0}: {1}" -f $dll, (Test-Path (Join-Path $env:MINGW_ROOT "bin\$dll")))
+          }
+          Write-Host "--- file check ---"
+          Get-Item $gcc | Format-List FullName, Length, VersionInfo
+          Write-Host "--- gcc --version ---"
+          & $gcc --version
+          Write-Host "exit=$LASTEXITCODE"
+          Write-Host "--- gcc -v compile probe ---"
+          $dir = Join-Path $env:TEMP 'probe-diag'
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          Set-Content -Path (Join-Path $dir 'p.c') -Value 'int main(void){return 0;}' -Encoding ASCII
+          & $gcc -v -o (Join-Path $dir 'p.exe') (Join-Path $dir 'p.c')
+          Write-Host "exit=$LASTEXITCODE"
+          Get-ChildItem $dir | Format-Table Name, Length -AutoSize
+          Write-Host "--- same, with mingw bin on PATH ---"
+          $env:PATH = "$env:MINGW_ROOT\bin;$env:PATH"
+          & $gcc -o (Join-Path $dir 'p2.exe') (Join-Path $dir 'p.c')
+          Write-Host "exit=$LASTEXITCODE"
+          Get-ChildItem $dir | Format-Table Name, Length -AutoSize
+
       - name: Preflight dependency check
         shell: pwsh
         run: pwsh -File configure.ps1
