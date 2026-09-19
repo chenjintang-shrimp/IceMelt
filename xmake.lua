@@ -197,8 +197,14 @@ end
 
 target("secmelt")
     set_kind("binary")
-    -- 递归收集 src 下的源文件（reg/ raw/ melt/ 三个子目录）
-    add_files("src/**.cpp")
+    -- 显式列目录而不是 src/**.cpp：src/gui 是独立 target（有自己的入口点，且要
+    -- imgui 依赖），被递归收集进来会让 CLI 目标去编译 GUI 入口。
+    add_files(
+        "src/*.cpp",
+        "src/raw/*.cpp",
+        "src/reg/*.cpp",
+        "src/melt/*.cpp"
+    )
 
     add_packages("ftxui")
 
