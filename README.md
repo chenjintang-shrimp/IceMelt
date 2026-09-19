@@ -92,6 +92,7 @@ glibc 动态链接器有一段著名注释：
 ```
 build/windows/x64/release/
 ├── secmelt.exe
+├── secmelt-gui.exe        图形前端（可选，资产与 secmelt.exe 共用）
 ├── targets.txt            目标名单
 ├── WinDisk_x64.sys        驱动
 ├── kdu.exe                关 DSE
@@ -102,11 +103,16 @@ build/windows/x64/release/
 单独构建某个子工程：`cd third_party/{WinDisk,ntfs-3g} && xmake f -P . --yes ... && xmake build -P .`；
 KDU 的构建工程在 `third_party/KDU.build`（源码在 `third_party/KDU` submodule 里），用法相同。
 
+两个前端产物（`secmelt` / `secmelt-gui`）挂的是同一段 `after_build`：**构建任意一个都会连带构建
+三方子工程并把资产落位到该构建目录**（同一次 xmake 里两个一起构建时三方只跑一遍）。所以
+`xmake build secmelt-gui` 单独跑也能得到完整的运行期组合。
+
 ## 用法
 
 | 命令 | 作用 |
 |---|---|
 | `secmelt` | 交互式界面（Environment / Melt 两屏；`1`/`2` 切屏，`d` 预演，`m` 执行，`q` 退出） |
+| `secmelt-gui` | 图形前端（Dear ImGui · Win32 + D3D9）：同一套 pipeline，点按式操作，Win7 SP1 → Win11 |
 | `secmelt --dump` | 渲染一帧到 stdout 后退出，可用于 CI |
 | `secmelt --dry-run` | 只读预演整条链路 |
 | `secmelt --melt --yes-i-know` | 非交互执行整条链路；破坏性、不可回滚 |
@@ -115,6 +121,34 @@ KDU 的构建工程在 `third_party/KDU.build`（源码在 `third_party/KDU` sub
 | `secmelt --selftest-raw` | 裸盘写入/读回判定：底层通路是硬断言，OS 通路只做分类（**只在虚拟机里跑**） |
 
 `--selftest-raw`、`--melt` 和交互式 Melt 需要管理员权限。无需担心数字签名：程序自己会搞定。
+
+### 图形前端（secmelt-gui）
+
+`secmelt-gui.exe` 与 `secmelt.exe` 共用同一条 pipeline（不包壳子进程），三个按钮与 CLI 一一对应：
+
+| 按钮 | 等价命令 | 说明 |
+|---|---|---|
+| 预检扫描 | `--preflight` | 装驱动 + 四层探针写/读回/校验（**只在带快照的 VM 里跑**） |
+| 只读预演 | `--dry-run` | 全链路预演，不写裸盘 |
+| 执行 MELT | `--melt --yes-i-know` | 破坏性；落盘前弹出确认框，键入 `MELT` 才能继续 |
+
+细节：
+
+* **触摸优先**：控件命中盒按手指定尺寸（`FramePadding`/`CellPadding`/`TouchExtraPadding`），
+  动作按钮整行可点、滚动条加宽到可直接拖；只读清单（资产表）保持紧凑行距，把纵向空间
+  让给可交互区域。窗口在 150% DPI 的 1280x800 上仍然放得下。
+* **配色** Catppuccin Mocha（含 1.92 新增的 `ImGuiCol_CheckboxSelectedBg` 等键位；漏一个
+  就会从 `StyleColorsDark` 继承出刺眼的默认色）。
+* **目标名单是动态加载的**：启动时读 `<exeDir>/targets.txt`（退回 `config/targets.txt`，
+  都没有才用编译内置名单）；运行中文件一改（大小或修改时间变化，0.5s 轮询）就自动重读并
+  重新探测，也可以点"重新加载名单"手动刷新。改名单不需要重启程序。
+* 启动本身只做只读探测（注册表名单 + 资产清点），不装驱动、不碰盘；驱动装载与裸盘写入
+  只发生在按钮点击之后。非提权时三个按钮全部禁用。任务运行期间窗口拒绝关闭。
+* release 构建嵌入 `requireAdministrator`（双击即 UAC）；debug 构建嵌入 `asInvoker`，
+  供宿主开发机做渲染冒烟——界面对非提权本来就做了降级，不是绕过安全检查的后门。
+* 后端选 D3D9 而非 D3D11：Vista 起随系统提供，Win7 裸镜像不需要任何可再发行组件。
+* 中文字形走 ImGui 1.92 的动态字形加载（不预烘焙 glyph ranges），字体按
+  `%WINDIR%\Fonts` 依次尝试 msyh / Deng / simhei / simsun。
 
 ### CLI 工具的输出风格
 
