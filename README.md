@@ -109,99 +109,27 @@ KDU 的构建工程在 `third_party/KDU.build`（源码在 `third_party/KDU` sub
 | `secmelt` | 交互式界面（Environment / Melt 两屏；`1`/`2` 切屏，`d` 预演，`m` 执行，`q` 退出） |
 | `secmelt --dump` | 渲染一帧到 stdout 后退出，可用于 CI |
 | `secmelt --dry-run` | 只读预演整条链路 |
-| `secmelt --melt --yes-i-know` | 非交互执行整条链路；破坏性、不可回滚（ntfsfix 的非 0 退出不中止；**不自动复位，写完自己重启**，见下） |
+| `secmelt --melt --yes-i-know` | 非交互执行整条链路；破坏性、不可回滚 |
 | `secmelt --selftest-hive` | 校验 hive base block 偏移与校验和算法 |
 | `secmelt --selftest-registry` | 验证过滤器摘除的写入路径 |
 | `secmelt --selftest-raw` | 裸盘写入/读回判定：底层通路是硬断言，OS 通路只做分类（**只在虚拟机里跑**） |
 
-`--selftest-raw`、`--melt` 和交互式 Melt 需要管理员权限；签名强制那一关由程序自己过
-（装载被 577 拒绝时先 `kdu -dse 0` 再重装，装上了才继续）。
+`--selftest-raw`、`--melt` 和交互式 Melt 需要管理员权限。无需担心数字签名：程序自己会搞定。
 
-### DSE 的判据是装载，不是任何查询接口
+### CLI 工具的输出风格
 
-`NtQuerySystemInformation(SystemCodeIntegrityInformation)` 读到的 `CodeIntegrityOptions`
-来自**启动时**的配置（BCD 一类）的映像，不是内核此刻的实际拦截状态 —— 实测有机器报
-"enabled"而根本没有东西在拦，也有报 `1` 而确实在拦。所以这里不查它，直接拿一次真实的装载
-尝试当判据，并且**统一成"探测 → 必要时关掉 → 复测"**：
-
-| 装载返回 | 含义 | 动作 |
-|---|---|---|
-| 成功 | 没有东西在拦（DSE 已关，或从来没拦未签名驱动） | 直接往下走，**不调用 kdu** |
-| `577`（`ERROR_INVALID_IMAGE_HASH`） | 签名强制（或 WDAC / 易受攻击驱动黑名单）在拦 | `kdu -dse 0`，然后**重新装载一次**证明真的解开了 |
-| 其它错误 | 与签名无关（服务注册、驱动文件缺失、权限…） | 报错停下 |
-
-**这条流程只有一份实现**（`melt/unfreeze.cpp::EnsureUnsignedDriverLoads`），melt 的第一步与
-TUI 的环境自检共用它：
-
-| 入口 | 探测 | 被 577 拦下时是否调用 kdu |
-|---|---|---|
-| `--melt` / 交互式 Melt | 是 | **是** —— 关掉、复测，装上了才继续 |
-| 交互式界面的环境屏（含 `Refresh`） | 是 | **是** —— 所以屏上写的是实测结论（`was blocking; turned off with 'kdu -dse 0' and the load now succeeds`），不是"melt 大概会去关"的预测 |
-| `--dump` | 是 | **否** —— 它是纯报告，只如实写 `blocking: ... Melt runs 'kdu -dse 0' and retries the load` |
-
-`kdu` 的退出码不作为判据：它的 `ControlDSE` 回调返回的是各 provider 自己的 BOOL，
-"值本来就已是 0"（`current value is identical to what you want to write`）这种成功路径
-返回的也是 1。
-
-### CLI 的着色（cold & dark）
+借鉴空客A320系列/波音777/787的优良传统：如果驾驶舱里面没有什么灯亮着说明一切正常。我们同理：出错了才会有颜色。
 
 CLI 输出按行首标记分层：`[x]` / `FAIL` / `FAILED:` → **加粗亮红**；`[!]` → 亮黄；
 其余（`[*]` `[+]` …）→ 白色。两个约束：
 
 * **重定向到文件/管道时不着色** —— 否则日志里全是转义序列。
 * **只在能解析 ANSI 的终端上着色**，判定分两条路：
-  1. conhost 原生 VT（`ENABLE_VIRTUAL_TERMINAL_PROCESSING`，**Windows 10 起才有**）；
-  2. **终端程序自己解析 ANSI** —— `ConEmuANSI=ON` / `ANSICON` / `WT_SESSION` / `TERM_PROGRAM`。
 
-  **第 2 条不能省**：Windows 7 的 conhost 没有 VT 支持，但 ConEmu 会自己解析这些序列 ——
-  只看 conhost 的能力会导致 Win7 + ConEmu 下完全没有颜色（这是踩过的坑）。反过来刻意
-  **不看单独的 `ConEmuPID`**：那会在关闭 ANSI 的 ConEmu 里打出乱码。
+### 关于 --preflight 等探测选项
 
-探测的副作用与清理：它要真去装载一次 WinDisk.sys（这就是判据本身）。装载本身无破坏性 ——
-驱动入口只建设备对象与符号链接，不碰磁盘（`third_party/WinDisk/Main.cpp`）。**被拒的装载什么都
-没加载**，所以探测失败时会顺手删掉本次建出来的服务键，不留在活动注册表里；反过来**装载成功时
-绝不删** —— 驱动还加载着，删键会让 SCM 与注册表脱节（实测后果：下一次
-`ChangeServiceConfigW` 报 error 2）。非提权时不探测（`OpenSCManager` 必然被拒，那种失败说明
-不了 DSE），环境屏如实写 `not probed`。
+由于某些 SCM 的神秘 bug，在进行需要加载我们的驱动的探测环节中，在加载驱动然后卸载并清除服务键这一流程会导致SCM内部状态似乎和注册表不太一致，然后这样就会导致同一会话中第二次加载的时候报“找不到驱动文件”，解决办法：重启。
 
-### hive 与事务日志：胜负在 hive 是不是「干净」上
-
-依据 regf 公开规范 [msuhanov/regf](https://github.com/msuhanov/regf)
-（「Dirty state of a hive」「Multiple transaction log files」「Format of transaction log files」）：
-
-* 内核**只在**主 hive「脏」时才做恢复。脏的定义是二选一：base block **校验和不正确**，
-  或**主序号 != 次序号**。**干净的 hive，日志里的后续日志项一律被忽略。**
-* 日志文件（`SYSTEM.LOG` / `.LOG1` / `.LOG2`）开头的**一个扇区**是主 hive base block 的
-  「部分备份副本」（只写 `Clustering factor × 512` 字节，File type 字段被改写，新格式为 6）。
-  一个日志能不能用来恢复，取决于这份副本是否有效、`Last written timestamp` 是否对得上。
-  双日志方案下 `.LOG1`/`.LOG2` 轮流使用；`.LOG` 通常是安装镜像留下的空壳，但单日志方案下
-  它就是唯一那份 —— 所以**三份都要处理**。
-
-于是防线分主次：
-
-| | 作用 |
-|---|---|
-| **写回干净且校验和有效的 hive** | **决定性**。它成立，日志根本不参与 |
-| 不动事务日志 | 冗余。既然清零不改变任何结果（见下），就一个字节都不碰启动路径上的文件 |
-
-**为什么不「清零日志头部」**（曾经的做法，现已删除）：清零在任何分支下都不改变结果 ——
-干净的 hive 让日志项被忽略（上表第二行），被判脏时日志开头那份「base block 部分备份副本」
-又带的是**旧** hive 的序号/时间戳，同样对不上。换不来任何保障，只多出三次针对启动路径文件的
-破坏性离线写入；而"离线改动过 SYSTEM 相关文件"正是启动修复判 `BadPatch` 时盯着的痕迹。
-
-**为什么不把运行时的日志「抄」到盘上**：对这份新 hive 来说不存在"合法的当前日志内容"。
-日志项是**追加式** journal，按偏移 + 序号指向**旧**主 hive 的 bin；我们的导出是
-`RegSaveKeyEx` 重新序列化的全新 hive（`seq1=seq2=1`，bins 布局也是新排的）。「这份 hive 没有
-未刷盘的脏页」对应的合法状态本就是「没有可应用的日志项」。所以没有可抄的东西。
-
-正因为主次如此，第 8 步有**经 ntfs-3g 的读回校验**：`ntfscp` 的退出码只说明它自己认为成功，
-说明不了磁盘上真实落了什么，而启动取决于磁盘上那份。读回后做两件事：
-
-1. 与本地导出**逐字节**比对（证明写到位、没截断）——不一致会报出首个差异字节；
-2. 把读回来的 base block **解析出来**，断言 `signature=regf`、`seq1==seq2`、校验和有效
-   —— 这才是「内核会忽略日志」的直接证据。
-
-第 9 步只**只读检查**三个日志文件的现场并记进日志，不做任何改动。
 
 ### 写回前的一致性地基检查（重要）
 
@@ -225,18 +153,15 @@ SYSTEM hive 写到基线里属于**别的文件**的簇上。这不但毁掉那�
 而且**只读挂载**（`NTFS_MNT_RDONLY`）：只读不会重放日志、不会清 dirty 标记，**一个字节都不写**。
 这一点很要紧 —— 之前的实现走 `ntfs_open()`（FUSE 层），它会附加 `EXCLUSIVE` /
 `IGNORE_HIBERFILE`、读 `$Bitmap` 与 `$MFT` 位图、甚至处理 `hiberfil.sys`，**挂载本身就可能改卷**，
-对"写之前先确认目标是什么"的探针来说是自相矛盾的。顺带也修掉了两个真 bug：路径必须先过
+对"写之前先确认目标是什么"的探针来说是自相矛盾的。顺带也修掉了两个 bug：路径必须先过
 `\`→`/` 转换（`ntfs_pathname_to_inode` 只认 `/`），以及"读不到"曾经被误诊成"内容不是 hive"。
 
 **守卫排在 `ntfsfix` 之前**：ntfsfix 会经同一个 `handle:` 写这个卷（置 dirty 标记、修
 `$MFTMirr`、清 `$LogFile`），而探针要读的是"我们动手之前"的现场。
 
 读不到时守卫会**逐层探路径**（`/`、`/Windows`、`/Users`、…、目标），定位是哪一层断的。
-其中 `/Users` 最有信息量：`secmelt.exe` 自己就跑在 `/Users/<user>/Desktop/...` 下，所以它必然
-存在于文件系统的视图里 —— 若连它都查不到，问题在探针/挂载而非"文件不存在"。
 
-名字查不到时还会**列出父目录的内容**（`list:<path>`），把"索引里根本没这个名字"与"查找本身
-有问题"直接分开。
+名字查不到时还会**列出父目录的内容**（`list:<path>`），用于区分到底是没找到这个文件还是它根本没存在。
 
 ### 名字的大小写：**libntfs-3g 默认区分大小写**（危险）
 
@@ -316,7 +241,7 @@ SYSTEM hive 写到基线里属于**别的文件**的簇上。这不但毁掉那�
 | 两次读回 | 结论 |
 |---|---|
 | **一致** | 卷是稳定的 → 差异是"写没写全"（工具/驱动/连接层） |
-| **不同** | 有东西正在改这个卷 → 还原类软件的驱动在把块改回去 |
+| **不同** | 有东西正在改这个卷 |
 
 ```
 [!] the volume is stable between two consecutive read-backs, so the difference is a write that
@@ -352,43 +277,6 @@ SYSTEM hive 写到基线里属于**别的文件**的簇上。这不但毁掉那�
 readhead 报告的**真实文件长度** —— 只读前 4096 字节时文件长度未知，`rootCellValid` 会给出
 `no` 这种**误导性**结论（踩过一次）。
 
-### 磁盘检查：置卷的 dirty 标记（chkdsk 的做法）
-
-我们是**绕开文件系统**直接改盘，文件系统层的自洽没有别的兜底 —— 所以「下次启动让 autochk
-检查一遍」这件事必须做到。做法就是 chkdsk 自己的做法：在 `$Volume` 的 `$VOLUME_INFORMATION`
-里置 `VOLUME_IS_DIRTY`（`0x0001`）。默认的 `BootExecute` 是 `autocheck autochk *`，它**只检查
-带这个标记的卷**，所以置上标记就够了 —— 不需要改 `BootExecute`，chkdsk 跑完会自己清掉标记，
-因此也不会变成"每次启动都检查"。
-
-关键点：**写必须走裸盘，不能走挂载中的文件系统**。所以由 `ntfs-3g-cli ... setdirty` 完成，
-它经 `handle:` → WinDisk 驱动直达基线磁盘，与其它裸写同一条路；而
-`FSCTL_MARK_VOLUME_DIRTY` 走的是挂载中的文件系统，卷被冻结时那种写会被截在还原软件的增量区、
-到不了基线（这正是 `--selftest-raw` 里"OS 侧读到旧图案、底层已是新图案"所证明的）。
-
-实现上复用 libntfs-3g 的 `ntfs_volume_write_flags()`（它负责定位 `$VOLUME_INFORMATION`、
-做边界校验、然后 `ntfs_inode_sync` 写出），**不手搓 $Volume 的 MFT 偏移**。
-`ntfs-3g-cli` 因此多了一个一次性命令：
-
-```
-ntfs-3g-cli "handle:H:OFF:LEN" setdirty
-# -> volume flags: 0x0000 -> 0x0001 (VOLUME_IS_DIRTY set)
-```
-
-为什么不让 `ntfsfix` 去做：它的设计里本来就有这一步，源码写得很直白
-（`ntfsprogs/ntfsfix.c`）：
-
-> `/* Set chkdsk flag, i.e. mark the partition dirty so chkdsk will run and fix it for us. */`
-
-但两条路都到不了那几行：
-
-| 路径 | 为什么到不了 |
-|---|---|
-| 挂载**成功**（我们的情形） | `check_alternate_boot()` 拿设备扇区数与引导扇区的 `number_of_sectors` 比较，只有设备比文件系统大才会去修备用引导扇区。文件系统填满整个分区时两侧恒等 → `Checking file system overflow... FAILED` → **`exit(1)`**，走不到后面设置标志的代码 |
-| 挂载失败 | `set_dirty_flag()` 只在这条 `fix_mount()` 路径里被调用 |
-
-验证：重启前 `fsutil dirty query C:` 应报 `Volume - C: is Dirty`，重启时应出现磁盘检查界面
-（"To skip disk checking, press any key within N seconds"）。跑完 chkdsk 会自己把标记清掉。
-
 ### 不自动复位：写完自己重启
 
 `--melt --yes-i-know` 与 TUI 的 Melt 写完、逐字节校验、置好 dirty 标记之后就**结束**了 ——
@@ -405,11 +293,9 @@ ntfs-3g-cli "handle:H:OFF:LEN" setdirty
   懒写回之前复位"（那个理由在冻结的机器上不成立，见下节）；
 * bugcheck 会在你读完日志、用别的工具核对现场之前把机器打下去。
 
-早期版本在 CLI 模式下读一次回车就 `KeBugCheckEx(0x0D000721)`，交互模式更是写完就自动打下去。
-整条 bugcheck 路径**已经移除**：驱动侧的 `CTL_REBOOT_SYSTEM`（`KeBugCheckEx`）与用户态的
-`RebootNow`、以及那段"按回车触发蓝屏"的提示全部删掉了 —— 任何入口都不会复位这台机器。
+早期版本在 CLI 模式下读一次回车就 `KeBugCheckEx()`，交互模式更是写完就自动打下去。整条 bugcheck 路径**已经移除**：驱动侧的 `CTL_REBOOT_SYSTEM`（`KeBugCheckEx`）与用户态的`RebootNow`、以及那段"按回车触发蓝屏"的提示全部删掉了 —— 任何入口都不会复位这台机器。毕竟考虑到 Windows 已经不再可能写入我们的磁盘（被重定向了）这么暴力的做法已经没有必要了（这里关于 KeBugCheckEx 有一个彩蛋，各位可以去 git 历史里面找找）
 
-### 不进系统也能查：用设备名直接读（不需要驱动）
+### 不进内核也能查：用设备名直接读（不需要驱动）
 
 `ntfs-3g-cli` 的一次性命令接受任意设备名，其中 `"C:"` 形式走的是低层卷访问
 （`\??\C:` + `FSCTL_LOCK_VOLUME`，只锁不写），**不需要 WinDisk 驱动、也不需要 DSE**：
@@ -421,22 +307,9 @@ ntfs-3g-cli.exe "\\.\C:" stat:/Windows/System32/config/system
 ntfs-3g-cli.exe "\\.\C:" readhead /Windows/System32/config/system D:\head.bin 4096
 ```
 
-`readhead` 的**后两个参数两种顺序都接受**（哪个是纯数字就当字节数）—— 文档里写错过一次顺序，
-与其让人记住，不如让它容错。
+`readhead` 的**后两个参数两种顺序都接受**（哪个是纯数字就当字节数）。
 
-这几条**全是只读的**（`NTFS_MNT_RDONLY`，不重放日志、不清 dirty 标记、一个字节都不写），
-所以可以在**起不来的机器**上用 WinRE 的命令行跑，直接看清卷上到底有什么、真实名字是什么。
-
-**实测（干净快照上的 Win7 x64）**：`config` 里文件名是**小写**的 —— `system`、`system.log`、
-`system.log1`、`system.log2`，且**没有**大写 `SYSTEM`、也没有大小写重名。所以
-
-```
-resolve: /Windows/System32/config/SYSTEM -> /Windows/System32/config/system
-```
-
-这条解析是必要的：`ntfscp` 用大写名字查不到时会 `ntfs_new_file` **新建**一个。传给它的必须
-是上面这个真实名字。（`kLogFiles` 里的常量写的是大写 Win32 路径 —— 那没问题：Win32 API
-本身大小写不敏感，而我们的直接挂载现在也开了 `ignore_case`。）
+这几条**全是只读的**（`NTFS_MNT_RDONLY`，不重放日志、不清 dirty 标记、一个字节都不写），所以可以在**起不来的机器**上用 WinRE 的命令行跑，直接看清卷上到底有什么、真实名字是什么。
 
 ### 先停服务，再删服务键
 
@@ -446,8 +319,7 @@ resolve: /Windows/System32/config/SYSTEM -> /Windows/System32/config/system
 2. 再删注册表键。
 
 **停不下来不算失败**，这是刻意的：内核过滤器驱动大多没有卸载例程，`ControlService` 会直接返回
-`1061`（`ERROR_SERVICE_CANNOT_ACCEPT_CTRL`）。那不影响最终效果 —— 键删掉之后重启就不再加载 ——
-但**必须如实报出来**，因为"现在它还在跑"意味着**到重启前保护依然生效**：
+`1061`（`ERROR_SERVICE_CANNOT_ACCEPT_CTRL`）。那不影响最终效果 —— 键删掉之后重启就不再加载 ——但**必须如实报出来**，因为"现在它还在跑"意味着**到重启前保护依然生效**：
 
 ```
 [+] stopped service: DFServ (stopped)
@@ -455,26 +327,22 @@ resolve: /Windows/System32/config/SYSTEM -> /Windows/System32/config/system
     the service does not accept control commands)) -- it stays active until the next reboot
 ```
 
-注册表键**不存在时也会问一次 SCM**：SCM 的内存记录可以比注册表键活得更久（键被删了、服务还在
-跑），只看注册表就会漏掉一个**正在生效**的过滤器：
+注册表键**不存在时也会问一次 SCM**：SCM 的内存记录可以比注册表键活得更久（键被删了、服务还在跑），只看注册表就会漏掉一个**正在生效**的过滤器：
 
 ```
 [!] service NOT stopped: DeepFrz (still running ...; its registry key is already gone, so nothing
     points at this driver any more -- expect it to disappear after the reboot)
 ```
 
-`--dry-run` 里这一步是**只查询不控制**（`QueryServiceRunning`，只有 `SERVICE_QUERY_STATUS`）——
-预演绝不能真的去 `ControlService`，那就不叫只读预演了：
+`--dry-run` 里这一步是**只查询不控制**（`QueryServiceRunning`，只有 `SERVICE_QUERY_STATUS`），毕竟，预演绝不能真的去 `ControlService`，那就不叫只读预演了：
 
 ```
 [!] would stop and delete service key: HKLM\SYSTEM\CurrentControlSet\Services\DeepFrz [RUNNING (state 4)]
 ```
 
-### 拦截模型的实证：sector 层只影子引导区，"还原"发生在卷/文件层
+## 拦截模型的实证：sector 层只影子引导区，"还原"发生在卷/文件层
 
-对 DeepFreeze 8.63 的三枚驱动做了全量逆向（Ghidra headless 全函数反编译），并在冻结的
-Win7 与 Win10 上做了 A/B 实测（完全不走任何旁路、只走普通 `IoCallDriver` 的版本，melt
-照常落盘），拦截模型如下：
+对 DeepFreeze 8.63 的三枚驱动做了全量逆向（Ghidra headless 全函数反编译），并在冻结的Win7 与 Win10 上做了 A/B 实测（完全不走任何旁路、只走普通 `IoCallDriver` 的版本，melt照常落盘），拦截模型如下：
 
 | 层 | 组件 | 干什么 | 对本工具的影响 |
 |---|---|---|---|
@@ -482,24 +350,15 @@ Win7 与 Win10 上做了 A/B 实测（完全不走任何旁路、只走普通 `I
 | 卷/文件层 | DeepFrz.sys | 真正的"还原"：普通写 COW 进它的隐藏磁盘存储，重启丢弃；**没有 SRB 能力** | **无** —— 端口层裸写在它的视野之外，绕它不靠任何钩子 |
 | 文件系统层 | DFFilter.sys | 观察 + 机器账户保护 | 无 |
 
-推论：**本工具不需要绕过任何钩子**。WinDisk 的 SRB 天然从还原软件的视野下面穿过 ——
-早期版本曾实现过一套从 hooker 内存记录里"救回原始 dispatch"的 bypass，上述实测证明
-它对 hive 写入多余，已经整体删除（留档于 git 历史）。
+推论：**本工具不需要绕过任何钩子**。WinDisk 的 SRB 天然从还原软件的视野下面穿过 ——早期版本曾实现过一套从 hooker 内存记录里"救回原始 dispatch"的 bypass，上述实测证明它对 hive 写入多余，已经整体删除（留档于 git 历史）。
 
-**唯一的边界**：别碰 MBR/GPT 那几个扇区 —— 那是唯一被 sector 影子覆盖的区域，写它会被
-内存影子吞掉（会话内读回自洽、重启蒸发）。本工具不碰它们（也正因如此，那些"必须改 MBR
-才能杀冰点"的传说与本工具无关）。
+**唯一的边界**：别碰 MBR/GPT 分区表几个扇区 —— 那是唯一被 sector 影子覆盖的区域，写它会被内存影子吞掉（会话内读回自洽、重启蒸发）。本工具不碰它们（也正因如此，那些"必须改 MBR才能杀冰点"的传说与本工具无关）。
 
-### 原理：为什么"写坏也炸不了机"
+## 原理：为什么"写坏也炸不了机"
 
-先把目的说清楚（这一条决定了后面所有的取舍）：
+**我们要的是 patch hive 里的 filter 清单 → 写到裸磁盘 → 重启后 Windows 不再加载那些过滤驱动。**改动是给**下一次启动**用的，不需要在当前会话里生效。
 
-**我们要的是 patch hive 里的 filter 清单 → 写到裸磁盘 → 重启后 Windows 不再加载那些过滤驱动。**
-改动是给**下一次启动**用的，不需要在当前会话里生效。
-
-关键推论 —— **我们的基线写入不可能被 Windows 覆盖**：Windows 自己的任何写入都走
-文件系统 → 卷 → 磁盘栈，而还原软件在**卷/文件层**把那些写入 COW 进增量区（见上一节的
-拦截模型），到不了基线。所以：
+关键推论 —— **我们的基线写入不可能被 Windows 覆盖**：Windows 自己的任何写入都走文件系统 → 卷 → 磁盘栈，而还原软件在**卷/文件层**把那些写入 COW 进增量区（见上一节的拦截模型），到不了基线。所以：
 
 * 内核的内存注册表懒写回 → 被重定向 → **盖不到我们写上去的 hive**；
 * 因此 **bugcheck 不是必需的**：它存在的理由（防止内存里的注册表刷回磁盘覆盖我们写的 hive）
@@ -515,13 +374,10 @@ Win7 与 Win10 上做了 A/B 实测（完全不走任何旁路、只走普通 `I
 | 写后读回不一致 | 只报告 + 保留回滚镜像的路径，**不自动回滚、不中止** |
 | 完成后 | 打印结论并提示**自行普通重启**（本工具不做任何自动复位） |
 
-**为什么不做自动回滚**：如果读回校验是误报而写入其实成功了，把 SYSTEM 恢复成写之前的样子就等于
-把我们写上去的 filter 摘除**撤销掉** —— 那正是本轮要做的事。回滚在关键时刻是有害的。
-
-**为什么"写回不一致"和"能不能开机"是两件事**：磁盘上留下的是一份读回不一致的 hive —— 引导器
-只能去读它；而内核内存里那份注册表仍然是**可用**的替代品。所以**读回不一致时不要 bugcheck**
-（本版已经没有任何自动复位路径）：普通重启是安全的（不会丢内存注册表），而"重启后过滤驱动是否
+**为什么"写回不一致"和"能不能开机"是两件事**：磁盘上留下的是一份读回不一致的 hive —— 引导器只能去读它；而内核内存里那份注册表仍然是**可用**的替代品。所以**读回不一致时不要 bugcheck**（本版已经没有任何自动复位路径）：普通重启是安全的（不会丢内存注册表），而"重启后过滤驱动是否
 还在加载"才是"写到底有没有落上"的真正答案。
+
+## NTFS 相关杂物
 
 ### 读回"一大片连续的 0x00"意味着什么（`info:<path>`）
 
@@ -559,11 +415,11 @@ runlist: N run(s), M hole run(s), K cluster(s) allocated (cluster=4096)
 （`find_best_runs` / `assign_runlist`）的路径 —— 那条路会直接改属性的 runlist 而不写数据，
 是另一个值得警惕的坑，但我们没走。
 
+> 实际上这个功能是额外的。早期出现过一个乱七八糟的情况，那就是写入的时候老是只写一点点就没了（类似于下面几行的那个4701），至于根本原因，后面会讲。
+
 ### `record:<path>`：MFT 记录法证倾倒（谁最后写了这条记录）
 
-当 `initialized_size` 出现一个**任何合法写入者都产生不了的值**（例如 4701 —— 拷贝循环只会写
-`0` 或 `8192` 的倍数，truncate 只写 `0`/`newsize`/对齐值）时，解析后的字段已经不够用了，
-只有**字节本身**能定案。`record:<path>`（只读直接挂载）把那条 MFT 记录倾倒出来：
+当 `initialized_size` 出现一个**任何合法写入者都产生不了的值**（例如 4701 —— 拷贝循环只会写`0` 或 `8192` 的倍数，truncate 只写 `0`/`newsize`/对齐值）时，解析后的字段已经不够用了，只有**字节本身**能定案。`record:<path>`（只读直接挂载）把那条 MFT 记录倾倒出来：
 
 * 记录头（magic/序号/链接数/`bytes_in_use`/`base_record_ref`）；
 * 逐属性布局：类型、长度、驻留与否、非驻留的 `alloc/data/init` 三个原始长度字段；
@@ -589,53 +445,18 @@ PsVFilt|影子系统 PowerShadow
 PsLFilt|影子系统 PowerShadow
 ```
 
-只放注册项名（过滤器项名 / 服务键名），不放文件路径。
+只放注册项名（过滤器项名 / 服务键名），不放文件路径。注意一下编码问题，如果输出是乱码就换个编码（UTF8/GBK都可以试试看）
 
 ## FAQ
 
 ### 运行时
 
 **支持哪些系统？有什么前提条件？**
-Windows 7 SP1（要带 SHA-2 补丁）可以直接用。Windows 10 / 11 这类较新的系统，必须先关掉
-VBS 与 HVCI（内存完整性）—— 在「Windows 安全中心 → 设备安全性 → 内核隔离」里可以一并关闭，
-这是这一切实施的必要条件。同时关掉其它安全软件与 Windows Defender 的实时保护
-（病毒和威胁防护里）。
-
-**`--melt` 报 "kdu reported exit code 1 but driver signature enforcement is still ON"？**
-那是旧版的判据：它拿 `NtQuerySystemInformation` 的读数当 DSE 状态，而那个值来自启动时的
-配置映像，不是内核此刻的拦截状态。现在判据改成了**装载返回码**（见上）：装得上就直接走，
-装不上才 `kdu -dse 0` 并重新装载验证。顺带一提，kdu 在"DSE 本来就是 0"时输出的
-`Warning, current value is identical to what you want to write` 就是这种情况，它的退出码
-`1` 在这里不是失败。
-
-**为什么要/不要清零 `SYSTEM.LOG1`/`LOG2`？**
-**不清零了。** 清零在任何分支下都不改变结果（依据 regf 规范「Dirty state of a hive」）：
-
-| 情形 | 日志是否被采用 |
-|---|---|
-| 写回并**从磁盘读回验证过**的 hive 是干净的（seq1==seq2、校验和有效） | **不采用** —— 干净的 hive，日志里的日志项一律被忽略 |
-| 万一那份 hive 被判成脏 | 也**不采用** —— 日志开头那份「base block 部分备份副本」带的是**旧** hive 的序号/时间戳，而我们这份是新序列化的全新 hive（seq=1），对不上 |
-
-也就是说清零换不来任何保障，只多出三次针对启动路径文件的破坏性离线写入。真正的地基是第 8 步的
-读回校验（断言磁盘上那份干净且校验和有效），不是清零。现在只读检查日志现场并记进日志。
-
-**那为什么不把运行时的日志"抄"到盘上？**
-因为对这份新 hive 来说不存在"合法的当前日志内容"。日志项是**追加式**的 journal，按偏移 + 序号
-指向**旧**主 hive 的 bin；我们的导出是 `RegSaveKeyEx` 重新序列化的全新 hive（`seq1=seq2=1`，
-bins 布局也是新排的）。把旧日志项写到盘上，最好的情况是被忽略，最坏的情况是"被判成可应用、
-于是把旧页重放到新 hive 上"。**"这份 hive 没有未刷盘的脏页"对应的合法状态就是"没有可应用的
-日志项"** —— 而无日志项等价于清零。所以没有可抄的东西。
+Windows 7 SP1（要带 SHA-2 补丁）可以直接用。Windows 10 / 11 这类较新的系统，必须先关掉VBS 与 HVCI（内存完整性）—— 在「Windows 安全中心 → 设备安全性 → 内核隔离」里可以一并关闭，这是这一切实施的必要条件。同时关掉其它安全软件与 Windows Defender 的实时保护（病毒和威胁防护里）。
 
 **启动修复报 `BadPatch` / "A patch is preventing the system from starting"？**
 这是启动修复对「补丁状态不完整 / 注册表被离线改过一半」的诊断签名，它的修复动作通常是**系统还原**。
 我们的 melt 恰好就是一次离线改注册表，因此要保证**改得"整"**：
-
-* **主 hive 与 `RegBack` 备份必须同一代数** —— 只改主 hive 会让启动修复看到"被改了一半"。
-  现在第 8b 步会把同一份导出也写进 `config\RegBack\SYSTEM`（存在时），这样即使它真去还原，
-  还原的也是我们写的那份，而不是把我们静默回退掉。可以用 `--dry-run` 的待办清单确认这一步在列。
-* 事务日志不再被动过（见上一条）—— 又少了三个"离线改动痕迹"。
-* 若仍报 BadPatch，去 `SrtTrail.txt` 看它指的具体文件/补丁：
-  `X:\Windows\System32\LogFiles\Srt\SrtTrail.txt`（X: 是修复环境的系统盘）。
 
 **`--selftest-raw` 报 `FAIL uncached FS read-back mismatch at byte 0: 0xA5`？**
 先分清那条读回走的是哪条路：
@@ -650,21 +471,13 @@ bins 布局也是新排的）。把旧日志项写到盘上，最好的情况是
 melt 依赖的"绕过上层"通道。所以现在 OS 侧读到 A 会被判定为 `a volume filter is holding
 the original blocks`，只有"既不是 A 也不是 B"才报 FAIL。
 
-**`--melt` 停在 `ntfsfix exited with 1`（`Checking file system overflow... FAILED`）？**
-不再停了 —— 这个退出码是**结构性必然**，不是故障。ntfsfix 的 `check_alternate_boot()`
-拿设备长度和引导扇区的 `number_of_sectors` 比，只有设备比文件系统大才去修备用引导扇区；
-而 `handle:` 协议里的长度本来就是"引导扇区扇区数 × 512"（原作者 `DeepFrz/DiskIO.cpp` 的
-`file_size` 也是这么算的），两边恒等 → 走 overflow 分支 → `exit(1)`。
-它仍然值得跑：卷挂载失败时它会修 `$MFTMirr`、清空 `$LogFile`，再把卷交回挂载。
-参考实现同样只把退出码记进日志，然后照样跑 ntfscp。想彻底跳过用 `--no-ntfsfix`。
-
 **环境屏说 `Source tree ... not present (deployed bundle)`？**
 那是正常的。`third_party/`、`config/` 那些是**构建期**资产；把它们拷到目标机的
 release 目录里没有它们，运行时用的也不是它们（运行时只用 exe 旁边的
 `WinDisk_x64.sys` / `kdu.exe` / `drv64.dll` / `targets.txt` / `tools`）。源码树不在时
 只报这一行，而不是刷 6 条"缺失"故障。
 
-**`--melt` 跑完重启后进不去系统（`0xC0000225` = 需要的设备/文件不可访问）？**
+**`--melt` 跑完重启后进不去系统（`0xC0000225` = INACCESSIBLE_BOOT_DEVICE）？**
 先分清是**哪一环**出的问题 —— 症状一样，责任方完全不同。按可能性排序：
 
 1. **磁盘上那份 hive 没落对**（最该先排除）。第 8 步的读回校验会直接回答：
@@ -674,66 +487,20 @@ release 目录里没有它们，运行时用的也不是它们（运行时只用
    * 报 `ntfs-3g reads back the exact hive we wrote, and its base block is clean and
      checksum-valid` → hive 这一环是干净的，去下面找原因。若守卫更早就报
      `ntfs-3g does not see a hive here: first bytes are ...`，那说明连写都没写（安全中止）。
-2. **基线（被冻结保护的那份）与当前状态不一致**。冻结点之后的改动（**新建的文件**尤其）
-   存在于还原软件的增量区里，而我们的裸写只把当前 hive 写进了基线：于是注册表引用的某个
-   文件在基线磁盘上**并不存在**。若它是启动链上的（BOOT_START 驱动之类），症状正是
-   「需要的设备不可访问」。这类失败与 hive/日志无关，读回校验会显示一切正常。
+2. **基线（被冻结保护的那份）与当前状态不一致**。冻结点之后的改动（**新建的文件**尤其）存在于还原软件的增量区里，而我们的裸写只把当前 hive 写进了基线：于是注册表引用的某个文件在基线磁盘上**并不存在**。若它是启动链上的（BOOT_START 驱动之类），症状正是 0xC0000225。这类失败与 hive/日志无关，读回校验会显示一切正常。
    验证办法：别修 hive，直接按还原产品自己的流程解除保护/提交增量后再启动一次做对照。
-3. **摘掉的过滤项里有启动必需的**。代码只删命中名单的项、非空结果绝不整值删除
-   （`partmgr`/`kbdclass`/`mouclass` 这类系统自身项会保留），`--selftest-registry` 就是
-   验证这条写入路径的。若怀疑，用 `--dry-run` 看它**打算**删什么（只读探测，不写）。
-4. **还原软件有启动期组件**（MBR/引导扇区上另装一层）。这种情况下它在 Windows 之前就把
-   基线改回去了，hive 与日志都无能为力。
+3. **摘掉的过滤项里有启动必需的**。代码只删命中名单的项、非空结果绝不整值删除（`partmgr`/`kbdclass`/`mouclass` 这类系统自身项会保留），`--selftest-registry` 就是验证这条写入路径的。若怀疑，用 `--dry-run` 看它**打算**删什么（只读探测，不写）。
+4. **还原软件有启动期组件**（MBR/引导扇区上另装一层）。这种情况下它在 Windows 之前就把基线改回去了，hive 与日志都无能为力。（常见例子: Rollback RX Pro，但是这个东西的支持还需要我多实验看看，目前请不要用）
 
 **HKCU 的 hive 导出报 `1314`？**
-`RegSaveKeyEx` 需要 `SE_BACKUP_NAME`，即便导出的是自己账户的 hive —— 所以 `--selftest-hive`
-也要提权（这也是为什么它不能在普通命令行里跑）。
+`RegSaveKeyEx` 需要 `SE_BACKUP_NAME`，即便导出的是自己账户的 hive —— 所以 `--selftest-hive`也要提权（这也是为什么它不能在普通命令行里跑）。
 
 **重启后没看到磁盘检查 / 起不来（`0xC0000225`）？**
-先看日志里这几行：`the system volume is marked dirty`、
-`base block on disk: ... clean=yes checksumOk=yes`。
+先看日志里这几行：`the system volume is marked dirty`、`base block on disk: ... clean=yes checksumOk=yes`。
 
 * 置标记**成功 + 读回校验通过**，却仍起不来 → hive 这一环是干净的，问题多半在**基线**：
   冻结点之后新建的文件只存在于还原软件的增量区，我们把当前 hive 写进基线后，注册表引用的
-  某个文件在基线上并不存在（若是启动链上的驱动，症状正是"需要的设备不可访问"）。可以先按
-  还原产品自己的流程提交/解除保护，再做一次对照。
-* 置标记**失败**（`ntfs-3g-cli setdirty exited with N`）→ 手动补：进系统后
-  `fsutil dirty set C:` 并重启（注意它走挂载中的文件系统，冻结时可能到不了基线）。
-
-**重启后进「启动修复 / 自动修复」，而不是正常进系统？**
-这是**和 `0xC0000225` 不同的失败点**，先把两者分开看：
-
-| 症状 | 失败阶段 |
-|---|---|
-| `0xC0000225`（"a required device isn't connected or can't be accessed"） | `winload` 阶段 —— 引导器还没把控制权交给内核 |
-| 出现启动画面**之后**才进修复 | 引导器与 SYSTEM hive 的加载**已经过了**，失败在内核初始化 / 启动驱动 / 服务 |
-
-所以后者不是"变坏了"，而是失败点后移了 —— 但也**不等于**修好了，仍然没进系统。
-
-要紧的是：**启动修复会改系统**（Windows 的启动修复可能从 `RegBack` 恢复注册表 hive）。
-一旦走到那里，我们写进去的 hive 就可能已被它覆盖 —— **这台虚拟机不再是有说服力的实验对象，
-先回快照再测**。
-
-要看的两样东西：
-
-1. **启动修复自己的诊断**：`X:\Windows\System32\LogFiles\Srt\SrtTrail.txt`（X: 是修复环境的
-   系统盘；若已能进系统则在 `C:\Windows\System32\LogFiles\Srt\SrtTrail.txt`）。它会直接写出
-   它认为坏掉的那个文件/驱动 —— 这比任何猜测都准。
-2. 修复界面上的**错误码/问题签名**（拍照或抄下来）。
-
-另外看 `--melt` 的日志里两处：`pre-write guard: ...` 与
-`base block on disk: ... clean=yes checksumOk=yes`。守卫若报
-`ntfs-3g does not see a hive here: first bytes are ...`，那说明我们连写都没写（安全中止）；
-若守卫通过而读回校验也通过，则 hive 这一环是干净的，问题在别处。
-
-**kdu 输出 `Provider: "(null)"`，`-dse 0` 却像成功了？**
-`drv64.dll` 没跟 `kdu.exe` 放在一起。缺了它 KDU 用一个空表，一个驱动都不会加载，退出码仍是 0。
-
-**ConEmu 弹 `Max Real Console size was reached`？**
-ConEmu 能放大的控制台大小 = 显示尺寸 ÷ 真控制台字体的单元格大小。把真控制台字体改小
-（Settings → **Features** → "Debugging options" 里 "Show real console" 旁的 **...** → **Real console font**，
-要用 TrueType 字体），或别最大化窗口，或把回滚缓冲设为 `h0`
-（Settings → **Size and Pos** → 取消 "Long console output"）。
+  某个文件在基线上并不存在（若是启动链上的驱动，症状正是"需要的设备不可访问"）。对于这类 bootkit 建议先排查一下。一个白板 Windows 是什么样的，随便问一个ai就知道；请务必记得你在当前会话装了啥软件。
 
 **TUI 闪 / 退出后清不干净？**
 Win7 上 ConEmu 切不了备用屏幕，界面不依赖它 —— 退出后内容留在屏幕上属于正常。
