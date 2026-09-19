@@ -111,16 +111,17 @@ KDU 的构建工程在 `third_party/KDU.build`（源码在 `third_party/KDU` sub
 
 | 命令 | 作用 |
 |---|---|
-| `secmelt` | 交互式界面（Environment / Melt 两屏；`1`/`2` 切屏，`d` 预演，`m` 执行，`q` 退出） |
+| `secmelt` | 命令行入口（无子命令时打印用法）；交互/点按式操作走 `secmelt-gui` |
 | `secmelt-gui` | 图形前端（Dear ImGui · Win32 + D3D9）：同一套 pipeline，点按式操作，Win7 SP1 → Win11 |
-| `secmelt --dump` | 渲染一帧到 stdout 后退出，可用于 CI |
+| `secmelt --dump` | 自检报告：环境 + 构建期资产 + 名单的实测存在状态，只读，可用于 CI |
 | `secmelt --dry-run` | 只读预演整条链路 |
+| `secmelt --preflight` | melt 前的一次性根因扫描（logstate 守卫 + 目录层级探针），**只在带快照的 VM 里跑** |
 | `secmelt --melt --yes-i-know` | 非交互执行整条链路；破坏性、不可回滚 |
 | `secmelt --selftest-hive` | 校验 hive base block 偏移与校验和算法 |
 | `secmelt --selftest-registry` | 验证过滤器摘除的写入路径 |
 | `secmelt --selftest-raw` | 裸盘写入/读回判定：底层通路是硬断言，OS 通路只做分类（**只在虚拟机里跑**） |
 
-`--selftest-raw`、`--melt` 和交互式 Melt 需要管理员权限。无需担心数字签名：程序自己会搞定。
+`--selftest-raw`、`--melt`（以及图形前端的三个动作）需要管理员权限。无需担心数字签名：程序自己会搞定。
 
 ### 图形前端（secmelt-gui）
 
@@ -313,7 +314,7 @@ readhead 报告的**真实文件长度** —— 只读前 4096 字节时文件�
 
 ### 不自动复位：写完自己重启
 
-`--melt --yes-i-know` 与 TUI 的 Melt 写完、逐字节校验、置好 dirty 标记之后就**结束**了 ——
+`--melt --yes-i-know` 与图形前端的 Melt 写完、逐字节校验、置好 dirty 标记之后就**结束**了 ——
 不 bugcheck、没有任何自动复位路径，只打印结论并提示你重启：
 
 ```
@@ -536,14 +537,9 @@ release 目录里没有它们，运行时用的也不是它们（运行时只用
   冻结点之后新建的文件只存在于还原软件的增量区，我们把当前 hive 写进基线后，注册表引用的
   某个文件在基线上并不存在（若是启动链上的驱动，症状正是"需要的设备不可访问"）。对于这类 bootkit 建议先排查一下。一个白板 Windows 是什么样的，随便问一个ai就知道；请务必记得你在当前会话装了啥软件。
 
-**TUI 闪 / 退出后清不干净？**
-Win7 上 ConEmu 切不了备用屏幕，界面不依赖它 —— 退出后内容留在屏幕上属于正常。
-把真控制台字体调小（见上一条）会更稳。
-
-**TUI 启动后直接退出，退出码 3？**
-当前控制台不解释 VT 转义序列，故意不启动以免刷屏。用 ConEmu / ANSICON，
-或者走纯文本命令（`--dry-run` / `--melt --yes-i-know` / `--selftest-*` / `--dump`）。
-强行启动：`SECMELT_TUI_FORCE=1`。
+**没有交互界面了？**
+CLI 只做命令行工具：每条子命令跑完打印报告就退出，不依赖任何终端能力 —— Windows 7 的原生
+conhost 也能完整工作。需要点按式操作时用图形前端 `secmelt-gui`（同一份 pipeline）。
 
 ### 构建时
 
@@ -561,7 +557,7 @@ MSYS2 里是 `pacman -S mingw-w64-x86_64-gcc`，或者用 `MINGW_ROOT` 指向别
 ## 许可
 
 以 **GPL-3.0-or-later** 发布，见 `LICENSE`。第三方组件：`ntfs-3g`（GPL-2.0-or-later）、
-`KDU`（MIT，submodule）、`WinDisk`（本项目）、`FTXUI`（MIT），均与 GPLv3 兼容。
+`KDU`（MIT，submodule）、`WinDisk`（本项目）、`Dear ImGui`（MIT），均与 GPLv3 兼容。
 
 ## 免责声明
 
