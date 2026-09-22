@@ -146,9 +146,15 @@
  *	Including <windows.h> leads to numerous conflicts with layout.h
  *	so define a few needed Windows calls unrelated to ntfs-3g
  */
-BOOL WINAPI LookupAccountNameA(const char*, const char*, void*,
-		u32*, char*, u32*, s32*);
-BOOL WINAPI GetUserNameA(char*, u32*);
+BOOL WINAPI LookupAccountNameA(
+	const char *,
+	const char *,
+	void *,
+	u32 *,
+	char *,
+	u32 *,
+	s32 *);
+BOOL WINAPI GetUserNameA(char *, u32 *);
 #endif
 
 #ifdef HAVE_WINDOWS_H
@@ -165,41 +171,48 @@ BOOL WINAPI GetUserNameA(char*, u32*);
 
 typedef enum { DENIED, AGREED } boolean;
 
-enum STATES { STATE_USERS, STATE_HOMES, STATE_BASE } ;
+enum STATES { STATE_USERS, STATE_HOMES, STATE_BASE };
 
-struct CALLBACK {
+struct CALLBACK
+{
 	const char *accname;
 	const char *dir;
-	int levels;
+	int         levels;
 	enum STATES docset;
-} ;
+};
 
-typedef int (*dircallback)(struct CALLBACK *context, char *ntfsname,
-	int length, int type, long long pos, unsigned long long mft_ref,
-	unsigned int dt_type);
+typedef int (*dircallback)(
+	struct CALLBACK *  context,
+	char *             ntfsname,
+	int                length,
+	int                type,
+	long long          pos,
+	unsigned long long mft_ref,
+	unsigned int       dt_type);
 
 
-struct USERMAPPING {
-	struct USERMAPPING *next;
-	const char *uidstr;
-	const char *gidstr;
-	const char *sidstr;
+struct USERMAPPING
+{
+	struct USERMAPPING * next;
+	const char *         uidstr;
+	const char *         gidstr;
+	const char *         sidstr;
 	const unsigned char *sid;
-	const char *login;
-	boolean defined;
+	const char *         login;
+	boolean              defined;
 };
 
 struct USERMAPPING *firstmapping;
 struct USERMAPPING *lastmapping;
 
 #ifdef HAVE_WINDOWS_H
-char *currentwinname;
-char *currentdomain;
+char *         currentwinname;
+char *         currentdomain;
 unsigned char *currentsid;
 #endif
 
 void *ntfs_handle;
-void *ntfs_context = (void*)NULL;
+void *ntfs_context = (void *) NULL;
 
 /*
  *		Open and close a volume in read-only mode
@@ -211,25 +224,35 @@ static boolean open_volume(const char *volume)
 	boolean ok;
 
 	ok = DENIED;
-	if (!ntfs_context) {
-		ntfs_context = ntfs_initialize_file_security(volume,
-						NTFS_MNT_RDONLY);
-		if (ntfs_context) {
-			fprintf(stderr,"\"%s\" opened\n",volume);
+	if (!ntfs_context)
+	{
+		ntfs_context = ntfs_initialize_file_security(
+			volume,
+			NTFS_MNT_RDONLY);
+		if (ntfs_context)
+		{
+			fprintf(stderr, "\"%s\" opened\n", volume);
 			ok = AGREED;
-		} else {
-			fprintf(stderr,"Could not open \"%s\"\n",volume);
-#ifdef HAVE_WINDOWS_H
-			if (errno == EACCES)
-				fprintf(stderr,"Make sure you have"
-					" Administrator rights\n");
-#else
-			fprintf(stderr,"Make sure \"%s\" is not mounted\n",
-				volume);
-#endif
 		}
-	} else
-		fprintf(stderr,"A volume is already open\n");
+		else
+		{
+			fprintf(stderr, "Could not open \"%s\"\n", volume);
+			#ifdef HAVE_WINDOWS_H
+			if (errno == EACCES)
+				fprintf(
+					stderr,
+					"Make sure you have"
+					" Administrator rights\n");
+			#else
+			fprintf(
+				stderr,
+				"Make sure \"%s\" is not mounted\n",
+				volume);
+			#endif
+		}
+	}
+	else
+		fprintf(stderr, "A volume is already open\n");
 	return (ok);
 }
 
@@ -239,10 +262,10 @@ static boolean close_volume(const char *volume)
 
 	r = ntfs_leave_file_security(ntfs_context) ? AGREED : DENIED;
 	if (r)
-		fprintf(stderr,"\"%s\" closed\n",volume);
+		fprintf(stderr, "\"%s\" closed\n", volume);
 	else
-		fprintf(stderr,"Could not close \"%s\"\n",volume);
-	ntfs_context = (void*)NULL;
+		fprintf(stderr, "Could not close \"%s\"\n", volume);
+	ntfs_context = (void *) NULL;
 	return (r);
 }
 
@@ -256,20 +279,23 @@ static void to_utf8(char *dst, const char *src, unsigned int cnt)
 	unsigned int ch;
 	unsigned int i;
 
-	for (i=0; i<cnt; i++) {
+	for (i = 0; i < cnt; i++)
+	{
 		ch = *src++ & 255;
 		ch += (*src++ & 255) << 8;
 		if (ch < 0x80)
 			*dst++ = ch;
+		else if (ch < 0x1000)
+		{
+			*dst++ = 0xc0 + (ch >> 6);
+			*dst++ = 0x80 + (ch & 63);
+		}
 		else
-			if (ch < 0x1000) {
-				*dst++ = 0xc0 + (ch >> 6);
-				*dst++ = 0x80 + (ch & 63);
-			} else {
-				*dst++ = 0xe0 + (ch >> 12);
-				*dst++ = 0x80 + ((ch >> 6) & 63);
-				*dst++ = 0x80 + (ch & 63);
-			}
+		{
+			*dst++ = 0xe0 + (ch >> 12);
+			*dst++ = 0x80 + ((ch >> 6) & 63);
+			*dst++ = 0x80 + (ch & 63);
+		}
 	}
 	*dst = 0;
 }
@@ -278,27 +304,28 @@ static int utf8_size(const char *src, unsigned int cnt)
 {
 	unsigned int ch;
 	unsigned int i;
-	int size;
+	int          size;
 
 	size = 0;
-	for (i=0; i<cnt; i++) {
+	for (i = 0; i < cnt; i++)
+	{
 		ch = *src++ & 255;
 		ch += (*src++ & 255) << 8;
 		if (ch < 0x80)
 			size++;
+		else if (ch < 0x1000)
+			size += 2;
 		else
-			if (ch < 0x1000)
-				size += 2;
-			else
-				size += 3;
+			size += 3;
 	}
 	return (size);
 }
 
 static void welcome(void)
 {
-	printf("\nThis tool will help you to build a mapping of"
-			" Windows users\n");
+	printf(
+		"\nThis tool will help you to build a mapping of"
+		" Windows users\n");
 	printf("to Linux users.\n");
 	printf("Be prepared to give Linux user id (uid) and group id (gid)\n");
 	printf("for owners of files which will be selected.\n");
@@ -306,7 +333,7 @@ static void welcome(void)
 
 static unsigned int get2l(const unsigned char *attr, int p)
 {
-	int i;
+	int          i;
 	unsigned int v;
 
 	v = 0;
@@ -317,7 +344,7 @@ static unsigned int get2l(const unsigned char *attr, int p)
 
 static unsigned long get4l(const unsigned char *attr, int p)
 {
-	int i;
+	int           i;
 	unsigned long v;
 
 	v = 0;
@@ -328,7 +355,7 @@ static unsigned long get4l(const unsigned char *attr, int p)
 
 static unsigned long long get6h(const unsigned char *attr, int p)
 {
-	int i;
+	int                i;
 	unsigned long long v;
 
 	v = 0;
@@ -339,25 +366,27 @@ static unsigned long long get6h(const unsigned char *attr, int p)
 
 static char *decodesid(const unsigned char *sid)
 {
-	char *str;
-	int i;
+	char *             str;
+	int                i;
 	unsigned long long auth;
-	unsigned long subauth;
+	unsigned long      subauth;
 
-	str = (char *)malloc(MAXSIDSZ);
-	if (str) {
+	str = (char *) malloc(MAXSIDSZ);
+	if (str)
+	{
 		strcpy(str, "S");
-							/* revision */
+		/* revision */
 		sprintf(&str[strlen(str)], "-%d", sid[0]);
-							/* main authority */
+		/* main authority */
 		auth = get6h(sid, 2);
-#ifdef HAVE_WINDOWS_H
+		#ifdef HAVE_WINDOWS_H
 		sprintf(&str[strlen(str)], "-%I64u", auth);
-#else
+		#else
 		sprintf(&str[strlen(str)], "-%llu", auth);
-#endif
-		for (i = 0; (i < 8) && (i < sid[1]); i++) {
-							/* sub-authority */
+		#endif
+		for (i = 0; (i < 8) && (i < sid[1]); i++)
+		{
+			/* sub-authority */
 			subauth = get4l(sid, 8 + 4 * i);
 			sprintf(&str[strlen(str)], "-%lu", subauth);
 		}
@@ -373,19 +402,19 @@ static boolean isgenericgroup(const char *sid)
 {
 	boolean yes;
 
-	yes = !strncmp(sid,"S-1-5-21-",9)
-		&& !strcmp(strrchr(sid,'-'),"-513");
+	yes = !strncmp(sid, "S-1-5-21-", 9)
+			&& !strcmp(strrchr(sid, '-'), "-513");
 	return (yes);
 }
 
 static unsigned char *makegroupsid(const unsigned char *sid)
 {
 	static unsigned char groupsid[MAXSIDSZ];
-	int size;
+	int                  size;
 
-	size = 8 + 4*sid[1];
+	size = 8 + 4 * sid[1];
 	memcpy(groupsid, sid, size);
-		/* replace last level by 513 */
+	/* replace last level by 513 */
 	groupsid[size - 4] = 1;
 	groupsid[size - 3] = 2;
 	groupsid[size - 2] = 0;
@@ -393,44 +422,57 @@ static unsigned char *makegroupsid(const unsigned char *sid)
 	return (groupsid);
 }
 
-static void askmapping(const char *accname, const char *filename,
-		const char *dir, const unsigned char *sid, int type,
-		struct USERMAPPING *mapping, char *sidstr)
+static void askmapping(
+	const char *         accname,
+	const char *         filename,
+	const char *         dir,
+	const unsigned char *sid,
+	int                  type,
+	struct USERMAPPING * mapping,
+	char *               sidstr)
 {
-	char buf[81];
-	char *idstr;
-	char *login;
-	int sidsz;
+	char    buf[81];
+	char *  idstr;
+	char *  login;
+	int     sidsz;
 	boolean reject;
-	char *p;
+	char *  p;
 
-	do {
+	do
+	{
 		reject = DENIED;
 		printf("\n");
 		if (accname)
 			printf("Under Windows login \"%s\"\n", accname);
-		if (dir) {
-#ifdef HAVE_WINDOWS_H
+		if (dir)
+		{
+			#ifdef HAVE_WINDOWS_H
 			char *wdir;
 
 			wdir = strdup(dir);
-			if (wdir) {
-				for (p=wdir; *p; p++)
+			if (wdir)
+			{
+				for (p = wdir; *p; p++)
 					if (*p == '/')
 						*p = '\\';
-				printf("   in directory \"%s\"\n",wdir);
+				printf("   in directory \"%s\"\n", wdir);
 				free(wdir);
 			}
-#else
-			printf("   in directory \"%s\"\n",dir);
-#endif
+			#else
+			printf("   in directory \"%s\"\n", dir);
+			#endif
 		}
-		printf("   file \"%s\" has no mapped %s\n",
-			       filename,(type ? "group" : "owner"));
+		printf(
+			"   file \"%s\" has no mapped %s\n",
+			filename,
+			(type ? "group" : "owner"));
 		printf("By which Linux login should this file be owned ?\n");
-		printf("Enter %s of login, or just press \"enter\" if"
-			" this file\n", (type ? "gid" : "uid"));
-		printf("does not belong to a user, or you do not know"
+		printf(
+			"Enter %s of login, or just press \"enter\" if"
+			" this file\n",
+			(type ? "gid" : "uid"));
+		printf(
+			"does not belong to a user, or you do not know"
 			" to whom\n");
 		printf("\n");
 		if (type)
@@ -442,7 +484,8 @@ static void askmapping(const char *accname, const char *filename,
 			p[strlen(p) - 1] = '\0';
 
 		if (p && p[0]
-			 && ((p[0] == '0') || !strcmp(p, "root"))) {
+			&& ((p[0] == '0') || !strcmp(p, "root")))
+		{
 			printf("Please do not map users to root\n");
 			printf("Administrators will be mapped automatically\n");
 			reject = AGREED;
@@ -450,11 +493,12 @@ static void askmapping(const char *accname, const char *filename,
 		if (reject)
 			printf("Please retry\n");
 	} while (reject);
-	if (!mapping) {
+	if (!mapping)
+	{
 		mapping =
-		    (struct USERMAPPING *)
-		    malloc(sizeof(struct USERMAPPING));
-		mapping->next = (struct USERMAPPING *)NULL;
+				(struct USERMAPPING *)
+				malloc(sizeof(struct USERMAPPING));
+		mapping->next    = (struct USERMAPPING *) NULL;
 		mapping->defined = DENIED;
 		if (lastmapping)
 			lastmapping->next = mapping;
@@ -462,15 +506,21 @@ static void askmapping(const char *accname, const char *filename,
 			firstmapping = mapping;
 		lastmapping = mapping;
 	}
-	if (mapping) {
-		if (p && p[0]) {
-			idstr = (char *)malloc(strlen(p) + 1);
-			if (idstr) {
+	if (mapping)
+	{
+		if (p && p[0])
+		{
+			idstr = (char *) malloc(strlen(p) + 1);
+			if (idstr)
+			{
 				strcpy(idstr, p);
-				if (type) {
+				if (type)
+				{
 					mapping->uidstr = "";
 					mapping->gidstr = idstr;
-				} else {
+				}
+				else
+				{
 					mapping->uidstr = idstr;
 					mapping->gidstr = idstr;
 				}
@@ -478,95 +528,138 @@ static void askmapping(const char *accname, const char *filename,
 			}
 		}
 		mapping->sidstr = sidstr;
-		if (accname) {
-			login = (char*)malloc(strlen(accname) + 1);
+		if (accname)
+		{
+			login = (char *) malloc(strlen(accname) + 1);
 			if (login)
-				strcpy(login,accname);
+				strcpy(login, accname);
 			mapping->login = login;
-		} else
-			mapping->login = (char*)NULL;
-		sidsz = 8 + sid[1]*4;
-		p = (char*)malloc(sidsz);
-		if (p) {
+		}
+		else
+			mapping->login = (char *) NULL;
+		sidsz = 8 + sid[1] * 4;
+		p     = (char *) malloc(sidsz);
+		if (p)
+		{
 			memcpy(p, sid, sidsz);
 		}
-		mapping->sid = (unsigned char*)p;
+		mapping->sid = (unsigned char *) p;
 	}
 }
 
-static void domapping(const char *accname, const char *filename,
-		const char *dir, const unsigned char *sid, int type)
+static void domapping(
+	const char *         accname,
+	const char *         filename,
+	const char *         dir,
+	const unsigned char *sid,
+	int                  type)
 {
-	char *sidstr;
+	char *              sidstr;
 	struct USERMAPPING *mapping;
 
-	if ((get6h(sid, 2) == 5) && (get4l(sid, 8) == 21)) {
-		sidstr = decodesid(sid);
+	if ((get6h(sid, 2) == 5) && (get4l(sid, 8) == 21))
+	{
+		sidstr  = decodesid(sid);
 		mapping = firstmapping;
 		while (mapping && strcmp(mapping->sidstr, sidstr))
 			mapping = mapping->next;
 		if (mapping
-		    && (mapping->defined
-			 || !accname
-			 || !strcmp(mapping->login, accname)))
-			free(sidstr);	/* decision already known */
-		else {
-			askmapping(accname, filename, dir, sid, type,
-					mapping, sidstr);
+			&& (mapping->defined
+				|| !accname
+				|| !strcmp(mapping->login, accname)))
+			free(sidstr); /* decision already known */
+		else
+		{
+			askmapping(
+				accname,
+				filename,
+				dir,
+				sid,
+				type,
+				mapping,
+				sidstr);
 		}
 	}
 }
 
-static void listaclusers(const char *accname, const unsigned char *attr,
-				int off)
+static void listaclusers(
+	const char *         accname,
+	const unsigned char *attr,
+	int                  off)
 {
 	int i;
 	int cnt;
 	int x;
 
 	cnt = get2l(attr, off + 4);
-	x = 8;
-	for (i = 0; i < cnt; i++) {
-		domapping(accname, (char *)NULL, (char*)NULL, 
-                                       &attr[off + x + 8], 2);
+	x   = 8;
+	for (i = 0; i < cnt; i++)
+	{
+		domapping(
+			accname,
+			(char *) NULL,
+			(char *) NULL,
+			&attr[off + x + 8],
+			2);
 		x += get2l(attr, off + x + 2);
 	}
 }
 
-static void account(const char *accname, const char *dir,
-			const char *name, int type)
+static void account(
+	const char *accname,
+	const char *dir,
+	const char *name,
+	int         type)
 {
 	unsigned char attr[MAXATTRSZ];
-	u32 attrsz;
-	char *fullname;
+	u32           attrsz;
+	char *        fullname;
 
-	fullname = (char *)malloc(strlen(dir) + strlen(name) + 2);
-	if (fullname) {
+	fullname = (char *) malloc(strlen(dir) + strlen(name) + 2);
+	if (fullname)
+	{
 		strcpy(fullname, dir);
 		strcat(fullname, "/");
 		strcat(fullname, name);
-		if (ntfs_get_file_security(ntfs_context,
-				fullname, OWNER_SECURITY_INFORMATION,
-				(char*)attr, MAXATTRSZ, &attrsz)) {
+		if (ntfs_get_file_security(
+			ntfs_context,
+			fullname,
+			OWNER_SECURITY_INFORMATION,
+			(char *) attr,
+			MAXATTRSZ,
+			&attrsz))
+		{
 			domapping(accname, name, dir, &attr[20], 0);
 			attrsz = 0;
-			if (ntfs_get_file_security(ntfs_context,
-			     fullname, GROUP_SECURITY_INFORMATION,
-			     (char*)attr, MAXATTRSZ, &attrsz))
+			if (ntfs_get_file_security(
+				ntfs_context,
+				fullname,
+				GROUP_SECURITY_INFORMATION,
+				(char *) attr,
+				MAXATTRSZ,
+				&attrsz))
 				domapping(accname, name, dir, &attr[20], 1);
 			else
 				printf("   No group SID\n");
 			attrsz = 0;
-			if (ntfs_get_file_security(ntfs_context,
-			     fullname, DACL_SECURITY_INFORMATION,
-			     (char*)attr, MAXATTRSZ, &attrsz)) {
+			if (ntfs_get_file_security(
+				ntfs_context,
+				fullname,
+				DACL_SECURITY_INFORMATION,
+				(char *) attr,
+				MAXATTRSZ,
+				&attrsz))
+			{
 				if (type == 0)
 					listaclusers(accname, attr, 20);
-			} else
-				printf("   No discretionary access control"
-					" list for %s !\n", dir);
+			}
+			else
+				printf(
+					"   No discretionary access control"
+					" list for %s !\n",
+					dir);
 		}
-	free(fullname);
+		free(fullname);
 	}
 }
 
@@ -574,14 +667,23 @@ static void account(const char *accname, const char *dir,
  *		recursive search of file owners and groups in a directory
  */
 
-static boolean recurse(const char *accname, const char *dir,
-			int levels, enum STATES docset);
+static boolean recurse(
+	const char *accname,
+	const char *dir,
+	int         levels,
+	enum STATES docset);
 
-static int callback(void *ctx, const ntfschar *ntfsname,
-		const int length, const int type,
-		const s64 pos __attribute__((unused)),
-		const MFT_REF mft_ref __attribute__((unused)),
-		const unsigned int dt_type __attribute__((unused)))
+static int callback(
+			void *          ctx,
+			const ntfschar *ntfsname,
+			const int       length,
+			const int       type,
+			const s64 pos __attribute__((unused)),
+
+const MFT_REF mft_ref __attribute__((unused)),
+
+const unsigned int dt_type __attribute__((unused))
+)
 {
 	struct CALLBACK *context;
 	char *fullname;
@@ -652,18 +754,21 @@ static int callback(void *ctx, const ntfschar *ntfsname,
 	return (0);
 }
 
-static boolean recurse(const char *accname, const char *dir,
-			int levels, enum STATES docset)
+static boolean recurse(
+	const char *accname,
+	const char *dir,
+	int         levels,
+	enum STATES docset)
 {
 	struct CALLBACK context;
-	boolean err;
+	boolean         err;
 
-	err = DENIED;
-	context.dir = dir;
+	err             = DENIED;
+	context.dir     = dir;
 	context.accname = accname;
-	context.levels = levels;
-	context.docset = docset;
-	ntfs_read_directory(ntfs_context,dir,callback,&context);
+	context.levels  = levels;
+	context.docset  = docset;
+	ntfs_read_directory(ntfs_context, dir, callback, &context);
 	return (!err);
 }
 
@@ -673,19 +778,19 @@ static boolean recurse(const char *accname, const char *dir,
 
 static boolean getusers(const char *dir, int levels)
 {
-	boolean err;
+	boolean         err;
 	struct CALLBACK context;
 
 	printf("* Search for \"" OWNERS1 "\" and \"" OWNERS2 "\"\n");
-	err = DENIED;
-	context.dir = dir;
-	context.accname = (const char*)NULL;
-	context.levels = levels;
-	context.docset = STATE_USERS;
-	ntfs_read_directory(ntfs_context,dir,callback,&context);
-	printf("* Search for other directories %s\n",dir);
+	err             = DENIED;
+	context.dir     = dir;
+	context.accname = (const char *) NULL;
+	context.levels  = levels;
+	context.docset  = STATE_USERS;
+	ntfs_read_directory(ntfs_context, dir, callback, &context);
+	printf("* Search for other directories %s\n", dir);
 	context.docset = STATE_BASE;
-	ntfs_read_directory(ntfs_context,dir,callback,&context);
+	ntfs_read_directory(ntfs_context, dir, callback, &context);
 	return (!err);
 }
 
@@ -696,49 +801,60 @@ static boolean getusers(const char *dir, int levels)
 
 static void loginname(boolean silent)
 {
-	char *winname;
-	char *domain;
+	char *         winname;
+	char *         domain;
 	unsigned char *sid;
-	u32 namesz;
-	u32 sidsz;
-	u32 domainsz;
-	s32 nametype;
-	boolean ok;
-	int r;
+	u32            namesz;
+	u32            sidsz;
+	u32            domainsz;
+	s32            nametype;
+	boolean        ok;
+	int            r;
 
-	ok = FALSE;
-	winname = (char*)malloc(MAXNAMESZ);
-	domain = (char*)malloc(MAXNAMESZ);
-	sid = (char*)malloc(MAXSIDSZ);
+	ok      = FALSE;
+	winname = (char *) malloc(MAXNAMESZ);
+	domain  = (char *) malloc(MAXNAMESZ);
+	sid     = (char *) malloc(MAXSIDSZ);
 
-	namesz = MAXNAMESZ;
+	namesz   = MAXNAMESZ;
 	domainsz = MAXNAMESZ;
-	sidsz = MAXSIDSZ;
+	sidsz    = MAXSIDSZ;
 	if (winname
-	    && domain
-	    && sid
-	    && GetUserNameA(winname,&namesz)) {
+		&& domain
+		&& sid
+		&& GetUserNameA(winname, &namesz))
+	{
 		winname[namesz] = '\0';
 		if (!silent)
-			printf("Your current user name is %s\n",winname);
+			printf("Your current user name is %s\n", winname);
 		nametype = 1;
-		r = LookupAccountNameA((char*)NULL,winname,sid,&sidsz,
-			domain,&domainsz,&nametype);
-		if (r) {
+		r        = LookupAccountNameA(
+			(char *) NULL,
+			winname,
+			sid,
+			&sidsz,
+			domain,
+			&domainsz,
+			&nametype);
+		if (r)
+		{
 			domain[domainsz] = '\0';
 			if (!silent)
-				printf("Your account domain is %s\n",domain);
+				printf("Your account domain is %s\n", domain);
 			ok = AGREED;
 		}
-	   }
-	if (ok) {
+	}
+	if (ok)
+	{
 		currentwinname = winname;
-		currentdomain = domain;
-		currentsid = sid;
-	} else {
-		currentwinname = (char*)NULL;
-		currentdomain = (char*)NULL;
-		currentsid = (unsigned char*)NULL;
+		currentdomain  = domain;
+		currentsid     = sid;
+	}
+	else
+	{
+		currentwinname = (char *) NULL;
+		currentdomain  = (char *) NULL;
+		currentsid     = (unsigned char *) NULL;
 	}
 }
 
@@ -749,18 +865,22 @@ static void loginname(boolean silent)
 static boolean minimal(unsigned char *sid)
 {
 	const unsigned char *groupsid;
-	boolean ok;
+	boolean              ok;
 
 	ok = DENIED;
-	if (sid) {
+	if (sid)
+	{
 		groupsid = makegroupsid(sid);
 		printf("# %s\n",BANNER);
-		printf("# For Windows account \"%s\" in domain \"%s\"\n",
-			currentwinname, currentdomain);
-		printf("# Replace \"user\" and \"group\" hereafter by"
+		printf(
+			"# For Windows account \"%s\" in domain \"%s\"\n",
+			currentwinname,
+			currentdomain);
+		printf(
+			"# Replace \"user\" and \"group\" hereafter by"
 			" matching Linux login\n");
-		printf("user::%s\n",decodesid(sid));
-		printf(":group:%s\n",decodesid(groupsid));
+		printf("user::%s\n", decodesid(sid));
+		printf(":group:%s\n", decodesid(groupsid));
 		ok = AGREED;
 	}
 	return (ok);
@@ -778,31 +898,35 @@ static boolean minimal(unsigned char *sid)
 
 static boolean outputmap(const char *volume, const char *dir)
 {
-	char buf[256];
-	int fn;
-	char *fullname;
-	char *backup;
+	char                buf[256];
+	int                 fn;
+	char *              fullname;
+	char *              backup;
 	struct USERMAPPING *mapping;
-	boolean done;
-	boolean err;
-	boolean undecided;
-	struct stat st;
-	int s;
+	boolean             done;
+	boolean             err;
+	boolean             undecided;
+	struct stat         st;
+	int                 s;
 
-	done = DENIED;
-	fullname = (char *)malloc(strlen(MAPFILE) + 1
-				+ strlen(volume) + 1
-				+ (dir ? strlen(dir) + 1 : 0));
-	if (fullname) {
-#ifdef HAVE_WINDOWS_H
+	done     = DENIED;
+	fullname = (char *) malloc(
+		strlen(MAPFILE) + 1
+		+ strlen(volume) + 1
+		+ (dir ? strlen(dir) + 1 : 0));
+	if (fullname)
+	{
+		#ifdef HAVE_WINDOWS_H
 		strcpy(fullname, volume);
-		if (dir && dir[0]) {
+		if (dir && dir[0])
+		{
 			strcat(fullname, DIRSEP);
-			strcat(fullname,dir);
+			strcat(fullname, dir);
 		}
 
-			/* build directory, if not present */
-		if (stat(fullname,&st) && (errno == ENOENT)) {
+		/* build directory, if not present */
+		if (stat(fullname, &st) && (errno == ENOENT))
+		{
 			printf("* Creating directory %s\n", fullname);
 			mkdir(fullname);
 		}
@@ -810,207 +934,250 @@ static boolean outputmap(const char *volume, const char *dir)
 		strcat(fullname, DIRSEP);
 		strcat(fullname, MAPFILE);
 		printf("\n");
-#else
+		#else
 		strcpy(fullname, MAPFILE);
 		printf("\n");
-#endif
+		#endif
 
-		s = stat(fullname,&st);
-		if (!s) {
-			backup = (char*)malloc(strlen(fullname + 5));
-			strcpy(backup,fullname);
-			strcat(backup,".bak");
-#ifdef HAVE_WINDOWS_H
+		s = stat(fullname, &st);
+		if (!s)
+		{
+			backup = (char *) malloc(strlen(fullname + 5));
+			strcpy(backup, fullname);
+			strcat(backup, ".bak");
+			#ifdef HAVE_WINDOWS_H
 			unlink(backup);
-#endif
-			if (rename(fullname,backup))
-				printf("* Old mapping file moved to %s\n",
+			#endif
+			if (rename(fullname, backup))
+				printf(
+					"* Old mapping file moved to %s\n",
 					backup);
 		}
 
 		printf("* Creating file %s\n", fullname);
 		err = DENIED;
-#ifdef HAVE_WINDOWS_H
-		fn = open(fullname,O_CREAT + O_TRUNC + O_WRONLY + O_BINARY, 
+		#ifdef HAVE_WINDOWS_H
+		fn = open(
+			fullname,
+			O_CREAT + O_TRUNC + O_WRONLY + O_BINARY,
 			S_IREAD + S_IWRITE);
-#else
-		fn = open(fullname,O_CREAT + O_TRUNC + O_WRONLY,
+		#else
+		fn = open(
+			fullname,
+			O_CREAT + O_TRUNC + O_WRONLY,
 			S_IREAD + S_IWRITE);
-#endif
-		if (fn > 0) {
-			sprintf(buf,"# %s\n",BANNER);
-			if (!write(fn,buf,strlen(buf)))
+		#endif
+		if (fn > 0)
+		{
+			sprintf(buf, "# %s\n",BANNER);
+			if (!write(fn, buf, strlen(buf)))
 				err = AGREED;
-			printf("%s",buf);
+			printf("%s", buf);
 			undecided = DENIED;
-				/* records for owner only or group only */
+			/* records for owner only or group only */
 			for (mapping = firstmapping; mapping && !err;
 			     mapping = mapping->next)
 				if (mapping->defined
-				    && (!mapping->uidstr[0]
-					    || !mapping->gidstr[0])) {
-					sprintf(buf,"%s:%s:%s\n",
+					&& (!mapping->uidstr[0]
+						|| !mapping->gidstr[0]))
+				{
+					sprintf(
+						buf,
+						"%s:%s:%s\n",
 						mapping->uidstr,
 						mapping->gidstr,
 						mapping->sidstr);
-					if (!write(fn,buf,strlen(buf)))
+					if (!write(fn, buf, strlen(buf)))
 						err = AGREED;
-					printf("%s",buf);
-				} else
+					printf("%s", buf);
+				}
+				else
 					undecided = AGREED;
-				/* records for both owner and group */
+			/* records for both owner and group */
 			for (mapping = firstmapping; mapping && !err;
 			     mapping = mapping->next)
 				if (mapping->defined
-				    && mapping->uidstr[0]
-				    && mapping->gidstr[0]) {
-					sprintf(buf,"%s:%s:%s\n",
+					&& mapping->uidstr[0]
+					&& mapping->gidstr[0])
+				{
+					sprintf(
+						buf,
+						"%s:%s:%s\n",
 						mapping->uidstr,
 						mapping->gidstr,
 						mapping->sidstr);
-					if (!write(fn,buf,strlen(buf)))
+					if (!write(fn, buf, strlen(buf)))
 						err = AGREED;
-					printf("%s",buf);
-				} else
+					printf("%s", buf);
+				}
+				else
 					undecided = AGREED;
 			done = !err;
 			close(fn);
-			if (undecided) {
+			if (undecided)
+			{
 				printf("Undecided :\n");
 				for (mapping = firstmapping; mapping;
 				     mapping = mapping->next)
-					if (!mapping->defined) {
-						printf("   %s\n",
-						mapping->sidstr);
+					if (!mapping->defined)
+					{
+						printf(
+							"   %s\n",
+							mapping->sidstr);
 					}
 			}
-#ifndef HAVE_WINDOWS_H
-			printf("\n* You will have to move the file \""
-					MAPFILE "\"\n");
-			printf("  to directory \"" MAPDIR "\" after"
-					" mounting\n");
-#endif
+			#ifndef HAVE_WINDOWS_H
+			printf(
+				"\n* You will have to move the file \""
+				MAPFILE "\"\n");
+			printf(
+				"  to directory \"" MAPDIR "\" after"
+				" mounting\n");
+			#endif
 		}
 	}
 	if (!done)
-		fprintf(stderr, "* Could not create mapping file \"%s\"\n",
-				fullname);
+		fprintf(
+			stderr,
+			"* Could not create mapping file \"%s\"\n",
+			fullname);
 	return (done);
 }
 
 static boolean sanitize(void)
 {
-	char buf[81];
-	boolean ok;
-	int ownercnt;
-	int groupcnt;
+	char                buf[81];
+	boolean             ok;
+	int                 ownercnt;
+	int                 groupcnt;
 	struct USERMAPPING *mapping;
 	struct USERMAPPING *firstowner;
 	struct USERMAPPING *genericgroup;
 	struct USERMAPPING *group;
-	char *sidstr;
+	char *              sidstr;
 
-		/* count owners and groups */
-		/* and find first user, and a generic group */
-	ownercnt = 0;
-	groupcnt = 0;
-	firstowner = (struct USERMAPPING*)NULL;
-	genericgroup = (struct USERMAPPING*)NULL;
-	for (mapping=firstmapping; mapping; mapping=mapping->next) {
-		if (mapping->defined && mapping->uidstr[0]) {
+	/* count owners and groups */
+	/* and find first user, and a generic group */
+	ownercnt     = 0;
+	groupcnt     = 0;
+	firstowner   = (struct USERMAPPING *) NULL;
+	genericgroup = (struct USERMAPPING *) NULL;
+	for (mapping = firstmapping; mapping; mapping = mapping->next)
+	{
+		if (mapping->defined && mapping->uidstr[0])
+		{
 			if (!ownercnt)
 				firstowner = mapping;
 			ownercnt++;
 		}
 		if (mapping->defined && mapping->gidstr[0]
-					&& !mapping->uidstr[0]) {
+			&& !mapping->uidstr[0])
+		{
 			groupcnt++;
 		}
-		if (!mapping->defined && isgenericgroup(mapping->sidstr)) {
+		if (!mapping->defined && isgenericgroup(mapping->sidstr))
+		{
 			genericgroup = mapping;
 		}
 	}
-#ifdef HAVE_WINDOWS_H
-		/* no user defined, on Windows, suggest a mapping */
-		/* based on account currently used */
-	if (!ownercnt && currentwinname && currentsid) {
+	#ifdef HAVE_WINDOWS_H
+	/* no user defined, on Windows, suggest a mapping */
+	/* based on account currently used */
+	if (!ownercnt && currentwinname && currentsid)
+	{
 		char *owner;
 		char *p;
 
 		printf("\nYou have defined no file owner,\n");
-		printf("   please enter the Linux login which should"
+		printf(
+			"   please enter the Linux login which should"
 			" be mapped\n");
 		printf("   to account you are currently using\n");
 		printf("   Linux user ? ");
 		p = fgets(buf, 80, stdin);
 		if (p && p[0] && (p[strlen(p) - 1] == '\n'))
 			p[strlen(p) - 1] = '\0';
-		if (p && p[0]) {
-			firstowner = (struct USERMAPPING*)malloc(
-						sizeof(struct USERMAPPING));
-			owner = (char*)malloc(strlen(p) + 1);
-			if (firstowner && owner) {
+		if (p && p[0])
+		{
+			firstowner = (struct USERMAPPING *) malloc(
+				sizeof(struct USERMAPPING));
+			owner = (char *) malloc(strlen(p) + 1);
+			if (firstowner && owner)
+			{
 				strcpy(owner, p);
-				firstowner->next = firstmapping;
+				firstowner->next   = firstmapping;
 				firstowner->uidstr = owner;
 				firstowner->gidstr = "";
 				firstowner->sidstr = decodesid(currentsid);
-				firstowner->sid = currentsid;
-				firstmapping = firstowner;
+				firstowner->sid    = currentsid;
+				firstmapping       = firstowner;
 				ownercnt++;
 				/* prefer a generic group with the same
 				 * authorities */
-				for (mapping=firstmapping; mapping;
-						mapping=mapping->next)
+				for (mapping = firstmapping; mapping;
+				     mapping = mapping->next)
 					if (!mapping->defined
-					    && isgenericgroup(mapping->sidstr)
-					    && !memcmp(firstowner->sidstr,
+						&& isgenericgroup(mapping->sidstr)
+						&& !memcmp(
+							firstowner->sidstr,
 							mapping->sidstr,
-							strlen(mapping
-								->sidstr)-3))
+							strlen(
+								mapping
+								->sidstr) - 3))
 						genericgroup = mapping;
 			}
 		}
 	}
-#endif
-	if (ownercnt) {
-			/*
+	#endif
+	if (ownercnt)
+	{
+		/*
 			 *   No group was selected, but there were a generic
 			 *   group, insist in using it, associated to the
 			 *   first user
 			 */
-		if (!groupcnt) {
-			printf("\nYou have defined no group,"
-					" this can cause problems\n");
+		if (!groupcnt)
+		{
+			printf(
+				"\nYou have defined no group,"
+				" this can cause problems\n");
 			printf("Do you accept defining a standard group ?\n");
-			if (!fgets(buf,80,stdin)
-			   || ((buf[0] != 'n')
-			      && (buf[0] != 'N'))) {
-				if (genericgroup) {
+			if (!fgets(buf, 80, stdin)
+				|| ((buf[0] != 'n')
+					&& (buf[0] != 'N')))
+			{
+				if (genericgroup)
+				{
 					genericgroup->uidstr = "";
 					genericgroup->gidstr =
 							firstowner->uidstr;
 					genericgroup->defined = AGREED;
-				} else {
-					group = (struct USERMAPPING*)
-						malloc(sizeof(
-							struct USERMAPPING));
+				}
+				else
+				{
+					group = (struct USERMAPPING *)
+							malloc(
+								sizeof(
+									struct USERMAPPING));
 					sidstr = decodesid(
 						makegroupsid(firstowner->sid));
-					if (group && sidstr) {
+					if (group && sidstr)
+					{
 						group->uidstr = "";
 						group->gidstr = firstowner->
 								uidstr;
-						group->sidstr = sidstr;
+						group->sidstr  = sidstr;
 						group->defined = AGREED;
-						group->next = firstmapping;
-						firstmapping = group;
+						group->next    = firstmapping;
+						firstmapping   = group;
 					}
 				}
 			}
 		}
 		ok = AGREED;
-	} else {
+	}
+	else
+	{
 		printf("\nYou have defined no user, no mapping can be built\n");
 		ok = DENIED;
 	}
@@ -1018,17 +1185,22 @@ static boolean sanitize(void)
 	return (ok);
 }
 
-static boolean checkoptions(int argc, char *argv[] __attribute__((unused)),
-				boolean silent __attribute__((unused)))
+static boolean checkoptions(
+	int   argc,
+	char *argv[] __attribute__ ((unused)),
+	boolean silent __attribute__((unused))
+
+)
 {
 	boolean err;
 #ifdef HAVE_WINDOWS_H
-	int xarg;
+	int         xarg;
 	const char *pvol;
 
-	if (silent) {
-		err = (argc != 1);
-	} else {
+	if (silent)
+ {
+	 err = (argc != 1);
+ }else {
 		err = (argc < 2);
 		for (xarg=1; (xarg<argc) && !err; xarg++) {
 			pvol = argv[xarg];
@@ -1039,20 +1211,30 @@ static boolean checkoptions(int argc, char *argv[] __attribute__((unused)),
 			}
 		}
 	}
-	if (err) {
-		fprintf(stderr, "Usage : ntfsusermap [vol1: [vol2: ...]]\n");
-		fprintf(stderr, "    \"voln\" are the letters of the partition"
-				" to share with Linux\n");
-		fprintf(stderr, "        eg C:\n");
-		fprintf(stderr, "    the Windows system partition should be"
-				" named first\n");
-		if (silent) {
-			fprintf(stderr, "When outputting to file, a minimal"
-					" user mapping proposal\n");
-			fprintf(stderr, "is written to the file, and no"
-					" partition should be mentioned\n");
-		}
-	}
+	if (err)
+ {
+	 fprintf(stderr, "Usage : ntfsusermap [vol1: [vol2: ...]]\n");
+	 fprintf(
+		 stderr,
+		 "    \"voln\" are the letters of the partition"
+		 " to share with Linux\n");
+	 fprintf(stderr, "        eg C:\n");
+	 fprintf(
+		 stderr,
+		 "    the Windows system partition should be"
+		 " named first\n");
+	 if (silent)
+	 {
+		 fprintf(
+			 stderr,
+			 "When outputting to file, a minimal"
+			 " user mapping proposal\n");
+		 fprintf(
+			 stderr,
+			 "is written to the file, and no"
+			 " partition should be mentioned\n");
+	 }
+ }
 #else
 	err = (argc < 2);
 	if (err) {
@@ -1076,32 +1258,41 @@ static boolean checkoptions(int argc, char *argv[] __attribute__((unused)),
 static boolean process(int argc, char *argv[])
 {
 	boolean ok;
-	int xarg;
-	int targ;
+	int     xarg;
+	int     targ;
 
-	firstmapping = (struct USERMAPPING *)NULL;
-	lastmapping = (struct USERMAPPING *)NULL;
-	ok = AGREED;
-	for (xarg=1; (xarg<argc) && ok; xarg++)
-		if (open_volume(argv[xarg])) {
-			printf("\n* Scanning \"%s\" (two levels)\n",argv[xarg]);
-			ok = getusers("/",2);
+	firstmapping = (struct USERMAPPING *) NULL;
+	lastmapping  = (struct USERMAPPING *) NULL;
+	ok           = AGREED;
+	for (xarg = 1; (xarg < argc) && ok; xarg++)
+		if (open_volume(argv[xarg]))
+		{
+			printf("\n* Scanning \"%s\" (two levels)\n", argv[xarg]);
+			ok = getusers("/", 2);
 			close_volume(argv[xarg]);
-		} else
+		}
+		else
 			ok = DENIED;
-	if (ok && sanitize()) {
+	if (ok && sanitize())
+	{
 		targ = (argc > 2 ? 2 : 1);
-		if (!outputmap(argv[targ],MAPDIR)) {
+		if (!outputmap(argv[targ],MAPDIR))
+		{
 			printf("Trying to write file on root directory\n");
-			if (outputmap(argv[targ],(const char*)NULL)) {
-				printf("\nNote : you will have to move the"
+			if (outputmap(argv[targ], (const char *) NULL))
+			{
+				printf(
+					"\nNote : you will have to move the"
 					" file to directory \"%s\" on Linux\n",
 					MAPDIR);
-			} else
+			}
+			else
 				ok = DENIED;
-		} else
+		}
+		else
 			ok = DENIED;
-	} else
+	}
+	else
 		ok = DENIED;
 	return (ok);
 }
@@ -1114,17 +1305,19 @@ int main(int argc, char *argv[])
 	silent = !isatty(1);
 	if (!silent)
 		welcome();
-	if (checkoptions(argc, argv, silent)) {
-#ifdef HAVE_WINDOWS_H
+	if (checkoptions(argc, argv, silent))
+	{
+		#ifdef HAVE_WINDOWS_H
 		loginname(silent);
 		if (silent)
 			ok = minimal(currentsid);
 		else
-			ok = process(argc,argv);
-#else
-		ok = process(argc,argv);
-#endif
-	} else
+			ok = process(argc, argv);
+		#else
+		ok = process(argc, argv);
+		#endif
+	}
+	else
 		ok = DENIED;
 	if (!ok)
 		exit(1);

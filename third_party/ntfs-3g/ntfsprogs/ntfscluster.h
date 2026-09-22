@@ -27,7 +27,8 @@
 #include "types.h"
 #include "layout.h"
 
-enum action {
+enum action
+{
 	act_none,
 	act_info,
 	act_cluster,
@@ -38,24 +39,26 @@ enum action {
 	act_error,
 };
 
-struct options {
-	char		*device;	/* Device/File to work with */
-	enum action	 action;	/* What to do */
-	int		 quiet;		/* Less output */
-	int		 verbose;	/* Extra output */
-	int		 force;		/* Override common sense */
-	char		*filename;	/* File to examine */
-	u64		 inode;		/* Inode to examine */
-	s64		 range_begin;	/* Look for objects in this range */
-	s64		 range_end;
+struct options
+{
+	char *      device;      /* Device/File to work with */
+	enum action action;      /* What to do */
+	int         quiet;       /* Less output */
+	int         verbose;     /* Extra output */
+	int         force;       /* Override common sense */
+	char *      filename;    /* File to examine */
+	u64         inode;       /* Inode to examine */
+	s64         range_begin; /* Look for objects in this range */
+	s64         range_end;
 };
 
-struct match {
-	u64		 inum;		/* Inode number */
-	LCN		 lcn;		/* Last cluster in use */
-	ATTR_TYPES	 type;		/* Attribute type */
-	ntfschar	*name;		/* Attribute name */
-	int		 name_len;	/* Length of attribute name */
+struct match
+{
+	u64        inum;     /* Inode number */
+	LCN        lcn;      /* Last cluster in use */
+	ATTR_TYPES type;     /* Attribute type */
+	ntfschar * name;     /* Attribute name */
+	int        name_len; /* Length of attribute name */
 };
 
 #endif /* _NTFSCLUSTER_H_ */

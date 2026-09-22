@@ -25,9 +25,9 @@
 #ifndef HAVE_REALPATH
 char *ntfs_realpath(const char *path, char *resolved_path)
 {
-       strncpy(resolved_path, path, PATH_MAX);
-       resolved_path[PATH_MAX] = '\0';
-       return resolved_path;
+	strncpy(resolved_path, path, PATH_MAX);
+	resolved_path[PATH_MAX] = '\0';
+	return resolved_path;
 }
 #endif
 
@@ -40,21 +40,21 @@ char *ntfs_realpath(const char *path, char *resolved_path)
  * Since 2.6.29 (patch 784aae735d9b0bba3f8b9faef4c8b30df3bf0128) kernel sysfs
  * provides the real DM device names in /sys/block/<ptname>/dm/name
  */
-static char *
-canonicalize_dm_name(const char *ptname, char *canonical)
+static char *canonicalize_dm_name(const char *ptname, char *canonical)
 {
-	FILE	*f;
-	size_t	sz;
-	char	name[MAPPERNAMELTH + 16];
-	char	path[sizeof(name) + 16];
-	char	*res = NULL;
+	FILE * f;
+	size_t sz;
+	char   name[MAPPERNAMELTH + 16];
+	char   path[sizeof(name) + 16];
+	char * res = NULL;
 
 	snprintf(path, sizeof(path), "/sys/block/%s/dm/name", ptname);
 	if (!(f = fopen(path, "r")))
 		return NULL;
 
 	/* read "<name>\n" from sysfs */
-	if (fgets(name, sizeof(name), f) && (sz = strlen(name)) > 1) {
+	if (fgets(name, sizeof(name), f) && (sz = strlen(name)) > 1)
+	{
 		name[sz - 1] = '\0';
 		snprintf(path, sizeof(path), "/dev/mapper/%s", name);
 		res = strcpy(canonical, path);
@@ -91,8 +91,9 @@ char *ntfs_realpath_canonicalize(const char *path, char *canonical)
 		return NULL;
 
 	p = strrchr(canonical, '/');
-	if (p && strncmp(p, "/dm-", 4) == 0 && isdigit(*(p + 4))) {
-		p = canonicalize_dm_name(p+1, canonical);
+	if (p && strncmp(p, "/dm-", 4) == 0 && isdigit(*(p + 4)))
+	{
+		p = canonicalize_dm_name(p + 1, canonical);
 		if (p)
 			return p;
 	}

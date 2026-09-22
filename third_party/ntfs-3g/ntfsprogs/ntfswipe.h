@@ -26,29 +26,31 @@
 
 #include "types.h"
 
-enum action {
+enum action
+{
 	act_info,
 	act_test,
 	act_wipe,
 };
 
-struct options {
-	char	*device;	/* Device/File to work with */
-	int	 info;		/* Show volume info */
-	int	 force;		/* Override common sense */
-	int	 quiet;		/* Less output */
-	int	 verbose;	/* Extra output */
-	int	 noaction;	/* Do not write to disk */
-	int	 count;		/* Number of iterations */
-	int	*bytes;		/* List of overwrite characters */
-	int	 directory;	/* Wipe directory indexes */
-	int	 logfile;	/* Wipe the logfile (journal) */
-	int	 mft;		/* Wipe mft slack space */
-	int	 pagefile;	/* Wipe pagefile (swap space) */
-	int	 tails;		/* Wipe file tails */
-	int	 unused;	/* Wipe unused clusters */
-	int	 unused_fast;	/* Wipe unused clusters (fast) */
-	int	 undel;		/* Wipe undelete data */
+struct options
+{
+	char *device;      /* Device/File to work with */
+	int   info;        /* Show volume info */
+	int   force;       /* Override common sense */
+	int   quiet;       /* Less output */
+	int   verbose;     /* Extra output */
+	int   noaction;    /* Do not write to disk */
+	int   count;       /* Number of iterations */
+	int * bytes;       /* List of overwrite characters */
+	int   directory;   /* Wipe directory indexes */
+	int   logfile;     /* Wipe the logfile (journal) */
+	int   mft;         /* Wipe mft slack space */
+	int   pagefile;    /* Wipe pagefile (swap space) */
+	int   tails;       /* Wipe file tails */
+	int   unused;      /* Wipe unused clusters */
+	int   unused_fast; /* Wipe unused clusters (fast) */
+	int   undel;       /* Wipe undelete data */
 };
 
 #endif /* _NTFSWIPE_H_ */

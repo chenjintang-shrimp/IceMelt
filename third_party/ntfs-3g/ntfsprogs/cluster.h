@@ -27,11 +27,16 @@
 #include "types.h"
 #include "volume.h"
 
-typedef struct {
+typedef struct
+{
 	int x;
 } ntfs_cluster;
 
-typedef int (cluster_cb)(ntfs_inode *ino, ATTR_RECORD *attr, runlist_element *run, void *data);
+typedef int (cluster_cb)(
+	ntfs_inode *     ino,
+	ATTR_RECORD *    attr,
+	runlist_element *run,
+	void *           data);
 
 int cluster_find(ntfs_volume *vol, LCN c_begin, LCN c_end, cluster_cb *cb, void *data);
 

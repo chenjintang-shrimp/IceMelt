@@ -107,29 +107,35 @@
  * ---------------------- end from RFC 4122 -----------------------
  */
 
-typedef struct {
-	union {
+typedef struct
+{
+	union
+	{
 		/* alignment may be needed to evaluate collations */
-		u32 alignment;
+		u32  alignment;
 		GUID guid;
 	} object_id;
 } OBJECT_ID_INDEX_KEY;
 
-typedef struct {
+typedef struct
+{
 	le64 file_id;
 	GUID birth_volume_id;
 	GUID birth_object_id;
 	GUID domain_id;
 } OBJECT_ID_INDEX_DATA; // known as OBJ_ID_INDEX_DATA
 
-struct OBJECT_ID_INDEX {		/* index entry in $Extend/$ObjId */
-	INDEX_ENTRY_HEADER header;
-	OBJECT_ID_INDEX_KEY key;
+struct OBJECT_ID_INDEX
+{ /* index entry in $Extend/$ObjId */
+	INDEX_ENTRY_HEADER   header;
+	OBJECT_ID_INDEX_KEY  key;
 	OBJECT_ID_INDEX_DATA data;
-} ;
+};
 
-static ntfschar objid_index_name[] = { const_cpu_to_le16('$'),
-					 const_cpu_to_le16('O') };
+static ntfschar objid_index_name[] = {
+	const_cpu_to_le16('$'),
+	const_cpu_to_le16('O')
+};
 
 /*
  *			Set the index for a new object id
@@ -138,41 +144,49 @@ static ntfschar objid_index_name[] = { const_cpu_to_le16('$'),
  *		-1 if failure, explained by errno
  */
 
-static int set_object_id_index(ntfs_inode *ni, ntfs_index_context *xo,
-			const OBJECT_ID_ATTR *object_id)
+static int set_object_id_index(
+	ntfs_inode *          ni,
+	ntfs_index_context *  xo,
+	const OBJECT_ID_ATTR *object_id)
 {
 	struct OBJECT_ID_INDEX indx;
-	u64 file_id_cpu;
-	le64 file_id;
-	le16 seqn;
+	u64                    file_id_cpu;
+	le64                   file_id;
+	le16                   seqn;
 
-	seqn = ni->mrec->sequence_number;
-	file_id_cpu = MK_MREF(ni->mft_no,le16_to_cpu(seqn));
-	file_id = cpu_to_le64(file_id_cpu);
+	seqn                    = ni->mrec->sequence_number;
+	file_id_cpu             = MK_MREF(ni->mft_no, le16_to_cpu(seqn));
+	file_id                 = cpu_to_le64(file_id_cpu);
 	indx.header.data_offset = const_cpu_to_le16(
-					sizeof(INDEX_ENTRY_HEADER)
-					+ sizeof(OBJECT_ID_INDEX_KEY));
+		sizeof(INDEX_ENTRY_HEADER)
+		+ sizeof(OBJECT_ID_INDEX_KEY));
 	indx.header.data_length = const_cpu_to_le16(
-					sizeof(OBJECT_ID_INDEX_DATA));
+		sizeof(OBJECT_ID_INDEX_DATA));
 	indx.header.reservedV = const_cpu_to_le32(0);
-	indx.header.length = const_cpu_to_le16(
-					sizeof(struct OBJECT_ID_INDEX));
+	indx.header.length    = const_cpu_to_le16(
+		sizeof(struct OBJECT_ID_INDEX));
 	indx.header.key_length = const_cpu_to_le16(
-					sizeof(OBJECT_ID_INDEX_KEY));
-	indx.header.flags = const_cpu_to_le16(0);
+		sizeof(OBJECT_ID_INDEX_KEY));
+	indx.header.flags    = const_cpu_to_le16(0);
 	indx.header.reserved = const_cpu_to_le16(0);
 
-	memcpy(&indx.key.object_id,object_id,sizeof(GUID));
+	memcpy(&indx.key.object_id, object_id, sizeof(GUID));
 
 	indx.data.file_id = file_id;
-	memcpy(&indx.data.birth_volume_id,
-			&object_id->birth_volume_id,sizeof(GUID));
-	memcpy(&indx.data.birth_object_id,
-			&object_id->birth_object_id,sizeof(GUID));
-	memcpy(&indx.data.domain_id,
-			&object_id->domain_id,sizeof(GUID));
+	memcpy(
+		&indx.data.birth_volume_id,
+		&object_id->birth_volume_id,
+		sizeof(GUID));
+	memcpy(
+		&indx.data.birth_object_id,
+		&object_id->birth_object_id,
+		sizeof(GUID));
+	memcpy(
+		&indx.data.domain_id,
+		&object_id->domain_id,
+		sizeof(GUID));
 	ntfs_index_ctx_reinit(xo);
-	return (ntfs_ie_add(xo,(INDEX_ENTRY*)&indx));
+	return (ntfs_ie_add(xo, (INDEX_ENTRY *) &indx));
 }
 
 /*
@@ -186,27 +200,31 @@ static int set_object_id_index(ntfs_inode *ni, ntfs_index_context *xo,
 
 static ntfs_index_context *open_object_id_index(ntfs_volume *vol)
 {
-	u64 inum;
-	ntfs_inode *ni;
-	ntfs_inode *dir_ni;
+	u64                 inum;
+	ntfs_inode *        ni;
+	ntfs_inode *        dir_ni;
 	ntfs_index_context *xo;
 
-		/* do not use path_name_to inode - could reopen root */
+	/* do not use path_name_to inode - could reopen root */
 	dir_ni = ntfs_inode_open(vol, FILE_Extend);
-	ni = (ntfs_inode*)NULL;
-	if (dir_ni) {
-		inum = ntfs_inode_lookup_by_mbsname(dir_ni,"$ObjId");
-		if (inum != (u64)-1)
+	ni     = (ntfs_inode *) NULL;
+	if (dir_ni)
+	{
+		inum = ntfs_inode_lookup_by_mbsname(dir_ni, "$ObjId");
+		if (inum != (u64) - 1)
 			ni = ntfs_inode_open(vol, inum);
 		ntfs_inode_close(dir_ni);
 	}
-	if (ni) {
+	if (ni)
+	{
 		xo = ntfs_index_ctx_get(ni, objid_index_name, 2);
-		if (!xo) {
+		if (!xo)
+		{
 			ntfs_inode_close(ni);
 		}
-	} else
-		xo = (ntfs_index_context*)NULL;
+	}
+	else
+		xo = (ntfs_index_context *) NULL;
 	return (xo);
 }
 
@@ -219,36 +237,45 @@ static ntfs_index_context *open_object_id_index(ntfs_volume *vol)
  *		-1 if no data could be merged. This is generally not an error
  */
 
-static int merge_index_data(ntfs_inode *ni,
-			const OBJECT_ID_ATTR *objectid_attr,
-			OBJECT_ID_ATTR *full_objectid)
+static int merge_index_data(
+	ntfs_inode *          ni,
+	const OBJECT_ID_ATTR *objectid_attr,
+	OBJECT_ID_ATTR *      full_objectid)
 {
-	OBJECT_ID_INDEX_KEY key;
+	OBJECT_ID_INDEX_KEY     key;
 	struct OBJECT_ID_INDEX *entry;
-	ntfs_index_context *xo;
-	ntfs_inode *xoni;
-	int res;
+	ntfs_index_context *    xo;
+	ntfs_inode *            xoni;
+	int                     res;
 
 	res = -1;
-	xo = open_object_id_index(ni->vol);
-	if (xo) {
-		memcpy(&key.object_id,objectid_attr,sizeof(GUID));
-		if (!ntfs_index_lookup(&key,
-				sizeof(OBJECT_ID_INDEX_KEY), xo)) {
-			entry = (struct OBJECT_ID_INDEX*)xo->entry;
+	xo  = open_object_id_index(ni->vol);
+	if (xo)
+	{
+		memcpy(&key.object_id, objectid_attr, sizeof(GUID));
+		if (!ntfs_index_lookup(
+			&key,
+			sizeof(OBJECT_ID_INDEX_KEY),
+			xo))
+		{
+			entry = (struct OBJECT_ID_INDEX *) xo->entry;
 			/* make sure inode numbers match */
 			if (entry
-			    && (MREF(le64_to_cpu(entry->data.file_id))
-					== ni->mft_no)) {
-				memcpy(&full_objectid->birth_volume_id,
-						&entry->data.birth_volume_id,
-						sizeof(GUID));
-				memcpy(&full_objectid->birth_object_id,
-						&entry->data.birth_object_id,
-						sizeof(GUID));
-				memcpy(&full_objectid->domain_id,
-						&entry->data.domain_id,
-						sizeof(GUID));
+				&& (MREF(le64_to_cpu(entry->data.file_id))
+					== ni->mft_no))
+			{
+				memcpy(
+					&full_objectid->birth_volume_id,
+					&entry->data.birth_volume_id,
+					sizeof(GUID));
+				memcpy(
+					&full_objectid->birth_object_id,
+					&entry->data.birth_object_id,
+					sizeof(GUID));
+				memcpy(
+					&full_objectid->domain_id,
+					&entry->data.domain_id,
+					sizeof(GUID));
 				res = 0;
 			}
 		}
@@ -268,38 +295,52 @@ static int merge_index_data(ntfs_inode *ni,
  *		-1 if failure, explained by errno
  */
 
-static int remove_object_id_index(ntfs_attr *na, ntfs_index_context *xo,
-				OBJECT_ID_ATTR *old_attr)
+static int remove_object_id_index(
+	ntfs_attr *         na,
+	ntfs_index_context *xo,
+	OBJECT_ID_ATTR *    old_attr)
 {
-	OBJECT_ID_INDEX_KEY key;
+	OBJECT_ID_INDEX_KEY     key;
 	struct OBJECT_ID_INDEX *entry;
-	s64 size;
-	int ret;
+	s64                     size;
+	int                     ret;
 
 	ret = na->data_size;
-	if (ret) {
-			/* read the existing object id attribute */
+	if (ret)
+	{
+		/* read the existing object id attribute */
 		size = ntfs_attr_pread(na, 0, sizeof(GUID), old_attr);
-		if (size >= (s64)sizeof(GUID)) {
-			memcpy(&key.object_id,
-				&old_attr->object_id,sizeof(GUID));
-			if (!ntfs_index_lookup(&key,
-					sizeof(OBJECT_ID_INDEX_KEY), xo)) {
-				entry = (struct OBJECT_ID_INDEX*)xo->entry;
-				memcpy(&old_attr->birth_volume_id,
+		if (size >= (s64) sizeof(GUID))
+		{
+			memcpy(
+				&key.object_id,
+				&old_attr->object_id,
+				sizeof(GUID));
+			if (!ntfs_index_lookup(
+				&key,
+				sizeof(OBJECT_ID_INDEX_KEY),
+				xo))
+			{
+				entry = (struct OBJECT_ID_INDEX *) xo->entry;
+				memcpy(
+					&old_attr->birth_volume_id,
 					&entry->data.birth_volume_id,
 					sizeof(GUID));
-				memcpy(&old_attr->birth_object_id,
+				memcpy(
+					&old_attr->birth_object_id,
 					&entry->data.birth_object_id,
 					sizeof(GUID));
-				memcpy(&old_attr->domain_id,
+				memcpy(
+					&old_attr->domain_id,
 					&entry->data.domain_id,
 					sizeof(GUID));
 				if (ntfs_index_rm(xo))
 					ret = -1;
 			}
-		} else {
-			ret = -1;
+		}
+		else
+		{
+			ret   = -1;
 			errno = ENODATA;
 		}
 	}
@@ -320,58 +361,74 @@ static int remove_object_id_index(ntfs_attr *na, ntfs_index_context *xo,
  *	If failed to insert the index, data is removed
  */
 
-static int update_object_id(ntfs_inode *ni, ntfs_index_context *xo,
-			const OBJECT_ID_ATTR *value, size_t size)
+static int update_object_id(
+	ntfs_inode *          ni,
+	ntfs_index_context *  xo,
+	const OBJECT_ID_ATTR *value,
+	size_t                size)
 {
 	OBJECT_ID_ATTR old_attr;
-	ntfs_attr *na;
-	int oldsize;
-	int written;
-	int res;
+	ntfs_attr *    na;
+	int            oldsize;
+	int            written;
+	int            res;
 
 	res = 0;
 
 	na = ntfs_attr_open(ni, AT_OBJECT_ID, AT_UNNAMED, 0);
-	if (na) {
+	if (na)
+	{
 		memset(&old_attr, 0, sizeof(OBJECT_ID_ATTR));
-			/* remove the existing index entry */
-		oldsize = remove_object_id_index(na,xo,&old_attr);
+		/* remove the existing index entry */
+		oldsize = remove_object_id_index(na, xo, &old_attr);
 		if (oldsize < 0)
 			res = -1;
-		else {
+		else
+		{
 			/* resize attribute */
-			res = ntfs_attr_truncate(na, (s64)sizeof(GUID));
-				/* write the object_id in attribute */
-			if (!res && value) {
-				written = (int)ntfs_attr_pwrite(na,
-					(s64)0, (s64)sizeof(GUID),
+			res = ntfs_attr_truncate(na, (s64) sizeof(GUID));
+			/* write the object_id in attribute */
+			if (!res && value)
+			{
+				written = (int) ntfs_attr_pwrite(
+					na,
+					(s64) 0,
+					(s64) sizeof(GUID),
 					&value->object_id);
-				if (written != (s64)sizeof(GUID)) {
-					ntfs_log_error("Failed to update "
-							"object id\n");
+				if (written != (s64) sizeof(GUID))
+				{
+					ntfs_log_error(
+						"Failed to update "
+						"object id\n");
 					errno = EIO;
-					res = -1;
+					res   = -1;
 				}
 			}
-				/* overwrite index data with new value */
-			memcpy(&old_attr, value,
+			/* overwrite index data with new value */
+			memcpy(
+				&old_attr,
+				value,
 				(size < sizeof(OBJECT_ID_ATTR)
-					? size : sizeof(OBJECT_ID_ATTR)));
+					 ? size
+					 : sizeof(OBJECT_ID_ATTR)));
 			if (!res
-			    && set_object_id_index(ni,xo,&old_attr)) {
+				&& set_object_id_index(ni, xo, &old_attr))
+			{
 				/*
 				 * If cannot index, try to remove the object
 				 * id and log the error. There will be an
 				 * inconsistency if removal fails.
 				 */
 				ntfs_attr_rm(na);
-				ntfs_log_error("Failed to index object id."
-						" Possible corruption.\n");
+				ntfs_log_error(
+					"Failed to index object id."
+					" Possible corruption.\n");
 			}
 		}
 		ntfs_attr_close(na);
 		NInoSetDirty(ni);
-	} else
+	}
+	else
 		res = -1;
 	return (res);
 }
@@ -386,25 +443,37 @@ static int update_object_id(ntfs_inode *ni, ntfs_index_context *xo,
 static int add_object_id(ntfs_inode *ni, int flags)
 {
 	int res;
-	u8 dummy;
+	u8  dummy;
 
 	res = -1; /* default return */
-	if (!ntfs_attr_exist(ni,AT_OBJECT_ID, AT_UNNAMED,0)) {
-		if (!(flags & XATTR_REPLACE)) {
+	if (!ntfs_attr_exist(ni, AT_OBJECT_ID, AT_UNNAMED, 0))
+	{
+		if (!(flags & XATTR_REPLACE))
+		{
 			/*
 			 * no object id attribute : add one,
 			 * apparently, this does not feed the new value in
 			 * Note : NTFS version must be >= 3
 			 */
-			if (ni->vol->major_ver >= 3) {
-				res = ntfs_attr_add(ni, AT_OBJECT_ID,
-						AT_UNNAMED, 0, &dummy, (s64)0);
+			if (ni->vol->major_ver >= 3)
+			{
+				res = ntfs_attr_add(
+					ni,
+					AT_OBJECT_ID,
+					AT_UNNAMED,
+					0,
+					&dummy,
+					(s64) 0);
 				NInoSetDirty(ni);
-			} else
+			}
+			else
 				errno = EOPNOTSUPP;
-		} else
+		}
+		else
 			errno = ENODATA;
-	} else {
+	}
+	else
+	{
 		if (flags & XATTR_CREATE)
 			errno = EEXIST;
 		else
@@ -424,21 +493,23 @@ static int add_object_id(ntfs_inode *ni, int flags)
 int ntfs_delete_object_id_index(ntfs_inode *ni)
 {
 	ntfs_index_context *xo;
-	ntfs_inode *xoni;
-	ntfs_attr *na;
-	OBJECT_ID_ATTR old_attr;
-	int res;
+	ntfs_inode *        xoni;
+	ntfs_attr *         na;
+	OBJECT_ID_ATTR      old_attr;
+	int                 res;
 
 	res = 0;
-	na = ntfs_attr_open(ni, AT_OBJECT_ID, AT_UNNAMED, 0);
-	if (na) {
-			/*
+	na  = ntfs_attr_open(ni, AT_OBJECT_ID, AT_UNNAMED, 0);
+	if (na)
+	{
+		/*
 			 * read the existing object id
 			 * and un-index it
 			 */
 		xo = open_object_id_index(ni->vol);
-		if (xo) {
-			if (remove_object_id_index(na,xo,&old_attr) < 0)
+		if (xo)
+		{
+			if (remove_object_id_index(na, xo, &old_attr) < 0)
 				res = -1;
 			xoni = xo->ni;
 			ntfs_index_entry_mark_dirty(xo);
@@ -464,43 +535,61 @@ int ntfs_delete_object_id_index(ntfs_inode *ni)
 
 int ntfs_get_ntfs_object_id(ntfs_inode *ni, char *value, size_t size)
 {
-	OBJECT_ID_ATTR full_objectid;
+	OBJECT_ID_ATTR  full_objectid;
 	OBJECT_ID_ATTR *objectid_attr;
-	s64 attr_size;
-	int full_size;
+	s64             attr_size;
+	int             full_size;
 
-	full_size = 0;	/* default to no data and some error to be defined */
-	if (ni) {
-		objectid_attr = (OBJECT_ID_ATTR*)ntfs_attr_readall(ni,
-			AT_OBJECT_ID,(ntfschar*)NULL, 0, &attr_size);
-		if (objectid_attr) {
-				/* restrict to only GUID present in attr */
-			if (attr_size == sizeof(GUID)) {
-				memcpy(&full_objectid.object_id,
-						objectid_attr,sizeof(GUID));
+	full_size = 0; /* default to no data and some error to be defined */
+	if (ni)
+	{
+		objectid_attr = (OBJECT_ID_ATTR *) ntfs_attr_readall(
+			ni,
+			AT_OBJECT_ID,
+			(ntfschar *) NULL,
+			0,
+			&attr_size);
+		if (objectid_attr)
+		{
+			/* restrict to only GUID present in attr */
+			if (attr_size == sizeof(GUID))
+			{
+				memcpy(
+					&full_objectid.object_id,
+					objectid_attr,
+					sizeof(GUID));
 				full_size = sizeof(GUID);
-					/* get data from index, if any */
-				if (!merge_index_data(ni, objectid_attr,
-						&full_objectid)) {
+				/* get data from index, if any */
+				if (!merge_index_data(
+					ni,
+					objectid_attr,
+					&full_objectid))
+				{
 					full_size = sizeof(OBJECT_ID_ATTR);
 				}
-				if (full_size <= (s64)size) {
+				if (full_size <= (s64) size)
+				{
 					if (value)
-						memcpy(value,&full_objectid,
+						memcpy(
+							value,
+							&full_objectid,
 							full_size);
 					else
 						errno = EINVAL;
 				}
-			} else {
-			/* unexpected size, better return unsupported */
-				errno = EOPNOTSUPP;
+			}
+			else
+			{
+				/* unexpected size, better return unsupported */
+				errno     = EOPNOTSUPP;
 				full_size = 0;
 			}
 			free(objectid_attr);
-		} else
+		}
+		else
 			errno = ENODATA;
 	}
-	return (full_size ? (int)full_size : -errno);
+	return (full_size ? (int) full_size : -errno);
 }
 
 /*
@@ -515,35 +604,49 @@ int ntfs_get_ntfs_object_id(ntfs_inode *ni, char *value, size_t size)
  *	Returns 0, or -1 if there is a problem
  */
 
-int ntfs_set_ntfs_object_id(ntfs_inode *ni,
-			const char *value, size_t size, int flags)
+int ntfs_set_ntfs_object_id(
+	ntfs_inode *ni,
+	const char *value,
+	size_t      size,
+	int         flags)
 {
 	OBJECT_ID_INDEX_KEY key;
-	ntfs_inode *xoni;
+	ntfs_inode *        xoni;
 	ntfs_index_context *xo;
-	int res;
+	int                 res;
 
 	res = 0;
-	if (ni && value && (size >= sizeof(GUID))) {
+	if (ni && value && (size >= sizeof(GUID)))
+	{
 		xo = open_object_id_index(ni->vol);
-		if (xo) {
+		if (xo)
+		{
 			/* make sure the GUID was not used elsewhere */
 			memcpy(&key.object_id, value, sizeof(GUID));
-			if ((ntfs_index_lookup(&key,
-					sizeof(OBJECT_ID_INDEX_KEY), xo))
-			    || (MREF_LE(((struct OBJECT_ID_INDEX*)xo->entry)
-					->data.file_id) == ni->mft_no)) {
+			if ((ntfs_index_lookup(
+					&key,
+					sizeof(OBJECT_ID_INDEX_KEY),
+					xo))
+				|| (MREF_LE(
+					((struct OBJECT_ID_INDEX *) xo->entry)
+					->data.file_id) == ni->mft_no))
+			{
 				ntfs_index_ctx_reinit(xo);
 				res = add_object_id(ni, flags);
-				if (!res) {
-						/* update value and index */
-					res = update_object_id(ni,xo,
-						(const OBJECT_ID_ATTR*)value,
+				if (!res)
+				{
+					/* update value and index */
+					res = update_object_id(
+						ni,
+						xo,
+						(const OBJECT_ID_ATTR *) value,
 						size);
 				}
-			} else {
-					/* GUID is present elsewhere */
-				res = -1;
+			}
+			else
+			{
+				/* GUID is present elsewhere */
+				res   = -1;
 				errno = EEXIST;
 			}
 			xoni = xo->ni;
@@ -551,12 +654,16 @@ int ntfs_set_ntfs_object_id(ntfs_inode *ni,
 			NInoSetDirty(xoni);
 			ntfs_index_ctx_put(xo);
 			ntfs_inode_close(xoni);
-		} else {
+		}
+		else
+		{
 			res = -1;
 		}
-	} else {
+	}
+	else
+	{
 		errno = EINVAL;
-		res = -1;
+		res   = -1;
 	}
 	return (res ? -1 : 0);
 }
@@ -569,46 +676,60 @@ int ntfs_set_ntfs_object_id(ntfs_inode *ni,
 
 int ntfs_remove_ntfs_object_id(ntfs_inode *ni)
 {
-	int res;
-	int olderrno;
-	ntfs_attr *na;
-	ntfs_inode *xoni;
+	int                 res;
+	int                 olderrno;
+	ntfs_attr *         na;
+	ntfs_inode *        xoni;
 	ntfs_index_context *xo;
-	int oldsize;
-	OBJECT_ID_ATTR old_attr;
+	int                 oldsize;
+	OBJECT_ID_ATTR      old_attr;
 
 	res = 0;
-	if (ni) {
+	if (ni)
+	{
 		/*
 		 * open and delete the object id
 		 */
-		na = ntfs_attr_open(ni, AT_OBJECT_ID,
-			AT_UNNAMED,0);
-		if (na) {
+		na = ntfs_attr_open(
+			ni,
+			AT_OBJECT_ID,
+			AT_UNNAMED,
+			0);
+		if (na)
+		{
 			/* first remove index (old object id needed) */
 			xo = open_object_id_index(ni->vol);
-			if (xo) {
-				oldsize = remove_object_id_index(na,xo,
-						&old_attr);
-				if (oldsize < 0) {
+			if (xo)
+			{
+				oldsize = remove_object_id_index(
+					na,
+					xo,
+					&old_attr);
+				if (oldsize < 0)
+				{
 					res = -1;
-				} else {
+				}
+				else
+				{
 					/* now remove attribute */
 					res = ntfs_attr_rm(na);
 					if (res
-					    && (oldsize > (int)sizeof(GUID))) {
-					/*
+						&& (oldsize > (int) sizeof(GUID)))
+					{
+						/*
 					 * If we could not remove the
 					 * attribute, try to restore the
 					 * index and log the error. There
 					 * will be an inconsistency if
 					 * the reindexing fails.
 					 */
-						set_object_id_index(ni, xo,
+						set_object_id_index(
+							ni,
+							xo,
 							&old_attr);
 						ntfs_log_error(
-						"Failed to remove object id."
-						" Possible corruption.\n");
+							"Failed to remove object id."
+							" Possible corruption.\n");
 					}
 				}
 
@@ -620,17 +741,21 @@ int ntfs_remove_ntfs_object_id(ntfs_inode *ni)
 			}
 			olderrno = errno;
 			ntfs_attr_close(na);
-					/* avoid errno pollution */
+			/* avoid errno pollution */
 			if (errno == ENOENT)
 				errno = olderrno;
-		} else {
+		}
+		else
+		{
 			errno = ENODATA;
-			res = -1;
+			res   = -1;
 		}
 		NInoSetDirty(ni);
-	} else {
+	}
+	else
+	{
 		errno = EINVAL;
-		res = -1;
+		res   = -1;
 	}
 	return (res ? -1 : 0);
 }

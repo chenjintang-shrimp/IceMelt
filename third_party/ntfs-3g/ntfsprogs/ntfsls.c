@@ -60,11 +60,12 @@ static const char *EXEC_NAME = "ntfsls";
  * To hold sub-directory information for recursive listing.
  * @depth:     the level of this dir relative to opts.path
  */
-struct dir {
+struct dir
+{
 	struct ntfs_list_head list;
-	ntfs_inode *ni;
-	char name[MAX_PATH];
-	int depth;
+	ntfs_inode *          ni;
+	char                  name[MAX_PATH];
+	int                   depth;
 };
 
 /**
@@ -75,9 +76,10 @@ struct dir {
  * NOTE: @name is not directly allocated memory. It simply points to the
  * character array name in struct dir.
  */
-struct path_component {
+struct path_component
+{
 	struct ntfs_list_head list;
-	const char *name;
+	const char *          name;
 };
 
 /* The list of sub-dirs is like a "horizontal" tree. The root of
@@ -105,29 +107,35 @@ static struct ntfs_list_head *dir_list_insert_pos = NULL;
  */
 static int depth = 0;
 
-static struct options {
-	char *device;	/* Device/File to work with */
-	int quiet;	/* Less output */
-	int verbose;	/* Extra output */
-	int force;	/* Override common sense */
-	int all;
-	int system;
-	int dos;
-	int lng;
-	int inode;
-	int classify;
-	int recursive;
+static struct options
+{
+	char *      device;  /* Device/File to work with */
+	int         quiet;   /* Less output */
+	int         verbose; /* Extra output */
+	int         force;   /* Override common sense */
+	int         all;
+	int         system;
+	int         dos;
+	int         lng;
+	int         inode;
+	int         classify;
+	int         recursive;
 	const char *path;
 } opts;
 
-typedef struct {
+typedef struct
+{
 	ntfs_volume *vol;
 } ntfsls_dirent;
 
-static int list_dir_entry(ntfsls_dirent * dirent, const ntfschar * name,
-			  const int name_len, const int name_type,
-			  const s64 pos, const MFT_REF mref,
-			  const unsigned dt_type);
+static int list_dir_entry(
+	ntfsls_dirent * dirent,
+	const ntfschar *name,
+	const int       name_len,
+	const int       name_type,
+	const s64       pos,
+	const MFT_REF   mref,
+	const unsigned  dt_type);
 
 /**
  * version - Print version information about the program
@@ -138,8 +146,11 @@ static int list_dir_entry(ntfsls_dirent * dirent, const ntfschar * name,
  */
 static void version(void)
 {
-	printf("\n%s v%s (libntfs-3g) - Display information about an NTFS "
-			"Volume.\n\n", EXEC_NAME, VERSION);
+	printf(
+		"\n%s v%s (libntfs-3g) - Display information about an NTFS "
+		"Volume.\n\n",
+		EXEC_NAME,
+		VERSION);
 	printf("Copyright (c) 2003 Lode Leroy\n");
 	printf("Copyright (c) 2003-2005 Anton Altaparmakov\n");
 	printf("Copyright (c) 2003 Richard Russon\n");
@@ -157,7 +168,8 @@ static void version(void)
  */
 static void usage(void)
 {
-	printf("\nUsage: %s [options] device\n"
+	printf(
+		"\nUsage: %s [options] device\n"
 		"\n"
 		"    -a, --all            Display all files\n"
 		"    -F, --classify       Display classification\n"
@@ -191,95 +203,98 @@ static void usage(void)
  */
 static int parse_options(int argc, char *argv[])
 {
-	static const char *sopt = "-aFfh?ilp:qRsVvx";
+	static const char *        sopt   = "-aFfh?ilp:qRsVvx";
 	static const struct option lopt[] = {
-		{ "all",	 no_argument,		NULL, 'a' },
-		{ "classify",	 no_argument,		NULL, 'F' },
-		{ "force",	 no_argument,		NULL, 'f' },
-		{ "help",	 no_argument,		NULL, 'h' },
-		{ "inode",	 no_argument,		NULL, 'i' },
-		{ "long",	 no_argument,		NULL, 'l' },
-		{ "path",	 required_argument,     NULL, 'p' },
-		{ "recursive",	 no_argument,		NULL, 'R' },
-		{ "quiet",	 no_argument,		NULL, 'q' },
-		{ "system",	 no_argument,		NULL, 's' },
-		{ "version",	 no_argument,		NULL, 'V' },
-		{ "verbose",	 no_argument,		NULL, 'v' },
-		{ "dos",	 no_argument,		NULL, 'x' },
-		{ NULL, 0, NULL, 0 },
+		{"all", no_argument, NULL, 'a'},
+		{"classify", no_argument, NULL, 'F'},
+		{"force", no_argument, NULL, 'f'},
+		{"help", no_argument, NULL, 'h'},
+		{"inode", no_argument, NULL, 'i'},
+		{"long", no_argument, NULL, 'l'},
+		{"path", required_argument, NULL, 'p'},
+		{"recursive", no_argument, NULL, 'R'},
+		{"quiet", no_argument, NULL, 'q'},
+		{"system", no_argument, NULL, 's'},
+		{"version", no_argument, NULL, 'V'},
+		{"verbose", no_argument, NULL, 'v'},
+		{"dos", no_argument, NULL, 'x'},
+		{NULL, 0, NULL, 0},
 	};
 
-	int c = -1;
-	int err  = 0;
-	int ver  = 0;
-	int help = 0;
+	int c      = -1;
+	int err    = 0;
+	int ver    = 0;
+	int help   = 0;
 	int levels = 0;
 
 	opterr = 0; /* We'll handle the errors, thank you. */
 
 	memset(&opts, 0, sizeof(opts));
 	opts.device = NULL;
-	opts.path = "/";
+	opts.path   = "/";
 
-	while ((c = getopt_long(argc, argv, sopt, lopt, NULL)) != -1) {
-		switch (c) {
-		case 1:
-			if (!opts.device)
-				opts.device = optarg;
-			else
-				err++;
-			break;
-		case 'p':
-			opts.path = optarg;
-			break;
-		case 'f':
-			opts.force++;
-			break;
-		case 'h':
-		case '?':
-			if (strncmp (argv[optind-1], "--log-", 6) == 0) {
-				if (!ntfs_log_parse_option (argv[optind-1]))
+	while ((c = getopt_long(argc, argv, sopt, lopt, NULL)) != -1)
+	{
+		switch (c)
+		{
+			case 1:
+				if (!opts.device)
+					opts.device = optarg;
+				else
 					err++;
 				break;
-			}
-			help++;
-			break;
-		case 'q':
-			opts.quiet++;
-			ntfs_log_clear_levels(NTFS_LOG_LEVEL_QUIET);
-			break;
-		case 'v':
-			opts.verbose++;
-			ntfs_log_set_levels(NTFS_LOG_LEVEL_VERBOSE);
-			break;
-		case 'V':
-			ver++;
-			break;
-		case 'x':
-			opts.dos = 1;
-			break;
-		case 'l':
-			opts.lng++;
-			break;
-		case 'i':
-			opts.inode++;
-			break;
-		case 'F':
-			opts.classify++;
-			break;
-		case 'a':
-			opts.all++;
-			break;
-		case 's':
-			opts.system++;
-			break;
-		case 'R':
-			opts.recursive++;
-			break;
-		default:
-			ntfs_log_error("Unknown option '%s'.\n", argv[optind - 1]);
-			err++;
-			break;
+			case 'p':
+				opts.path = optarg;
+				break;
+			case 'f':
+				opts.force++;
+				break;
+			case 'h':
+			case '?':
+				if (strncmp(argv[optind - 1], "--log-", 6) == 0)
+				{
+					if (!ntfs_log_parse_option(argv[optind - 1]))
+						err++;
+					break;
+				}
+				help++;
+				break;
+			case 'q':
+				opts.quiet++;
+				ntfs_log_clear_levels(NTFS_LOG_LEVEL_QUIET);
+				break;
+			case 'v':
+				opts.verbose++;
+				ntfs_log_set_levels(NTFS_LOG_LEVEL_VERBOSE);
+				break;
+			case 'V':
+				ver++;
+				break;
+			case 'x':
+				opts.dos = 1;
+				break;
+			case 'l':
+				opts.lng++;
+				break;
+			case 'i':
+				opts.inode++;
+				break;
+			case 'F':
+				opts.classify++;
+				break;
+			case 'a':
+				opts.all++;
+				break;
+			case 's':
+				opts.system++;
+				break;
+			case 'R':
+				opts.recursive++;
+				break;
+			default:
+				ntfs_log_error("Unknown option '%s'.\n", argv[optind - 1]);
+				err++;
+				break;
 		}
 	}
 
@@ -296,17 +311,22 @@ static int parse_options(int argc, char *argv[])
 
 	if (help || ver)
 		opts.quiet = 0;
-	else {
-		if (opts.device == NULL) {
+	else
+	{
+		if (opts.device == NULL)
+		{
 			if (argc > 1)
-				ntfs_log_error("You must specify exactly one "
-						"device.\n");
+				ntfs_log_error(
+					"You must specify exactly one "
+					"device.\n");
 			err++;
 		}
 
-		if (opts.quiet && opts.verbose) {
-			ntfs_log_error("You may not use --quiet and --verbose at the "
-					"same time.\n");
+		if (opts.quiet && opts.verbose)
+		{
+			ntfs_log_error(
+				"You may not use --quiet and --verbose at the "
+				"same time.\n");
 			err++;
 		}
 	}
@@ -327,8 +347,10 @@ static int parse_options(int argc, char *argv[])
  */
 static void free_dir(struct dir *tofree)
 {
-	if (tofree) {
-		if (tofree->ni) {
+	if (tofree)
+	{
+		if (tofree->ni)
+		{
 			ntfs_inode_close(tofree->ni);
 			tofree->ni = NULL;
 		}
@@ -344,11 +366,13 @@ static void free_dir(struct dir *tofree)
  */
 static void free_dirs(struct ntfs_list_head *dir_list)
 {
-	struct dir *tofree = NULL;
+	struct dir *           tofree = NULL;
 	struct ntfs_list_head *walker = NULL;
 
-	if (dir_list) {
-		ntfs_list_for_each(walker, dir_list) {
+	if (dir_list)
+	{
+		ntfs_list_for_each(walker, dir_list)
+		{
 			free_dir(tofree);
 			tofree = ntfs_list_entry(walker, struct dir, list);
 		}
@@ -371,13 +395,13 @@ static void free_dirs(struct ntfs_list_head *dir_list)
  * NOTE: Assumes recursive option. Currently no limit on the depths of
  * recursion.
  */
-static int readdir_recursive(ntfs_inode * ni, s64 * pos, ntfsls_dirent * dirent)
+static int readdir_recursive(ntfs_inode *ni, s64 *pos, ntfsls_dirent *dirent)
 {
 	/* list of dirs to "ls" recursively */
 	static struct dir dirs = {
-		.list = NTFS_LIST_HEAD_INIT(dirs.list),
-		.ni = NULL,
-		.name = {0},
+		.list  = NTFS_LIST_HEAD_INIT(dirs.list),
+		.ni    = NULL,
+		.name  = {0},
 		.depth = 0
 	};
 
@@ -388,17 +412,18 @@ static int readdir_recursive(ntfs_inode * ni, s64 * pos, ntfsls_dirent * dirent)
 
 	static struct path_component base_comp;
 
-	struct dir *subdir = NULL;
-	struct dir *tofree = NULL;
-	struct path_component comp;
-	struct path_component *tempcomp = NULL;
-	struct ntfs_list_head *dir_walker = NULL;
+	struct dir *           subdir = NULL;
+	struct dir *           tofree = NULL;
+	struct path_component  comp;
+	struct path_component *tempcomp    = NULL;
+	struct ntfs_list_head *dir_walker  = NULL;
 	struct ntfs_list_head *comp_walker = NULL;
-	s64 pos2 = 0;
-	int ni_depth = depth;
-	int result = 0;
+	s64                    pos2        = 0;
+	int                    ni_depth    = depth;
+	int                    result      = 0;
 
-	if (ntfs_list_empty(&dirs.list)) {
+	if (ntfs_list_empty(&dirs.list))
+	{
 		base_comp.name = opts.path;
 		ntfs_list_add(&base_comp.list, &paths.list);
 		dir_list_insert_pos = &dirs.list;
@@ -409,13 +434,16 @@ static int readdir_recursive(ntfs_inode * ni, s64 * pos, ntfsls_dirent * dirent)
 
 	result = ntfs_readdir(ni, pos, dirent, (ntfs_filldir_t) list_dir_entry);
 
-	if (result == 0) {
+	if (result == 0)
+	{
 		ntfs_list_add_tail(&comp.list, &paths.list);
 
 		/* for each of ni's sub-dirs: list in this iteration, then
 		   free at the top of the next iteration or outside of loop */
-		ntfs_list_for_each(dir_walker, &dirs.list) {
-			if (tofree) {
+		ntfs_list_for_each(dir_walker, &dirs.list)
+		{
+			if (tofree)
+			{
 				free_dir(tofree);
 				tofree = NULL;
 			}
@@ -425,16 +453,20 @@ static int readdir_recursive(ntfs_inode * ni, s64 * pos, ntfsls_dirent * dirent)
 			if (subdir->depth != ni_depth + 1)
 				break;
 
-			pos2 = 0;
+			pos2                = 0;
 			dir_list_insert_pos = &dirs.list;
-			if (!subdir->ni) {
+			if (!subdir->ni)
+			{
 				subdir->ni =
-				    ntfs_pathname_to_inode(ni->vol, ni,
-							    subdir->name);
+						ntfs_pathname_to_inode(
+							ni->vol,
+							ni,
+							subdir->name);
 
-				if (!subdir->ni) {
-					ntfs_log_error
-					    ("ntfsls::readdir_recursive(): cannot get inode from pathname.\n");
+				if (!subdir->ni)
+				{
+					ntfs_log_error(
+						"ntfsls::readdir_recursive(): cannot get inode from pathname.\n");
 					result = -1;
 					break;
 				}
@@ -444,15 +476,18 @@ static int readdir_recursive(ntfs_inode * ni, s64 * pos, ntfsls_dirent * dirent)
 			comp.name = subdir->name;
 
 			/* print relative path header */
-			ntfs_list_for_each(comp_walker, &paths.list) {
+			ntfs_list_for_each(comp_walker, &paths.list)
+			{
 				tempcomp =
-				    ntfs_list_entry(comp_walker,
-					       struct path_component, list);
+						ntfs_list_entry(
+							comp_walker,
+					       struct path_component,
+							list);
 				printf("%s", tempcomp->name);
 				if (tempcomp != &comp
-				    && *tempcomp->name != PATH_SEP
-				    && (!opts.classify
-					|| tempcomp == &base_comp))
+					&& *tempcomp->name != PATH_SEP
+					&& (!opts.classify
+						|| tempcomp == &base_comp))
 					putchar(PATH_SEP);
 			}
 			puts(":");
@@ -473,7 +508,8 @@ static int readdir_recursive(ntfs_inode * ni, s64 * pos, ntfsls_dirent * dirent)
 		free_dir(tofree);
 
 	/* if at the outer-most readdir_recursive, then clean up */
-	if (ni_depth == 0) {
+	if (ni_depth == 0)
+	{
 		free_dirs(&dirs.list);
 	}
 
@@ -487,10 +523,16 @@ static int readdir_recursive(ntfs_inode * ni, s64 * pos, ntfsls_dirent * dirent)
  *
  * FIXME: Should we print errors as we go along? (AIA)
  */
-static int list_dir_entry(ntfsls_dirent * dirent, const ntfschar * name,
-			  const int name_len, const int name_type,
-			  const s64 pos __attribute__((unused)),
-			  const MFT_REF mref, const unsigned dt_type)
+static int list_dir_entry(
+			ntfsls_dirent * dirent,
+			const ntfschar *name,
+			const int       name_len,
+			const int       name_type,
+			const s64 pos __attribute__((unused)),
+
+const MFT_REF  mref,
+const unsigned dt_type
+)
 {
 	char *filename = NULL;
 	int result = 0;
@@ -636,29 +678,34 @@ free:
  */
 int main(int argc, char **argv)
 {
-	s64 pos;
-	ntfs_volume *vol;
-	ntfs_inode *ni;
+	s64           pos;
+	ntfs_volume * vol;
+	ntfs_inode *  ni;
 	ntfsls_dirent dirent;
 
 	ntfs_log_set_handler(ntfs_log_handler_outerr);
 
-	if (!parse_options(argc, argv)) {
+	if (!parse_options(argc, argv))
+	{
 		// FIXME: Print error... (AIA)
 		return 1;
 	}
 
 	utils_set_locale();
 
-	vol = utils_mount_volume(opts.device, NTFS_MNT_RDONLY |
-			(opts.force ? NTFS_MNT_RECOVER : 0));
-	if (!vol) {
+	vol = utils_mount_volume(
+		opts.device,
+		NTFS_MNT_RDONLY |
+		(opts.force ? NTFS_MNT_RECOVER : 0));
+	if (!vol)
+	{
 		// FIXME: Print error... (AIA)
 		return 2;
 	}
 
 	ni = ntfs_pathname_to_inode(vol, NULL, opts.path);
-	if (!ni) {
+	if (!ni)
+	{
 		// FIXME: Print error... (AIA)
 		ntfs_umount(vol, FALSE);
 		return 3;
@@ -671,38 +718,52 @@ int main(int argc, char **argv)
 	pos = 0;
 	memset(&dirent, 0, sizeof(dirent));
 	dirent.vol = vol;
-	if (ni->mrec->flags & MFT_RECORD_IS_DIRECTORY) {
+	if (ni->mrec->flags & MFT_RECORD_IS_DIRECTORY)
+	{
 		if (opts.recursive)
 			readdir_recursive(ni, &pos, &dirent);
 		else
-			ntfs_readdir(ni, &pos, &dirent,
-				     (ntfs_filldir_t) list_dir_entry);
+			ntfs_readdir(
+				ni,
+				&pos,
+				&dirent,
+				(ntfs_filldir_t) list_dir_entry);
 		// FIXME: error checking... (AIA)
-	} else {
-		ATTR_RECORD *rec;
-		FILE_NAME_ATTR *attr;
+	}
+	else
+	{
+		ATTR_RECORD *         rec;
+		FILE_NAME_ATTR *      attr;
 		ntfs_attr_search_ctx *ctx;
-		int space = 4;
-		ntfschar *name = NULL;
-		int name_len = 0;;
+		int                   space    = 4;
+		ntfschar *            name     = NULL;
+		int                   name_len = 0;;
 
 		ctx = ntfs_attr_get_search_ctx(ni, NULL);
 		if (!ctx)
 			return -1;
 
-		while ((rec = find_attribute(AT_FILE_NAME, ctx))) {
+		while ((rec = find_attribute(AT_FILE_NAME, ctx)))
+		{
 			/* We know this will always be resident. */
 			attr = (FILE_NAME_ATTR *) ((char *) rec + le16_to_cpu(rec->value_offset));
 
-			if (attr->file_name_type < space) {
+			if (attr->file_name_type < space)
+			{
 				name     = attr->file_name;
 				name_len = attr->file_name_length;
 				space    = attr->file_name_type;
 			}
 		}
 
-		list_dir_entry(&dirent, name, name_len, space, pos, ni->mft_no,
-			       NTFS_DT_REG);
+		list_dir_entry(
+			&dirent,
+			name,
+			name_len,
+			space,
+			pos,
+			ni->mft_no,
+			NTFS_DT_REG);
 		// FIXME: error checking... (AIA)
 
 		ntfs_attr_put_search_ctx(ctx);

@@ -30,126 +30,148 @@
 #define feedle32(p,x) (*(const le32*)((const char*)(p) + (x)))
 #define feedle64(p,x) (*(const le64*)((const char*)(p) + (x)))
 
-enum ACTIONS {
-	Noop,					/* 0 */
-	CompensationlogRecord,			/* 1 */
-	InitializeFileRecordSegment,		/* 2 */
-	DeallocateFileRecordSegment,		/* 3 */
-	WriteEndofFileRecordSegment,		/* 4 */
-	CreateAttribute,			/* 5 */
-	DeleteAttribute,			/* 6 */
-	UpdateResidentValue,			/* 7 */
-	UpdateNonResidentValue,			/* 8 */
-	UpdateMappingPairs,			/* 9 */
-	DeleteDirtyClusters,			/* 10 */
-	SetNewAttributeSizes,			/* 11 */
-	AddIndexEntryRoot,			/* 12 */
-	DeleteIndexEntryRoot,			/* 13 */
-	AddIndexEntryAllocation,		/* 14 */
-	DeleteIndexEntryAllocation,		/* 15 */
-	WriteEndOfIndexBuffer,			/* 16 */
-	SetIndexEntryVcnRoot,			/* 17 */
-	SetIndexEntryVcnAllocation,		/* 18 */
-	UpdateFileNameRoot,			/* 19 */
-	UpdateFileNameAllocation,		/* 20 */
-	SetBitsInNonResidentBitMap,		/* 21 */
-	ClearBitsInNonResidentBitMap,		/* 22 */
-	HotFix,					/* 23 */
-	EndTopLevelAction,			/* 24 */
-	PrepareTransaction,			/* 25 */
-	CommitTransaction,			/* 26 */
-	ForgetTransaction,			/* 27 */
-	OpenNonResidentAttribute,		/* 28 */
-	OpenAttributeTableDump,			/* 29 */
-	AttributeNamesDump,			/* 30 */
-	DirtyPageTableDump,			/* 31 */
-	TransactionTableDump,			/* 32 */
-	UpdateRecordDataRoot,			/* 33 */
-	UpdateRecordDataAllocation,		/* 34 */
-	Win10Action35,				/* 35 */
-	Win10Action36,				/* 36 */
-	Win10Action37,				/* 37 */
-	LastAction				/* 38 */
-} ;
+enum ACTIONS
+{
+	Noop,                         /* 0 */
+	CompensationlogRecord,        /* 1 */
+	InitializeFileRecordSegment,  /* 2 */
+	DeallocateFileRecordSegment,  /* 3 */
+	WriteEndofFileRecordSegment,  /* 4 */
+	CreateAttribute,              /* 5 */
+	DeleteAttribute,              /* 6 */
+	UpdateResidentValue,          /* 7 */
+	UpdateNonResidentValue,       /* 8 */
+	UpdateMappingPairs,           /* 9 */
+	DeleteDirtyClusters,          /* 10 */
+	SetNewAttributeSizes,         /* 11 */
+	AddIndexEntryRoot,            /* 12 */
+	DeleteIndexEntryRoot,         /* 13 */
+	AddIndexEntryAllocation,      /* 14 */
+	DeleteIndexEntryAllocation,   /* 15 */
+	WriteEndOfIndexBuffer,        /* 16 */
+	SetIndexEntryVcnRoot,         /* 17 */
+	SetIndexEntryVcnAllocation,   /* 18 */
+	UpdateFileNameRoot,           /* 19 */
+	UpdateFileNameAllocation,     /* 20 */
+	SetBitsInNonResidentBitMap,   /* 21 */
+	ClearBitsInNonResidentBitMap, /* 22 */
+	HotFix,                       /* 23 */
+	EndTopLevelAction,            /* 24 */
+	PrepareTransaction,           /* 25 */
+	CommitTransaction,            /* 26 */
+	ForgetTransaction,            /* 27 */
+	OpenNonResidentAttribute,     /* 28 */
+	OpenAttributeTableDump,       /* 29 */
+	AttributeNamesDump,           /* 30 */
+	DirtyPageTableDump,           /* 31 */
+	TransactionTableDump,         /* 32 */
+	UpdateRecordDataRoot,         /* 33 */
+	UpdateRecordDataAllocation,   /* 34 */
+	Win10Action35,                /* 35 */
+	Win10Action36,                /* 36 */
+	Win10Action37,                /* 37 */
+	LastAction                    /* 38 */
+};
 
-struct BUFFER {
+struct BUFFER
+{
 	unsigned int num;
 	unsigned int rnum;
 	unsigned int size;
 	unsigned int headsz;
-	BOOL safe;
-	union {
-		u64 alignment;
-		RESTART_PAGE_HEADER restart;
-		RECORD_PAGE_HEADER record;
-		char data[1];
-	} block;  /* variable length, keep at the end */
-} ;
+	BOOL         safe;
 
-struct ACTION_RECORD {
+	union
+	{
+		u64                 alignment;
+		RESTART_PAGE_HEADER restart;
+		RECORD_PAGE_HEADER  record;
+		char                data[1];
+	} block; /* variable length, keep at the end */
+};
+
+struct ACTION_RECORD
+{
 	struct ACTION_RECORD *next;
 	struct ACTION_RECORD *prev;
-	int num;
-	unsigned int flags;
-	LOG_RECORD record; /* variable length, keep at the end */
-} ;
+	int                   num;
+	unsigned int          flags;
+	LOG_RECORD            record; /* variable length, keep at the end */
+};
 
-enum {		/* Flag values for ACTION_RECORD */
-	ACTION_TO_REDO = 1	/* Committed, possibly not synced */
-	} ;
+enum
+{                      /* Flag values for ACTION_RECORD */
+	ACTION_TO_REDO = 1 /* Committed, possibly not synced */
+};
 
-struct ATTR {
-	u64 inode;
-	u64 lsn;
+struct ATTR
+{
+	u64  inode;
+	u64  lsn;
 	le32 type;
-	u16 key;
-	u16 namelen;
+	u16  key;
+	u16  namelen;
 	le16 name[1];
-} ;
+};
 
-extern u32 clustersz;
-extern int clusterbits;
-extern u32 blocksz;
-extern int blockbits;
-extern u16 bytespersect;
-extern u64 mftlcn;
-extern u32 mftrecsz;
-extern int mftrecbits;
-extern u32 mftcnt; /* number of entries */
-extern BOOL optc;
-extern BOOL optn;
-extern int opts;
-extern int optv;
+extern u32          clustersz;
+extern int          clusterbits;
+extern u32          blocksz;
+extern int          blockbits;
+extern u16          bytespersect;
+extern u64          mftlcn;
+extern u32          mftrecsz;
+extern int          mftrecbits;
+extern u32          mftcnt; /* number of entries */
+extern BOOL         optc;
+extern BOOL         optn;
+extern int          opts;
+extern int          optv;
 extern unsigned int redocount;
 extern unsigned int undocount;
-extern ntfs_inode *log_ni;
-extern ntfs_attr *log_na;
-extern u64 logfilelcn;
-extern u32 logfilesz; /* bytes */
-extern u64 redos_met;
-extern u64 committed_lsn;
-extern u64 synced_lsn;
-extern u64 latest_lsn;
-extern u64 restart_lsn;
+extern ntfs_inode * log_ni;
+extern ntfs_attr *  log_na;
+extern u64          logfilelcn;
+extern u32          logfilesz; /* bytes */
+extern u64          redos_met;
+extern u64          committed_lsn;
+extern u64          synced_lsn;
+extern u64          latest_lsn;
+extern u64          restart_lsn;
 
-extern RESTART_AREA restart;
+extern RESTART_AREA      restart;
 extern LOG_CLIENT_RECORD client;
 
 const char *actionname(int op);
+
 const char *mftattrname(ATTR_TYPES attr);
+
 void showname(const char *prefix, const char *name, int cnt);
+
 int fixnamelen(const char *name, int len);
+
 BOOL within_lcn_range(const LOG_RECORD *logr);
+
 struct ATTR *getattrentry(unsigned int key, unsigned int lth);
+
 void copy_attribute(struct ATTR *pa, const char *buf, int length);
+
 u32 get_undo_offset(const LOG_RECORD *logr);
+
 u32 get_redo_offset(const LOG_RECORD *logr);
+
 u32 get_extra_offset(const LOG_RECORD *logr);
+
 BOOL exception(int num);
 
 struct STORE;
+
 extern int play_undos(ntfs_volume *vol, const struct ACTION_RECORD *firstundo);
+
 extern int play_redos(ntfs_volume *vol, const struct ACTION_RECORD *firstredo);
+
 extern void show_redos(void);
-extern void freeclusterentry(struct STORE*);
+
+extern void freeclusterentry(struct STORE *);
+
 void hexdump(const char *buf, unsigned int lth);

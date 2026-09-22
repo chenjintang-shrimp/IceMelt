@@ -60,46 +60,50 @@
 #include "ioctl.h"
 #include "ntfs-3g-fuse.h"
 
-typedef enum {
-	NF_STREAMS_INTERFACE_NONE,		/* No access to named data streams. */
-	NF_STREAMS_INTERFACE_XATTR,		/* Map named data streams to xattrs. */
-	NF_STREAMS_INTERFACE_WINDOWS,	/* "file:stream" interface. */
+typedef enum
+{
+	NF_STREAMS_INTERFACE_NONE,    /* No access to named data streams. */
+	NF_STREAMS_INTERFACE_XATTR,   /* Map named data streams to xattrs. */
+	NF_STREAMS_INTERFACE_WINDOWS, /* "file:stream" interface. */
 } ntfs_fuse_streams_interface;
 
-typedef struct {
-	ntfs_volume *vol;
-	unsigned int uid;
-	unsigned int gid;
-	unsigned int fmask;
-	unsigned int dmask;
+typedef struct
+{
+	ntfs_volume *               vol;
+	unsigned int                uid;
+	unsigned int                gid;
+	unsigned int                fmask;
+	unsigned int                dmask;
 	ntfs_fuse_streams_interface streams;
-	BOOL ro;
-	BOOL windows_names;
-	BOOL compression;
-	BOOL recover;
-	BOOL hiberfile;
-	BOOL exclusive;
+	BOOL                        ro;
+	BOOL                        windows_names;
+	BOOL                        compression;
+	BOOL                        recover;
+	BOOL                        hiberfile;
+	BOOL                        exclusive;
 } ntfs_fuse_context_t;
 
 #define set_archive(ni) (ni)->flags |= FILE_ATTR_ARCHIVE
 
-typedef struct {
+typedef struct
+{
 	fuse_fill_dir_t filler;
-	void *buf;
+	void *          buf;
 } ntfs_fuse_fill_context_t;
 
-enum {
+enum
+{
 	CLOSE_COMPRESSED = 1,
-	CLOSE_ENCRYPTED = 2,
-	CLOSE_DMTIME = 4,
-	CLOSE_REPARSE = 8
+	CLOSE_ENCRYPTED  = 2,
+	CLOSE_DMTIME     = 4,
+	CLOSE_REPARSE    = 8
 };
 
 static ntfs_fuse_context_t *ctx;
-static u32 ntfs_sequence;
+static u32                  ntfs_sequence;
 
 static const char ntfs_bad_reparse[] = "unsupported reparse tag 0x%08lx";
-	 /* exact length of target text, without the terminator */
+/* exact length of target text, without the terminator */
 #define ntfs_bad_reparse_lth (sizeof(ntfs_bad_reparse) + 2)
 
 /**
@@ -122,8 +126,8 @@ static void ntfs_fuse_update_times(ntfs_inode *ni, ntfs_time_update_flags mask)
 
 static s64 ntfs_get_nr_free_mft_records(ntfs_volume *vol)
 {
-	ntfs_attr *na = vol->mftbmp_na;
-	s64 nr_free = ntfs_attr_get_free_bits(na);
+	ntfs_attr *na      = vol->mftbmp_na;
+	s64        nr_free = ntfs_attr_get_free_bits(na);
 
 	if (nr_free >= 0)
 		nr_free += (na->allocated_size - na->data_size) << 3;
@@ -144,28 +148,34 @@ static s64 ntfs_get_nr_free_mft_records(ntfs_volume *vol)
  *	 0	No stream name, @*stream is not allocated and set to AT_UNNAMED.
  *	>0	Stream name length in unicode characters.
  */
-static int ntfs_fuse_parse_path(const char *org_path, char **path,
-		ntfschar **stream_name)
+static int ntfs_fuse_parse_path(
+	const char *org_path,
+	char **     path,
+	ntfschar ** stream_name)
 {
 	char *stream_name_mbs;
-	int res;
+	int   res;
 
 	stream_name_mbs = strdup(org_path);
 	if (!stream_name_mbs)
 		return -errno;
-	if (ctx->streams == NF_STREAMS_INTERFACE_WINDOWS) {
+	if (ctx->streams == NF_STREAMS_INTERFACE_WINDOWS)
+	{
 		*path = strsep(&stream_name_mbs, ":");
-		if (stream_name_mbs) {
+		if (stream_name_mbs)
+		{
 			*stream_name = NULL;
-			res = ntfs_mbstoucs(stream_name_mbs, stream_name);
-			if (res < 0) {
+			res          = ntfs_mbstoucs(stream_name_mbs, stream_name);
+			if (res < 0)
+			{
 				free(*path);
 				*path = NULL;
 				return -errno;
 			}
 			return res;
 		}
-	} else
+	}
+	else
 		*path = stream_name_mbs;
 	*stream_name = AT_UNNAMED;
 	return 0;
@@ -179,30 +189,32 @@ static void set_fuse_error(int *err)
 
 int ntfs_fuse_readlink(const char *org_path, char *buf, size_t buf_size)
 {
-	char *path = NULL;
-	ntfschar *stream_name;
-	ntfs_inode *ni = NULL;
-	ntfs_attr *na = NULL;
-	INTX_FILE *intx_file = NULL;
-	int stream_name_len, res = 0;
+	char *         path = NULL;
+	ntfschar *     stream_name;
+	ntfs_inode *   ni                   = NULL;
+	ntfs_attr *    na                   = NULL;
+	INTX_FILE *    intx_file            = NULL;
+	int            stream_name_len, res = 0;
 	REPARSE_POINT *reparse;
-	le32 tag;
-	int lth;
+	le32           tag;
+	int            lth;
 
 	/* Get inode. */
 	stream_name_len = ntfs_fuse_parse_path(org_path, &path, &stream_name);
 	if (stream_name_len < 0)
 		return stream_name_len;
-	if (stream_name_len > 0) {
+	if (stream_name_len > 0)
+	{
 		res = -EINVAL;
 		goto exit;
 	}
 	ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
-	if (!ni) {
+	if (!ni)
+	{
 		res = -errno;
 		goto exit;
 	}
-		/*
+	/*
 		 * Reparse point : analyze as a junction point
 		 */
 	//if (ni->flags & FILE_ATTR_REPARSE_POINT) {
@@ -210,43 +222,54 @@ int ntfs_fuse_readlink(const char *org_path, char *buf, size_t buf_size)
 	//	goto exit;
 	//}
 	/* Sanity checks. */
-	if (!(ni->flags & FILE_ATTR_SYSTEM)) {
+	if (!(ni->flags & FILE_ATTR_SYSTEM))
+	{
 		res = -EINVAL;
 		goto exit;
 	}
 	na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
-	if (!na) {
+	if (!na)
+	{
 		res = -errno;
 		goto exit;
 	}
-	if ((size_t)na->data_size <= sizeof(INTX_FILE_TYPES)) {
+	if ((size_t) na->data_size <= sizeof(INTX_FILE_TYPES))
+	{
 		res = -EINVAL;
 		goto exit;
 	}
-	if ((size_t)na->data_size > sizeof(INTX_FILE_TYPES) +
-			sizeof(ntfschar) * PATH_MAX) {
+	if ((size_t) na->data_size > sizeof(INTX_FILE_TYPES) +
+		sizeof(ntfschar) * PATH_MAX)
+	{
 		res = -ENAMETOOLONG;
 		goto exit;
 	}
 	/* Receive file content. */
 	intx_file = ntfs_malloc(na->data_size);
-	if (!intx_file) {
+	if (!intx_file)
+	{
 		res = -errno;
 		goto exit;
 	}
-	if (ntfs_attr_pread(na, 0, na->data_size, intx_file) != na->data_size) {
+	if (ntfs_attr_pread(na, 0, na->data_size, intx_file) != na->data_size)
+	{
 		res = -errno;
 		goto exit;
 	}
 	/* Sanity check. */
-	if (intx_file->magic != INTX_SYMBOLIC_LINK) {
+	if (intx_file->magic != INTX_SYMBOLIC_LINK)
+	{
 		res = -EINVAL;
 		goto exit;
 	}
 	/* Convert link from unicode to local encoding. */
-	if (ntfs_ucstombs(intx_file->target, (na->data_size -
+	if (ntfs_ucstombs(
+		intx_file->target,
+		(na->data_size -
 			offsetof(INTX_FILE, target)) / sizeof(ntfschar),
-			&buf, buf_size) < 0) {
+		&buf,
+		buf_size) < 0)
+	{
 		res = -errno;
 		goto exit;
 	}
@@ -263,10 +286,16 @@ exit:
 	return res;
 }
 
-static int ntfs_fuse_filler(ntfs_fuse_fill_context_t *fill_ctx,
-		const ntfschar *name, const int name_len, const int name_type,
-		const s64 pos __attribute__((unused)), const MFT_REF mref,
-		const unsigned dt_type __attribute__((unused)))
+static int ntfs_fuse_filler(
+			ntfs_fuse_fill_context_t *fill_ctx,
+			const ntfschar *          name,
+			const int                 name_len,
+			const int                 name_type,
+			const s64 pos __attribute__((unused)),
+const MFT_REF mref,
+
+const unsigned dt_type __attribute__((unused))
+)
 {
 	char *filename = NULL;
 	int ret = 0;
@@ -274,13 +303,13 @@ static int ntfs_fuse_filler(ntfs_fuse_fill_context_t *fill_ctx,
 
 	if (name_type == FILE_NAME_DOS)
 		return 0;
-	
+
 	if ((filenamelen = ntfs_ucstombs(name, name_len, &filename, 0)) < 0) {
 		ntfs_log_perror("Filename decoding failed (inode %llu)",
 				(unsigned long long)MREF(mref));
 		return -1;
 	}
-	
+
 	if (ntfs_fuse_is_named_data_stream(filename)) {
 		ntfs_log_error("Unable to access '%s' (inode %llu) with "
 				"current named streams access interface.\n",
@@ -289,10 +318,10 @@ static int ntfs_fuse_filler(ntfs_fuse_fill_context_t *fill_ctx,
 		return 0;
 	} else {
 		struct stat st = { .st_ino = MREF(mref) };
-		 
+
 		switch (dt_type) {
 		case NTFS_DT_DIR :
-			st.st_mode = S_IFDIR | (0777 & ~ctx->dmask); 
+			st.st_mode = S_IFDIR | (0777 & ~ctx->dmask);
 			break;
 		case NTFS_DT_LNK :
 			st.st_mode = S_IFLNK | 0777;
@@ -317,16 +346,21 @@ static int ntfs_fuse_filler(ntfs_fuse_fill_context_t *fill_ctx,
 			st.st_mode = S_IFREG | (0777 & ~ctx->fmask);
 			break;
 		}
-		
+
 		ret = fill_ctx->filler(fill_ctx->buf, filename, &st, 0);
 	}
-	
+
 	free(filename);
 	return ret;
 }
 
-int ntfs_fuse_readdir(const char *path, void *buf,
-		fuse_fill_dir_t filler, off_t offset __attribute__((unused)))
+int ntfs_fuse_readdir(
+	const char *    path,
+	void *          buf,
+	fuse_fill_dir_t filler,
+	off_t offset __attribute__((unused))
+
+)
 {
 	ntfs_fuse_fill_context_t fill_ctx;
 	ntfs_inode *ni;
@@ -355,33 +389,36 @@ int ntfs_fuse_readdir(const char *path, void *buf,
 int ntfs_fuse_open(const char *org_path)
 {
 	ntfs_inode *ni;
-	ntfs_attr *na = NULL;
-	int res = 0;
-	char *path = NULL;
-	ntfschar *stream_name;
-	int stream_name_len;
+	ntfs_attr * na   = NULL;
+	int         res  = 0;
+	char *      path = NULL;
+	ntfschar *  stream_name;
+	int         stream_name_len;
 
 	stream_name_len = ntfs_fuse_parse_path(org_path, &path, &stream_name);
 	if (stream_name_len < 0)
 		return stream_name_len;
 	ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
-	if (ni) {
+	if (ni)
+	{
 		//if (!(ni->flags & FILE_ATTR_REPARSE_POINT)) {
-			na = ntfs_attr_open(ni, AT_DATA, stream_name, stream_name_len);
-			if (!na) {
-				res = -errno;
-				goto close;
-			}
+		na = ntfs_attr_open(ni, AT_DATA, stream_name, stream_name_len);
+		if (!na)
+		{
+			res = -errno;
+			goto close;
+		}
 		//}
 		//if (ni->flags & FILE_ATTR_REPARSE_POINT) {
 		//	res = -EOPNOTSUPP;
 		//	goto close;
 		//}
 		ntfs_attr_close(na);
-close:
+	close:
 		if (ntfs_inode_close(ni))
 			set_fuse_error(&res);
-	} else
+	}
+	else
 		res = -errno;
 	free(path);
 	if (stream_name_len)
@@ -391,13 +428,13 @@ close:
 
 int ntfs_fuse_read(const char *org_path, char *buf, size_t size, off_t offset)
 {
-	ntfs_inode *ni = NULL;
-	ntfs_attr *na = NULL;
-	char *path = NULL;
-	ntfschar *stream_name;
-	int stream_name_len, res;
-	s64 total = 0;
-	s64 max_read;
+	ntfs_inode *ni   = NULL;
+	ntfs_attr * na   = NULL;
+	char *      path = NULL;
+	ntfschar *  stream_name;
+	int         stream_name_len, res;
+	s64         total = 0;
+	s64         max_read;
 
 	if (!size)
 		return 0;
@@ -406,7 +443,8 @@ int ntfs_fuse_read(const char *org_path, char *buf, size_t size, off_t offset)
 	if (stream_name_len < 0)
 		return stream_name_len;
 	ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
-	if (!ni) {
+	if (!ni)
+	{
 		res = -errno;
 		goto exit;
 	}
@@ -415,29 +453,37 @@ int ntfs_fuse_read(const char *org_path, char *buf, size_t size, off_t offset)
 	//	goto exit;
 	//}
 	na = ntfs_attr_open(ni, AT_DATA, stream_name, stream_name_len);
-	if (!na) {
+	if (!na)
+	{
 		res = -errno;
 		goto exit;
 	}
 	max_read = na->data_size;
-	if (offset + (off_t)size > max_read) {
+	if (offset + (off_t) size > max_read)
+	{
 		if (max_read < offset)
 			goto ok;
 		size = max_read - offset;
 	}
-	while (size > 0) {
+	while (size > 0)
+	{
 		s64 ret = ntfs_attr_pread(na, offset, size, buf + total);
-		if (ret != (s64)size)
-			ntfs_log_perror("ntfs_attr_pread error reading '%s' at "
-				"offset %lld: %lld <> %lld", org_path, 
-				(long long)offset, (long long)size, (long long)ret);
-		if (ret <= 0 || ret > (s64)size) {
+		if (ret != (s64) size)
+			ntfs_log_perror(
+				"ntfs_attr_pread error reading '%s' at "
+				"offset %lld: %lld <> %lld",
+				org_path,
+				(long long) offset,
+				(long long) size,
+				(long long) ret);
+		if (ret <= 0 || ret > (s64) size)
+		{
 			res = (ret < 0) ? -errno : -EIO;
 			goto exit;
 		}
-		size -= ret;
+		size   -= ret;
 		offset += ret;
-		total += ret;
+		total  += ret;
 	}
 ok:
 	res = total;
@@ -455,19 +501,21 @@ exit:
 
 int ntfs_fuse_write(const char *org_path, const char *buf, size_t size, off_t offset)
 {
-	ntfs_inode *ni = NULL;
-	ntfs_attr *na = NULL;
-	char *path = NULL;
-	ntfschar *stream_name;
-	int stream_name_len, res, total = 0;
+	ntfs_inode *ni   = NULL;
+	ntfs_attr * na   = NULL;
+	char *      path = NULL;
+	ntfschar *  stream_name;
+	int         stream_name_len, res, total = 0;
 
 	stream_name_len = ntfs_fuse_parse_path(org_path, &path, &stream_name);
-	if (stream_name_len < 0) {
+	if (stream_name_len < 0)
+	{
 		res = stream_name_len;
 		goto out;
 	}
 	ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
-	if (!ni) {
+	if (!ni)
+	{
 		res = -errno;
 		goto exit;
 	}
@@ -476,13 +524,16 @@ int ntfs_fuse_write(const char *org_path, const char *buf, size_t size, off_t of
 	//	goto exit;
 	//}
 	na = ntfs_attr_open(ni, AT_DATA, stream_name, stream_name_len);
-	if (!na) {
+	if (!na)
+	{
 		res = -errno;
 		goto exit;
 	}
-	while (size) {
+	while (size)
+	{
 		s64 ret = ntfs_attr_pwrite(na, offset, size, buf + total);
-		if (ret <= 0) {
+		if (ret <= 0)
+		{
 			res = -errno;
 			goto exit;
 		}
@@ -503,7 +554,7 @@ exit:
 	free(path);
 	if (stream_name_len)
 		free(stream_name);
-out:	
+out:
 	return res;
 }
 
@@ -511,8 +562,12 @@ out:
  *	Common part for truncate() and ftruncate()
  */
 
-static int ntfs_fuse_trunc(const char *org_path, off_t size,
-			BOOL chkwrite __attribute__((unused)))
+static int ntfs_fuse_trunc(
+	const char *org_path,
+	off_t       size,
+	BOOL chkwrite __attribute__((unused))
+
+)
 {
 	ntfs_inode *ni = NULL;
 	ntfs_attr *na = NULL;
@@ -543,7 +598,7 @@ static int ntfs_fuse_trunc(const char *org_path, off_t size,
 		goto exit;
 		/*
 		 * For compressed files, upsizing is done by inserting a final
-		 * zero, which is optimized as creating a hole when possible. 
+		 * zero, which is optimized as creating a hole when possible.
 		 */
 	oldsize = na->data_size;
 	if ((na->data_flags & ATTR_COMPRESSION_MASK)
@@ -602,20 +657,23 @@ int ntfs_fuse_chown(const char *path, uid_t uid, gid_t gid)
 	return -EOPNOTSUPP;
 }
 
-int ntfs_fuse_create(const char *org_path, mode_t typemode, dev_t dev,
-		const char *target)
+int ntfs_fuse_create(
+	const char *org_path,
+	mode_t      typemode,
+	dev_t       dev,
+	const char *target)
 {
-	char *name;
-	ntfschar *uname = NULL, *utarget = NULL;
+	char *      name;
+	ntfschar *  uname  = NULL, *utarget = NULL;
 	ntfs_inode *dir_ni = NULL, *ni;
-	char *dir_path;
-	le32 securid;
-	char *path = NULL;
-	ntfschar *stream_name;
-	int stream_name_len;
-	mode_t type = typemode & ~07777;
-	mode_t perm;
-	int res = 0, uname_len, utarget_len;
+	char *      dir_path;
+	le32        securid;
+	char *      path = NULL;
+	ntfschar *  stream_name;
+	int         stream_name_len;
+	mode_t      type = typemode & ~07777;
+	mode_t      perm;
+	int         res = 0, uname_len, utarget_len;
 
 	dir_path = strdup(org_path);
 	if (!dir_path)
@@ -625,75 +683,98 @@ int ntfs_fuse_create(const char *org_path, mode_t typemode, dev_t dev,
 	name++;
 	uname_len = ntfs_mbstoucs(name, &uname);
 	if ((uname_len < 0)
-	    || (ctx->windows_names
-		&& ntfs_forbidden_names(ctx->vol,uname,uname_len,TRUE))) {
+		|| (ctx->windows_names
+			&& ntfs_forbidden_names(ctx->vol, uname, uname_len, TRUE)))
+	{
 		res = -errno;
 		goto exit;
 	}
-	stream_name_len = ntfs_fuse_parse_path(org_path,
-					 &path, &stream_name);
-		/* stream name validity has been checked previously */
-	if (stream_name_len < 0) {
+	stream_name_len = ntfs_fuse_parse_path(
+		org_path,
+		&path,
+		&stream_name);
+	/* stream name validity has been checked previously */
+	if (stream_name_len < 0)
+	{
 		res = stream_name_len;
 		goto exit;
 	}
 	/* Open parent directory. */
 	*--name = 0;
-	dir_ni = ntfs_pathname_to_inode(ctx->vol, NULL, dir_path);
-		/* Deny creating files in $Extend */
-	if (!dir_ni || (dir_ni->mft_no == FILE_Extend)) {
+	dir_ni  = ntfs_pathname_to_inode(ctx->vol, NULL, dir_path);
+	/* Deny creating files in $Extend */
+	if (!dir_ni || (dir_ni->mft_no == FILE_Extend))
+	{
 		free(path);
 		res = -errno;
 		if (dir_ni)
 			res = -EPERM;
 		goto exit;
 	}
-		if (S_ISDIR(type))
-			perm = (typemode & ~ctx->dmask & 0777)
+	if (S_ISDIR(type))
+		perm = (typemode & ~ctx->dmask & 0777)
 				| S_ISGID;
-		else
-			perm = typemode & ~ctx->fmask & 0777;
+	else
+		perm = typemode & ~ctx->fmask & 0777;
 
-		securid = const_cpu_to_le32(0);
-		/* Create object specified in @type. */
-		//if (dir_ni->flags & FILE_ATTR_REPARSE_POINT) {
-		//	errno = EOPNOTSUPP;
-		//} else {
-			switch (type) {
-				case S_IFCHR:
-				case S_IFBLK:
-					ni = ntfs_create_device(dir_ni, securid,
-						uname, uname_len, type,	dev);
-					break;
-				case S_IFLNK:
-					utarget_len = ntfs_mbstoucs(target,
-							&utarget);
-					if (utarget_len < 0) {
-						res = -errno;
-						goto exit;
-					}
-					ni = ntfs_create_symlink(dir_ni,
-						securid, uname, uname_len,
-						utarget, utarget_len);
-					break;
-				default:
-					ni = ntfs_create(dir_ni, securid,
-						uname, uname_len, type);
-					break;
+	securid = const_cpu_to_le32(0);
+	/* Create object specified in @type. */
+	//if (dir_ni->flags & FILE_ATTR_REPARSE_POINT) {
+	//	errno = EOPNOTSUPP;
+	//} else {
+	switch (type)
+	{
+		case S_IFCHR:
+		case S_IFBLK:
+			ni = ntfs_create_device(
+				dir_ni,
+				securid,
+				uname,
+				uname_len,
+				type,
+				dev);
+			break;
+		case S_IFLNK:
+			utarget_len = ntfs_mbstoucs(
+				target,
+				&utarget);
+			if (utarget_len < 0)
+			{
+				res = -errno;
+				goto exit;
 			}
-		//}
-		if (ni) {
-			set_archive(ni);
-			NInoSetDirty(ni);
-			/*
+			ni = ntfs_create_symlink(
+				dir_ni,
+				securid,
+				uname,
+				uname_len,
+				utarget,
+				utarget_len);
+			break;
+		default:
+			ni = ntfs_create(
+				dir_ni,
+				securid,
+				uname,
+				uname_len,
+				type);
+			break;
+	}
+	//}
+	if (ni)
+	{
+		set_archive(ni);
+		NInoSetDirty(ni);
+		/*
 			 * closing ni requires access to dir_ni to
 			 * synchronize the index, avoid double opening.
 			 */
-			if (ntfs_inode_close_in_dir(ni, dir_ni))
-				set_fuse_error(&res);
-			ntfs_fuse_update_times(dir_ni, NTFS_UPDATE_MCTIME);
-		} else
-			res = -errno;
+		if (ntfs_inode_close_in_dir(ni, dir_ni))
+			set_fuse_error(&res);
+		ntfs_fuse_update_times(dir_ni, NTFS_UPDATE_MCTIME);
+	}
+	else
+		res = -errno;
 	free(path);
 
 exit:
@@ -706,16 +787,20 @@ exit:
 	return res;
 }
 
-int ntfs_fuse_create_stream(const char *path,
-		ntfschar *stream_name, const int stream_name_len)
+int ntfs_fuse_create_stream(
+	const char *path,
+	ntfschar *  stream_name,
+	const int   stream_name_len)
 {
 	ntfs_inode *ni;
-	int res = 0;
+	int         res = 0;
 
 	ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
-	if (!ni) {
+	if (!ni)
+	{
 		res = -errno;
-		if (res == -ENOENT) {
+		if (res == -ENOENT)
+		{
 			/*
 			 * If such file does not exist, create it and try once
 			 * again to add stream to it.
@@ -723,8 +808,10 @@ int ntfs_fuse_create_stream(const char *path,
 			 */
 			res = ntfs_fuse_create(path, S_IFREG, 0, NULL);
 			if (!res)
-				return ntfs_fuse_create_stream(path,
-						stream_name, stream_name_len);
+				return ntfs_fuse_create_stream(
+					path,
+					stream_name,
+					stream_name_len);
 			else
 				res = -errno;
 		}
@@ -742,28 +829,37 @@ int ntfs_fuse_create_stream(const char *path,
 
 static int ntfs_fuse_mknod_common(const char *org_path, mode_t mode, dev_t dev)
 {
-	char *path = NULL;
+	char *    path = NULL;
 	ntfschar *stream_name;
-	int stream_name_len;
-	int res = 0;
+	int       stream_name_len;
+	int       res = 0;
 
 	stream_name_len = ntfs_fuse_parse_path(org_path, &path, &stream_name);
 	if (stream_name_len < 0)
 		return stream_name_len;
 	if (stream_name_len
-	    && (!S_ISREG(mode)
-		|| (ctx->windows_names
-		    && ntfs_forbidden_names(ctx->vol,stream_name,
-					stream_name_len, TRUE)))) {
+		&& (!S_ISREG(mode)
+			|| (ctx->windows_names
+				&& ntfs_forbidden_names(
+					ctx->vol,
+					stream_name,
+					stream_name_len,
+					TRUE))))
+	{
 		res = -EINVAL;
 		goto exit;
 	}
 	if (!stream_name_len)
-		res = ntfs_fuse_create(path, mode & (S_IFMT | 07777), dev, 
-					NULL);
+		res = ntfs_fuse_create(
+			path,
+			mode & (S_IFMT | 07777),
+			dev,
+			NULL);
 	else
-		res = ntfs_fuse_create_stream(path, stream_name,
-				stream_name_len);
+		res = ntfs_fuse_create_stream(
+			path,
+			stream_name,
+			stream_name_len);
 exit:
 	free(path);
 	if (stream_name_len)
@@ -790,11 +886,11 @@ int ntfs_fuse_symlink(const char *to, const char *from)
 
 int ntfs_fuse_link(const char *old_path, const char *new_path)
 {
-	char *name;
-	ntfschar *uname = NULL;
+	char *      name;
+	ntfschar *  uname  = NULL;
 	ntfs_inode *dir_ni = NULL, *ni;
-	char *path;
-	int res = 0, uname_len;
+	char *      path;
+	int         res = 0, uname_len;
 
 	if (ntfs_fuse_is_named_data_stream(old_path))
 		return -EINVAL; /* n/a for named data streams. */
@@ -805,25 +901,28 @@ int ntfs_fuse_link(const char *old_path, const char *new_path)
 		return -errno;
 	/* Open file for which create hard link. */
 	ni = ntfs_pathname_to_inode(ctx->vol, NULL, old_path);
-	if (!ni) {
+	if (!ni)
+	{
 		res = -errno;
 		goto exit;
 	}
-	
+
 	/* Generate unicode filename. */
 	name = strrchr(path, '/');
 	name++;
 	uname_len = ntfs_mbstoucs(name, &uname);
 	if ((uname_len < 0)
-	    || (ctx->windows_names
-		&& ntfs_forbidden_names(ctx->vol,uname,uname_len,TRUE))) {
+		|| (ctx->windows_names
+			&& ntfs_forbidden_names(ctx->vol, uname, uname_len, TRUE)))
+	{
 		res = -errno;
 		goto exit;
 	}
 	/* Open parent directory. */
 	*--name = 0;
-	dir_ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
-	if (!dir_ni) {
+	dir_ni  = ntfs_pathname_to_inode(ctx->vol, NULL, path);
+	if (!dir_ni)
+	{
 		res = -errno;
 		goto exit;
 	}
@@ -835,17 +934,18 @@ int ntfs_fuse_link(const char *old_path, const char *new_path)
 		//	if (res)
 		//		goto exit;
 		//} else
-			if (ntfs_link(ni, dir_ni, uname, uname_len)) {
-					res = -errno;
-				goto exit;
-			}
-	
+		if (ntfs_link(ni, dir_ni, uname, uname_len))
+		{
+			res = -errno;
+			goto exit;
+		}
+
 		set_archive(ni);
 		ntfs_fuse_update_times(ni, NTFS_UPDATE_CTIME);
 		ntfs_fuse_update_times(dir_ni, NTFS_UPDATE_MCTIME);
 	}
 exit:
-	/* 
+	/*
 	 * Must close dir_ni first otherwise ntfs_inode_sync_file_name(ni)
 	 * may fail because ni may not be in parent's index on the disk yet.
 	 */
@@ -860,25 +960,27 @@ exit:
 
 int ntfs_fuse_rm(const char *org_path)
 {
-	char *name;
-	ntfschar *uname = NULL;
+	char *      name;
+	ntfschar *  uname  = NULL;
 	ntfs_inode *dir_ni = NULL, *ni;
-	char *path;
-	int res = 0, uname_len;
+	char *      path;
+	int         res = 0, uname_len;
 
 	path = strdup(org_path);
 	if (!path)
 		return -errno;
 	/* Open object for delete. */
 	ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
-	if (!ni) {
+	if (!ni)
+	{
 		res = -errno;
 		goto exit;
 	}
 	/* deny unlinking metadata files */
-	if (ni->mft_no < FILE_first_user) {
+	if (ni->mft_no < FILE_first_user)
+	{
 		errno = EPERM;
-		res = -errno;
+		res   = -errno;
 		goto exit;
 	}
 
@@ -886,29 +988,36 @@ int ntfs_fuse_rm(const char *org_path)
 	name = strrchr(path, '/');
 	name++;
 	uname_len = ntfs_mbstoucs(name, &uname);
-	if (uname_len < 0) {
+	if (uname_len < 0)
+	{
 		res = -errno;
 		goto exit;
 	}
 	/* Open parent directory. */
 	*--name = 0;
-	dir_ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
-		/* deny unlinking metadata files from $Extend */
-	if (!dir_ni || (dir_ni->mft_no == FILE_Extend)) {
+	dir_ni  = ntfs_pathname_to_inode(ctx->vol, NULL, path);
+	/* deny unlinking metadata files from $Extend */
+	if (!dir_ni || (dir_ni->mft_no == FILE_Extend))
+	{
 		res = -errno;
 		if (dir_ni)
 			res = -EPERM;
 		goto exit;
 	}
-	
-		//if (dir_ni->flags & FILE_ATTR_REPARSE_POINT) {
-		//	res = -EOPNOTSUPP;
-		//} else
-			if (ntfs_delete(ctx->vol, org_path, ni, dir_ni,
-					 uname, uname_len))
-				res = -errno;
-		/* ntfs_delete() always closes ni and dir_ni */
-		ni = dir_ni = NULL;
+
+	//if (dir_ni->flags & FILE_ATTR_REPARSE_POINT) {
+	//	res = -EOPNOTSUPP;
+	//} else
+	if (ntfs_delete(
+		ctx->vol,
+		org_path,
+		ni,
+		dir_ni,
+		uname,
+		uname_len))
+		res = -errno;
+	/* ntfs_delete() always closes ni and dir_ni */
+	ni = dir_ni = NULL;
 exit:
 	if (ntfs_inode_close(dir_ni))
 		set_fuse_error(&res);
@@ -919,16 +1028,18 @@ exit:
 	return res;
 }
 
-int ntfs_fuse_rm_stream(const char *path, ntfschar *stream_name,
-		const int stream_name_len)
+int ntfs_fuse_rm_stream(
+	const char *path,
+	ntfschar *  stream_name,
+	const int   stream_name_len)
 {
 	ntfs_inode *ni;
-	int res = 0;
+	int         res = 0;
 
 	ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
 	if (!ni)
 		return -errno;
-	
+
 	if (ntfs_attr_remove(ni, AT_DATA, stream_name, stream_name_len))
 		res = -errno;
 
@@ -939,17 +1050,18 @@ int ntfs_fuse_rm_stream(const char *path, ntfschar *stream_name,
 
 int ntfs_fuse_unlink(const char *org_path)
 {
-	char *path = NULL;
+	char *    path = NULL;
 	ntfschar *stream_name;
-	int stream_name_len;
-	int res = 0;
+	int       stream_name_len;
+	int       res = 0;
 
 	stream_name_len = ntfs_fuse_parse_path(org_path, &path, &stream_name);
 	if (stream_name_len < 0)
 		return stream_name_len;
 	if (!stream_name_len)
 		res = ntfs_fuse_rm(path);
-	else {
+	else
+	{
 		res = ntfs_fuse_rm_stream(path, stream_name, stream_name_len);
 	}
 	free(path);
@@ -958,41 +1070,49 @@ int ntfs_fuse_unlink(const char *org_path)
 	return res;
 }
 
-int ntfs_fuse_safe_rename(const char *old_path, 
-				 const char *new_path, 
-				 const char *tmp)
+int ntfs_fuse_safe_rename(
+	const char *old_path,
+	const char *new_path,
+	const char *tmp)
 {
 	int ret;
 
 	ntfs_log_trace("Entering\n");
-	
+
 	ret = ntfs_fuse_link(new_path, tmp);
 	if (ret)
 		return ret;
-	
+
 	ret = ntfs_fuse_unlink(new_path);
-	if (!ret) {
-		
+	if (!ret)
+	{
 		ret = ntfs_fuse_link(old_path, new_path);
 		if (ret)
 			goto restore;
-		
+
 		ret = ntfs_fuse_unlink(old_path);
-		if (ret) {
+		if (ret)
+		{
 			if (ntfs_fuse_unlink(new_path))
 				goto err;
 			goto restore;
 		}
 	}
-	
+
 	goto cleanup;
 restore:
-	if (ntfs_fuse_link(tmp, new_path)) {
-err:
-		ntfs_log_perror("Rename failed. Existing file '%s' was renamed "
-				"to '%s'", new_path, tmp);
-	} else {
-cleanup:
+	if (ntfs_fuse_link(tmp, new_path))
+	{
+	err:
+		ntfs_log_perror(
+			"Rename failed. Existing file '%s' was renamed "
+			"to '%s'",
+			new_path,
+			tmp);
+	}
+	else
+	{
+	cleanup:
 		/*
 		 * Condition for this unlink has already been checked in
 		 * "ntfs_fuse_rename_existing_dest()", so it should never
@@ -1000,90 +1120,103 @@ cleanup:
 		 * is multithreaded)
 		 */
 		if (ntfs_fuse_unlink(tmp) < 0)
-			ntfs_log_perror("Rename failed. Existing file '%s' still present "
-				"as '%s'", new_path, tmp);
+			ntfs_log_perror(
+				"Rename failed. Existing file '%s' still present "
+				"as '%s'",
+				new_path,
+				tmp);
 	}
-	return 	ret;
+	return ret;
 }
 
 int ntfs_fuse_rename_existing_dest(const char *old_path, const char *new_path)
 {
-	int ret, len;
-	char *tmp;
+	int         ret, len;
+	char *      tmp;
 	const char *ext = ".ntfs-3g-";
 
 	ntfs_log_trace("Entering\n");
-	
+
 	len = strlen(new_path) + strlen(ext) + 10 + 1; /* wc(str(2^32)) + \0 */
 	tmp = ntfs_malloc(len);
 	if (!tmp)
 		return -errno;
-	
+
 	ret = snprintf(tmp, len, "%s%s%010d", new_path, ext, ++ntfs_sequence);
-	if (ret != len - 1) {
+	if (ret != len - 1)
+	{
 		ntfs_log_error("snprintf failed: %d != %d\n", ret, len - 1);
 		ret = -EOVERFLOW;
-	} else {
+	}
+	else
+	{
 		ret = ntfs_fuse_safe_rename(old_path, new_path, tmp);
 	}
 	free(tmp);
-	return 	ret;
+	return ret;
 }
 
 int ntfs_fuse_rename(const char *old_path, const char *new_path)
 {
-	int ret, stream_name_len;
-	char *path = NULL;
-	ntfschar *stream_name;
+	int         ret, stream_name_len;
+	char *      path = NULL;
+	ntfschar *  stream_name;
 	ntfs_inode *ni;
-	u64 inum;
-	BOOL same;
-	
+	u64         inum;
+	BOOL        same;
+
 	ntfs_log_debug("rename: old: '%s'  new: '%s'\n", old_path, new_path);
-	
+
 	/*
 	 *  FIXME: Rename should be atomic.
 	 */
 	stream_name_len = ntfs_fuse_parse_path(new_path, &path, &stream_name);
 	if (stream_name_len < 0)
 		return stream_name_len;
-	
+
 	ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
-	if (ni) {
+	if (ni)
+	{
 		ret = ntfs_check_empty_dir(ni);
-		if (ret < 0) {
+		if (ret < 0)
+		{
 			ret = -errno;
 			ntfs_inode_close(ni);
 			goto out;
 		}
-		
+
 		inum = ni->mft_no;
-		if (ntfs_inode_close(ni)) {
+		if (ntfs_inode_close(ni))
+		{
 			set_fuse_error(&ret);
 			goto out;
 		}
 
 		free(path);
-		path = (char*)NULL;
+		path = (char *) NULL;
 		if (stream_name_len)
 			free(stream_name);
 
-			/* silently ignore a rename to same inode */
-		stream_name_len = ntfs_fuse_parse_path(old_path,
-						&path, &stream_name);
+		/* silently ignore a rename to same inode */
+		stream_name_len = ntfs_fuse_parse_path(
+			old_path,
+			&path,
+			&stream_name);
 		if (stream_name_len < 0)
 			return stream_name_len;
-	
+
 		ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
-		if (ni) {
+		if (ni)
+		{
 			same = ni->mft_no == inum;
 			if (ntfs_inode_close(ni))
 				ret = -errno;
-			else
-				if (!same)
-					ret = ntfs_fuse_rename_existing_dest(
-							old_path, new_path);
-		} else
+			else if (!same)
+				ret = ntfs_fuse_rename_existing_dest(
+					old_path,
+					new_path);
+		}
+		else
 			ret = -errno;
 		goto out;
 	}
@@ -1091,7 +1224,7 @@ int ntfs_fuse_rename(const char *old_path, const char *new_path)
 	ret = ntfs_fuse_link(old_path, new_path);
 	if (ret)
 		goto out;
-	
+
 	ret = ntfs_fuse_unlink(old_path);
 	if (ret)
 		ntfs_fuse_unlink(new_path);
@@ -1102,8 +1235,9 @@ out:
 	return ret;
 }
 
-int ntfs_fuse_mkdir(const char *path,
-		mode_t mode)
+int ntfs_fuse_mkdir(
+	const char *path,
+	mode_t      mode)
 {
 	if (ntfs_fuse_is_named_data_stream(path))
 		return -EINVAL; /* n/a for named data streams. */
@@ -1119,8 +1253,8 @@ int ntfs_fuse_rmdir(const char *path)
 
 int ntfs_fuse_utime(const char *path, struct utimbuf *buf)
 {
-	ntfs_inode *ni;
-	int res = 0;
+	ntfs_inode *    ni;
+	int             res = 0;
 	struct timespec actime;
 	struct timespec modtime;
 
@@ -1129,16 +1263,18 @@ int ntfs_fuse_utime(const char *path, struct utimbuf *buf)
 	ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
 	if (!ni)
 		return -errno;
-	
-	if (buf) {
-		actime.tv_sec = buf->actime;
-		actime.tv_nsec = 0;
-		modtime.tv_sec = buf->modtime;
-		modtime.tv_nsec = 0;
-		ni->last_access_time = timespec2ntfs(actime);
+
+	if (buf)
+	{
+		actime.tv_sec             = buf->actime;
+		actime.tv_nsec            = 0;
+		modtime.tv_sec            = buf->modtime;
+		modtime.tv_nsec           = 0;
+		ni->last_access_time      = timespec2ntfs(actime);
 		ni->last_data_change_time = timespec2ntfs(modtime);
 		ntfs_fuse_update_times(ni, NTFS_UPDATE_CTIME);
-	} else
+	}
+	else
 		ntfs_inode_update_times(ni, NTFS_UPDATE_AMCTIME);
 
 	if (ntfs_inode_close(ni))
@@ -1147,7 +1283,9 @@ int ntfs_fuse_utime(const char *path, struct utimbuf *buf)
 }
 
 int ntfs_fuse_fsync(const char *path __attribute__((unused)),
-			int type __attribute__((unused)))
+
+int type __attribute__((unused))
+)
 {
 	int ret;
 
@@ -1161,41 +1299,44 @@ int ntfs_fuse_fsync(const char *path __attribute__((unused)),
 int ntfs_fuse_bmap(const char *path, size_t blocksize, uint64_t *idx)
 {
 	ntfs_inode *ni;
-	ntfs_attr *na;
-	LCN lcn;
-	int ret = 0; 
-	int cl_per_bl = ctx->vol->cluster_size / blocksize;
+	ntfs_attr * na;
+	LCN         lcn;
+	int         ret       = 0;
+	int         cl_per_bl = ctx->vol->cluster_size / blocksize;
 
 	if (blocksize > ctx->vol->cluster_size)
 		return -EINVAL;
-	
+
 	if (ntfs_fuse_is_named_data_stream(path))
 		return -EINVAL;
-	
+
 	ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
 	if (!ni)
 		return -errno;
 
 	na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
-	if (!na) {
+	if (!na)
+	{
 		ret = -errno;
 		goto close_inode;
 	}
-	
+
 	if ((na->data_flags & (ATTR_COMPRESSION_MASK | ATTR_IS_ENCRYPTED))
-			 || !NAttrNonResident(na)) {
+		|| !NAttrNonResident(na))
+	{
 		ret = -EINVAL;
 		goto close_attr;
 	}
-	
-	if (ntfs_attr_map_whole_runlist(na)) {
+
+	if (ntfs_attr_map_whole_runlist(na))
+	{
 		ret = -errno;
 		goto close_attr;
 	}
-	
-	lcn = ntfs_rl_vcn_to_lcn(na->rl, *idx / cl_per_bl);
+
+	lcn  = ntfs_rl_vcn_to_lcn(na->rl, *idx / cl_per_bl);
 	*idx = (lcn > 0) ? lcn * cl_per_bl + *idx % cl_per_bl : 0;
-	
+
 close_attr:
 	ntfs_attr_close(na);
 close_inode:
@@ -1222,19 +1363,24 @@ close_inode:
 static void ntfs_direct_enable_ignore_case(ntfs_volume *vol)
 {
 	if (vol && !ntfs_set_ignore_case(vol))
-		return;	/* 成功：lookup 按 $UpCase 表做大小写不敏感匹配 */
+		return; /* 成功：lookup 按 $UpCase 表做大小写不敏感匹配 */
 	/* 失败（locase 表建不出来）时保持区分大小写，但至少不是静默的 */
-	ntfs_log_error("could not enable ignore_case; file name lookups stay case-sensitive\n");
+	ntfs_log_error(
+		"could not enable ignore_case; file name lookups stay case-sensitive\n");
 }
 
-int ntfs_read_file_direct(const char *device, const char *path, char *buf, size_t size,
-			  long long *total_size)
+int ntfs_read_file_direct(
+	const char *device,
+	const char *path,
+	char *      buf,
+	size_t      size,
+	long long * total_size)
 {
 	ntfs_volume *vol;
-	ntfs_inode *ni;
-	ntfs_attr *na;
-	s64 want, got;
-	int res;
+	ntfs_inode * ni;
+	ntfs_attr *  na;
+	s64          want, got;
+	int          res;
 
 	if (!device || !path || !buf || !size)
 		return -EINVAL;
@@ -1247,29 +1393,31 @@ int ntfs_read_file_direct(const char *device, const char *path, char *buf, size_
 	ntfs_direct_enable_ignore_case(vol);
 
 	ni = ntfs_pathname_to_inode(vol, NULL, path);
-	if (!ni) {
+	if (!ni)
+	{
 		res = -errno;
 		goto out;
 	}
 	na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
-	if (!na) {
+	if (!na)
+	{
 		res = -errno;
 		ntfs_inode_close(ni);
 		goto out;
 	}
 
-	want = (s64)size;
+	want = (s64) size;
 	if (na->data_size < want)
 		want = na->data_size;
 	if (total_size)
-		*total_size = (long long)na->data_size;
+		*total_size = (long long) na->data_size;
 	got = ntfs_attr_pread(na, 0, want, buf);
 	if (got < 0)
 		res = -errno;
 	else if (got != want)
 		res = -EIO;
 	else
-		res = (int)got;
+		res = (int) got;
 
 	ntfs_attr_close(na);
 	ntfs_inode_close(ni);
@@ -1281,8 +1429,8 @@ out:
 int ntfs_raw_read_direct(const char *device, long long offset, char *buf, size_t size)
 {
 	ntfs_volume *vol;
-	s64 got;
-	int res;
+	s64          got;
+	int          res;
 
 	if (!device || !buf || !size || offset < 0)
 		return -EINVAL;
@@ -1294,22 +1442,25 @@ int ntfs_raw_read_direct(const char *device, long long offset, char *buf, size_t
 	if (!vol)
 		return -errno;
 
-	got = ntfs_pread(vol->dev, (s64)offset, (s64)size, buf);
+	got = ntfs_pread(vol->dev, (s64) offset, (s64) size, buf);
 	if (got < 0)
 		res = -errno;
 	else
-		res = (int)got;
+		res = (int) got;
 
 	if (ntfs_umount(vol, FALSE) && res >= 0)
 		res = -EIO;
 	return res;
 }
 
-int ntfs_stat_paths_direct(const char *device, const char *const *paths, int count,
-			   long long *sizes)
+int ntfs_stat_paths_direct(
+	const char *       device,
+	const char *const *paths,
+	int                count,
+	long long *        sizes)
 {
 	ntfs_volume *vol;
-	int i, found = 0;
+	int          i, found = 0;
 
 	if (!device || !paths || count <= 0 || !sizes)
 		return -EINVAL;
@@ -1319,9 +1470,10 @@ int ntfs_stat_paths_direct(const char *device, const char *const *paths, int cou
 		return -errno;
 	ntfs_direct_enable_ignore_case(vol);
 
-	for (i = 0; i < count; ++i) {
+	for (i = 0; i < count; ++i)
+	{
 		ntfs_inode *ni;
-		ntfs_attr *na;
+		ntfs_attr * na;
 		sizes[i] = -1;
 		if (!paths[i])
 			continue;
@@ -1329,11 +1481,14 @@ int ntfs_stat_paths_direct(const char *device, const char *const *paths, int cou
 		if (!ni)
 			continue;
 		na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
-		if (na) {
-			sizes[i] = (long long)na->data_size;
+		if (na)
+		{
+			sizes[i] = (long long) na->data_size;
 			ntfs_attr_close(na);
-		} else if (ni->mrec->flags & MFT_RECORD_IS_DIRECTORY) {
-			sizes[i] = -2;	/* 存在，是个目录 */
+		}
+		else if (ni->mrec->flags & MFT_RECORD_IS_DIRECTORY)
+		{
+			sizes[i] = -2; /* 存在，是个目录 */
 			++found;
 			ntfs_inode_close(ni);
 			continue;
@@ -1346,12 +1501,14 @@ int ntfs_stat_paths_direct(const char *device, const char *const *paths, int cou
 	return found;
 }
 
-int ntfs_set_volume_dirty_direct(const char *device, unsigned short *flags_before,
-				 unsigned short *flags_after)
+int ntfs_set_volume_dirty_direct(
+	const char *    device,
+	unsigned short *flags_before,
+	unsigned short *flags_after)
 {
 	ntfs_volume *vol;
 	VOLUME_FLAGS flags;
-	int res;
+	int          res;
 
 	if (!device)
 		return -EINVAL;
@@ -1366,7 +1523,7 @@ int ntfs_set_volume_dirty_direct(const char *device, unsigned short *flags_befor
 	if (flags_before)
 		*flags_before = le16_to_cpu(vol->flags);
 	flags = vol->flags | VOLUME_IS_DIRTY;
-	res = ntfs_volume_write_flags(vol, flags);
+	res   = ntfs_volume_write_flags(vol, flags);
 	if (!res && flags_after)
 		*flags_after = le16_to_cpu(vol->flags);
 	else if (res)
@@ -1386,14 +1543,14 @@ int ntfs_set_volume_dirty_direct(const char *device, unsigned short *flags_befor
  * 而不是让 ntfscp 在 preflight 里摔死。只读挂载，一个字节都不写。 */
 int ntfs_logstate_direct(const char *device, char *out, size_t cap)
 {
-	ntfs_volume *vol;
-	ntfs_inode *ni;
-	ntfs_attr *na;
-	s64 pos, size;
-	u8 *kaddr = NULL;
-	RESTART_PAGE_HEADER *rph = NULL;
-	size_t used = 0;
-	int res = 0;
+	ntfs_volume *        vol;
+	ntfs_inode *         ni;
+	ntfs_attr *          na;
+	s64                  pos, size;
+	u8 *                 kaddr = NULL;
+	RESTART_PAGE_HEADER *rph   = NULL;
+	size_t               used  = 0;
+	int                  res   = 0;
 
 	if (!device || !out || cap < 2)
 		return -EINVAL;
@@ -1404,30 +1561,34 @@ int ntfs_logstate_direct(const char *device, char *out, size_t cap)
 		return -errno;
 	ntfs_direct_enable_ignore_case(vol);
 
-#define LS(...) do { \
+	#define LS(...) do { \
 		int _n = snprintf(out + used, used < cap ? cap - used : 0, __VA_ARGS__); \
 		if (_n > 0) used += (size_t)_n; \
 		if (used >= cap) { used = cap - 1; out[used] = 0; goto done; } \
 	} while (0)
 
-	LS("volume_flags=0x%04x dirty=%s\n",
+	LS(
+		"volume_flags=0x%04x dirty=%s\n",
 		(unsigned)le16_to_cpu(vol->flags),
 		(vol->flags & VOLUME_IS_DIRTY) ? "yes" : "no");
 
 	ni = ntfs_inode_open(vol, FILE_LogFile);
-	if (!ni) {
+	if (!ni)
+	{
 		LS("$LogFile: cannot open (inode %d): %s\n", FILE_LogFile, strerror(errno));
-		res = 0;  /* 状态不明确但不是拒绝：留给 ntfscp 自己去撞 */
+		res = 0; /* 状态不明确但不是拒绝：留给 ntfscp 自己去撞 */
 		goto done;
 	}
 	na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
-	if (!na) {
+	if (!na)
+	{
 		LS("$LogFile: cannot open $DATA\n");
 		ntfs_inode_close(ni);
 		goto done;
 	}
 	kaddr = ntfs_malloc(NTFS_BLOCK_SIZE);
-	if (!kaddr) {
+	if (!kaddr)
+	{
 		LS("$LogFile: out of memory\n");
 		ntfs_attr_close(na);
 		ntfs_inode_close(ni);
@@ -1436,32 +1597,45 @@ int ntfs_logstate_direct(const char *device, char *out, size_t cap)
 	/* 与 ntfs_check_logfile 同法：只在可能是重启页起点的位置上找。
 	 * $LogFile 被清空（全 0xFF）时找不到任何 RSTR/CHKD → empty。 */
 	size = na->data_size;
-	rph = NULL;
-	for (pos = 0; pos < size && pos < (s64)MaxLogFileSize; pos = pos ? pos << 1 : (NTFS_BLOCK_SIZE >> 1)) {
+	rph  = NULL;
+	for (pos = 0; pos < size && pos < (s64) MaxLogFileSize; pos = pos
+		     ? pos << 1
+		     : (NTFS_BLOCK_SIZE >> 1))
+	{
 		if (ntfs_attr_pread(na, pos, NTFS_BLOCK_SIZE, kaddr) != NTFS_BLOCK_SIZE)
 			break;
-		if (ntfs_is_empty_recordp((le32*)kaddr))
+		if (ntfs_is_empty_recordp((le32 *) kaddr))
 			continue;
-		if (ntfs_is_rcrd_recordp((le32*)kaddr))
+		if (ntfs_is_rcrd_recordp((le32 *) kaddr))
 			break;
-		if (ntfs_is_rstr_recordp((le32*)kaddr) || ntfs_is_chkd_recordp((le32*)kaddr)) {
-			rph = (RESTART_PAGE_HEADER*)kaddr;
+		if (ntfs_is_rstr_recordp((le32 *) kaddr) || ntfs_is_chkd_recordp((le32 *) kaddr))
+		{
+			rph = (RESTART_PAGE_HEADER *) kaddr;
 			break;
 		}
 	}
-	if (!rph) {
+	if (!rph)
+	{
 		LS("logfile: EMPTY (no restart page -- emptied by ntfsfix)\n");
-	} else {
-		const int major = (int)sle16_to_cpu(rph->major_ver);
-		const int minor = (int)sle16_to_cpu(rph->minor_ver);
-		LS("logfile: magic=%c%c%c%c major=%d minor=%d system_page=%u\n",
-			((const char*)&rph->magic)[0], ((const char*)&rph->magic)[1],
-			((const char*)&rph->magic)[2], ((const char*)&rph->magic)[3],
-			major, minor, (unsigned)le32_to_cpu(rph->system_page_size));
+	}
+	else
+	{
+		const int major = (int) sle16_to_cpu(rph->major_ver);
+		const int minor = (int) sle16_to_cpu(rph->minor_ver);
+		LS(
+			"logfile: magic=%c%c%c%c major=%d minor=%d system_page=%u\n",
+			((const char*)&rph->magic)[0],
+			((const char*)&rph->magic)[1],
+			((const char*)&rph->magic)[2],
+			((const char*)&rph->magic)[3],
+			major,
+			minor,
+			(unsigned)le32_to_cpu(rph->system_page_size));
 		if (major == 2 && minor == 0)
-			LS("cached_metadata=YES -- libntfs-3g refuses RW mount of this volume\n"
-			   "(fast startup / hibernation / power-cut state; do a real shutdown\n"
-			   "(shutdown /s) or powercfg /h off, then retry the melt)\n");
+			LS(
+			"cached_metadata=YES -- libntfs-3g refuses RW mount of this volume\n"
+			"(fast startup / hibernation / power-cut state; do a real shutdown\n"
+			"(shutdown /s) or powercfg /h off, then retry the melt)\n");
 		else
 			LS("cached_metadata=no (version %d.%d is mountable)\n", major, minor);
 	}
@@ -1474,18 +1648,26 @@ done:
 	return res;
 }
 
-typedef struct {
-	char *buf;
+typedef struct
+{
+	char * buf;
 	size_t cap;
 	size_t used;
-	int count;
-	int truncated;
+	int    count;
+	int    truncated;
 } list_ctx_t;
 
-static int list_ctx_filler(list_ctx_t *ctx, const ntfschar *name, const int name_len,
-			   const int name_type, const s64 pos __attribute__((unused)),
-			   const MFT_REF mref __attribute__((unused)),
-			   const unsigned dt_type)
+static int list_ctx_filler(
+			list_ctx_t *    ctx,
+			const ntfschar *name,
+			const int       name_len,
+			const int       name_type,
+			const s64 pos __attribute__((unused)),
+
+const MFT_REF mref __attribute__((unused)),
+
+const unsigned dt_type
+)
 {
 	char *mbs = NULL;
 	int len;
@@ -1517,10 +1699,10 @@ static int list_ctx_filler(list_ctx_t *ctx, const ntfschar *name, const int name
 int ntfs_list_dir_direct(const char *device, const char *path, char *buf, size_t cap)
 {
 	ntfs_volume *vol;
-	ntfs_inode *ni;
-	list_ctx_t ctx;
-	s64 pos = 0;
-	int res;
+	ntfs_inode * ni;
+	list_ctx_t   ctx;
+	s64          pos = 0;
+	int          res;
 
 	if (!device || !path || !buf || cap < 2)
 		return -EINVAL;
@@ -1531,20 +1713,21 @@ int ntfs_list_dir_direct(const char *device, const char *path, char *buf, size_t
 	ntfs_direct_enable_ignore_case(vol);
 
 	ni = ntfs_pathname_to_inode(vol, NULL, path);
-	if (!ni) {
+	if (!ni)
+	{
 		res = -errno;
 		ntfs_umount(vol, FALSE);
 		return res;
 	}
 
-	ctx.buf = buf;
-	ctx.cap = cap;
-	ctx.used = 0;
-	ctx.count = 0;
+	ctx.buf       = buf;
+	ctx.cap       = cap;
+	ctx.used      = 0;
+	ctx.count     = 0;
 	ctx.truncated = 0;
-	buf[0] = 0;
+	buf[0]        = 0;
 
-	if (ntfs_readdir(ni, &pos, &ctx, (ntfs_filldir_t)list_ctx_filler))
+	if (ntfs_readdir(ni, &pos, &ctx, (ntfs_filldir_t) list_ctx_filler))
 		res = -errno;
 	else
 		res = ctx.count;
@@ -1557,12 +1740,12 @@ int ntfs_list_dir_direct(const char *device, const char *path, char *buf, size_t
 int ntfs_delete_direct(const char *device, const char *path)
 {
 	ntfs_volume *vol;
-	ntfs_inode *ni;
-	ntfs_inode *dir_ni;
-	ntfschar *uname = NULL;
-	const char *base;
-	int name_len;
-	int res;
+	ntfs_inode * ni;
+	ntfs_inode * dir_ni;
+	ntfschar *   uname = NULL;
+	const char * base;
+	int          name_len;
+	int          res;
 
 	if (!device || !path)
 		return -EINVAL;
@@ -1573,7 +1756,8 @@ int ntfs_delete_direct(const char *device, const char *path)
 	ntfs_direct_enable_ignore_case(vol);
 
 	ni = ntfs_pathname_to_inode(vol, NULL, path);
-	if (!ni) {
+	if (!ni)
+	{
 		res = -errno;
 		ntfs_umount(vol, FALSE);
 		return res;
@@ -1581,11 +1765,12 @@ int ntfs_delete_direct(const char *device, const char *path)
 
 	/* ntfs_delete() 需要父目录 inode 与文件名的 Unicode 形式。注意它**总是**关闭
 	 * ni 与 dir_ni（见 lowntfs-3g 的用法），所以成功路径上不能再关一次。 */
-	dir_ni = ntfs_dir_parent_inode(ni);
-	base = strrchr(path, '/');
-	base = base ? base + 1 : path;
+	dir_ni   = ntfs_dir_parent_inode(ni);
+	base     = strrchr(path, '/');
+	base     = base ? base + 1 : path;
 	name_len = ntfs_mbstoucs(base, &uname);
-	if (!dir_ni || (name_len < 0)) {
+	if (!dir_ni || (name_len < 0))
+	{
 		if (dir_ni)
 			ntfs_inode_close(dir_ni);
 		ntfs_inode_close(ni);
@@ -1593,7 +1778,7 @@ int ntfs_delete_direct(const char *device, const char *path)
 		return -EINVAL;
 	}
 
-	res = ntfs_delete(vol, (char*)NULL, ni, dir_ni, uname, (u8)name_len);
+	res = ntfs_delete(vol, (char *) NULL, ni, dir_ni, uname, (u8) name_len);
 	if (res)
 		res = -errno;
 	free(uname);
@@ -1605,16 +1790,25 @@ int ntfs_delete_direct(const char *device, const char *path)
 /* 把目录里的名字收进一个固定数组（大小写不敏感回退用） */
 #define CI_MAX_NAMES 256
 #define CI_MAX_NAME 96
-typedef struct {
+
+typedef struct
+{
 	char names[CI_MAX_NAMES][CI_MAX_NAME];
-	int count;
-	int overflow;
+	int  count;
+	int  overflow;
 } ci_dir_t;
 
-static int ci_dir_filler(ci_dir_t *ctx, const ntfschar *name, const int name_len,
-			 const int name_type, const s64 pos __attribute__((unused)),
-			 const MFT_REF mref __attribute__((unused)),
-			 const unsigned dt_type __attribute__((unused)))
+static int ci_dir_filler(
+			ci_dir_t *      ctx,
+			const ntfschar *name,
+			const int       name_len,
+			const int       name_type,
+			const s64 pos __attribute__((unused)),
+
+const MFT_REF mref __attribute__((unused)),
+
+const unsigned dt_type __attribute__((unused))
+)
 {
 	char *mbs = NULL;
 	int len;
@@ -1636,10 +1830,11 @@ static int ci_dir_filler(ci_dir_t *ctx, const ntfschar *name, const int name_len
 
 static int ascii_ci_equal(const char *a, const char *b)
 {
-	for (;; ++a, ++b) {
-		unsigned char ca = (unsigned char)*a, cb = (unsigned char)*b;
-		if (ca >= 'A' && ca <= 'Z') ca = (unsigned char)(ca - 'A' + 'a');
-		if (cb >= 'A' && cb <= 'Z') cb = (unsigned char)(cb - 'A' + 'a');
+	for (;; ++a, ++b)
+	{
+		unsigned char ca = (unsigned char) *a, cb = (unsigned char) *b;
+		if (ca >= 'A' && ca <= 'Z') ca = (unsigned char) (ca - 'A' + 'a');
+		if (cb >= 'A' && cb <= 'Z') cb = (unsigned char) (cb - 'A' + 'a');
 		if (ca != cb) return 0;
 		if (!ca) return 1;
 	}
@@ -1648,13 +1843,13 @@ static int ascii_ci_equal(const char *a, const char *b)
 int ntfs_attr_info_direct(const char *device, const char *path, char *out, size_t cap)
 {
 	ntfs_volume *vol;
-	ntfs_inode *ni;
-	ntfs_attr *na;
-	int res = 0;
-	size_t used = 0;
-	int i;
-	s64 allocated = 0;
-	int holes = 0;
+	ntfs_inode * ni;
+	ntfs_attr *  na;
+	int          res  = 0;
+	size_t       used = 0;
+	int          i;
+	s64          allocated = 0;
+	int          holes     = 0;
 
 	if (!device || !path || !out || cap < 2)
 		return -EINVAL;
@@ -1666,13 +1861,15 @@ int ntfs_attr_info_direct(const char *device, const char *path, char *out, size_
 	ntfs_direct_enable_ignore_case(vol);
 
 	ni = ntfs_pathname_to_inode(vol, NULL, path);
-	if (!ni) {
+	if (!ni)
+	{
 		res = -errno;
 		ntfs_umount(vol, FALSE);
 		return res;
 	}
 	na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
-	if (!na) {
+	if (!na)
+	{
 		res = -errno;
 		ntfs_inode_close(ni);
 		ntfs_umount(vol, FALSE);
@@ -1681,36 +1878,59 @@ int ntfs_attr_info_direct(const char *device, const char *path, char *out, size_
 
 	/* 关键三元组：data_size 是文件长度，initialized_size 是"已初始化"的长度 ——
 	 * **读到其后返回零**。两者不等就是"尾部读回零"的直接原因。 */
-	used += (size_t)snprintf(out + used, used < cap ? cap - used : 0,
+	used += (size_t) snprintf(
+		out + used,
+		used < cap ? cap - used : 0,
 		"data_size=%lld initialized_size=%lld compressed_size=%lld\n",
-		(long long)na->data_size, (long long)na->initialized_size,
-		(long long)na->compressed_size);
-	used += (size_t)snprintf(out + used, used < cap ? cap - used : 0,
+		(long long) na->data_size,
+		(long long) na->initialized_size,
+		(long long) na->compressed_size);
+	used += (size_t) snprintf(
+		out + used,
+		used < cap ? cap - used : 0,
 		"resident=%d flags(sparse=%d compressed=%d encrypted=%d)\n",
-		!NAttrNonResident(na), !!NAttrSparse(na), !!NAttrCompressed(na),
+		!NAttrNonResident(na),
+		!!NAttrSparse(na),
+		!!NAttrCompressed(na),
 		!!NAttrEncrypted(na));
 
-	if (ntfs_attr_map_whole_runlist(na)) {
-		used += (size_t)snprintf(out + used, used < cap ? cap - used : 0,
-			"runlist: FAILED to map (%s)\n", strerror(errno));
-	} else {
+	if (ntfs_attr_map_whole_runlist(na))
+	{
+		used += (size_t) snprintf(
+			out + used,
+			used < cap ? cap - used : 0,
+			"runlist: FAILED to map (%s)\n",
+			strerror(errno));
+	}
+	else
+	{
 		/* 逐段列出：lcn == -1 就是洞（**读那里返回零**）。 */
-		for (i = 0; na->rl[i].length > 0; ++i) {
+		for (i = 0; na->rl[i].length > 0; ++i)
+		{
 			if (na->rl[i].lcn < 0) ++holes;
 			else allocated += na->rl[i].length;
 		}
-		used += (size_t)snprintf(out + used, used < cap ? cap - used : 0,
+		used += (size_t) snprintf(
+			out + used,
+			used < cap ? cap - used : 0,
 			"runlist: %d run(s), %d hole run(s), %lld cluster(s) allocated (cluster=%u)\n",
-			i, holes, (long long)allocated, (unsigned)vol->cluster_size);
-		for (i = 0; na->rl[i].length > 0 && i < 24; ++i) {
-			used += (size_t)snprintf(out + used, used < cap ? cap - used : 0,
+			i,
+			holes,
+			(long long) allocated,
+			(unsigned) vol->cluster_size);
+		for (i = 0; na->rl[i].length > 0 && i < 24; ++i)
+		{
+			used += (size_t) snprintf(
+				out + used,
+				used < cap ? cap - used : 0,
 				"  vcn=%-8lld lcn=%-10lld len=%lld%s\n",
-				(long long)na->rl[i].vcn, (long long)na->rl[i].lcn,
-				(long long)na->rl[i].length,
+				(long long) na->rl[i].vcn,
+				(long long) na->rl[i].lcn,
+				(long long) na->rl[i].length,
 				na->rl[i].lcn < 0 ? "  <-- HOLE (reads as zeros)" : "");
 		}
 		if (na->rl[i].length > 0)
-			used += (size_t)snprintf(out + used, used < cap ? cap - used : 0, "  ...\n");
+			used += (size_t) snprintf(out + used, used < cap ? cap - used : 0, "  ...\n");
 	}
 
 	ntfs_attr_close(na);
@@ -1729,34 +1949,51 @@ int ntfs_attr_info_direct(const char *device, const char *path, char *out, size_
  * 只读直接挂载，一个字节都不写。 */
 static const char *attr_type_name(u32 type)
 {
-	switch (type) {
-	case AT_STANDARD_INFORMATION:	return "$STANDARD_INFORMATION";
-	case AT_ATTRIBUTE_LIST:		return "$ATTRIBUTE_LIST";
-	case AT_FILE_NAME:		return "$FILE_NAME";
-	case AT_OBJECT_ID:		return "$OBJECT_ID";
-	case AT_SECURITY_DESCRIPTOR:	return "$SECURITY_DESCRIPTOR";
-	case AT_VOLUME_NAME:		return "$VOLUME_NAME";
-	case AT_VOLUME_INFORMATION:	return "$VOLUME_INFORMATION";
-	case AT_DATA:			return "$DATA";
-	case AT_INDEX_ROOT:		return "$INDEX_ROOT";
-	case AT_INDEX_ALLOCATION:	return "$INDEX_ALLOCATION";
-	case AT_BITMAP:			return "$BITMAP";
-	case AT_REPARSE_POINT:		return "$REPARSE_POINT";
-	case AT_EA_INFORMATION:		return "$EA_INFORMATION";
-	case AT_EA:			return "$EA";
-	case AT_LOGGED_UTILITY_STREAM:	return "$LOGGED_UTILITY_STREAM";
-	default:			return "?";
+	switch (type)
+	{
+		case AT_STANDARD_INFORMATION:
+			return "$STANDARD_INFORMATION";
+		case AT_ATTRIBUTE_LIST:
+			return "$ATTRIBUTE_LIST";
+		case AT_FILE_NAME:
+			return "$FILE_NAME";
+		case AT_OBJECT_ID:
+			return "$OBJECT_ID";
+		case AT_SECURITY_DESCRIPTOR:
+			return "$SECURITY_DESCRIPTOR";
+		case AT_VOLUME_NAME:
+			return "$VOLUME_NAME";
+		case AT_VOLUME_INFORMATION:
+			return "$VOLUME_INFORMATION";
+		case AT_DATA:
+			return "$DATA";
+		case AT_INDEX_ROOT:
+			return "$INDEX_ROOT";
+		case AT_INDEX_ALLOCATION:
+			return "$INDEX_ALLOCATION";
+		case AT_BITMAP:
+			return "$BITMAP";
+		case AT_REPARSE_POINT:
+			return "$REPARSE_POINT";
+		case AT_EA_INFORMATION:
+			return "$EA_INFORMATION";
+		case AT_EA:
+			return "$EA";
+		case AT_LOGGED_UTILITY_STREAM:
+			return "$LOGGED_UTILITY_STREAM";
+		default:
+			return "?";
 	}
 }
 
 int ntfs_record_dump_direct(const char *device, const char *path, char *out, size_t cap)
 {
 	ntfs_volume *vol;
-	ntfs_inode *ni;
-	MFT_RECORD *mrec;
+	ntfs_inode * ni;
+	MFT_RECORD * mrec;
 	ATTR_RECORD *attr;
-	size_t used = 0;
-	int res = 0;
+	size_t       used = 0;
+	int          res  = 0;
 
 	if (!device || !path || !out || cap < 2)
 		return -EINVAL;
@@ -1768,31 +2005,41 @@ int ntfs_record_dump_direct(const char *device, const char *path, char *out, siz
 	ntfs_direct_enable_ignore_case(vol);
 
 	ni = ntfs_pathname_to_inode(vol, NULL, path);
-	if (!ni) {
+	if (!ni)
+	{
 		res = -errno;
 		ntfs_umount(vol, FALSE);
 		return res;
 	}
 
-#define RD(...) do { \
+	#define RD(...) do { \
 		int _n = snprintf(out + used, used < cap ? cap - used : 0, __VA_ARGS__); \
 		if (_n > 0) used += (size_t)_n; \
 		if (used >= cap) { used = cap - 1; out[used] = 0; goto done; } \
 	} while (0)
 
 	/* 基记录 = inode 编号；ni->mrec 是 ntfs-3g 已解析的那条（基记录）。 */
-	RD("inode=%llu mft_record_size=%u\n",
-		(unsigned long long)ni->mft_no, (unsigned)vol->mft_record_size);
+	RD(
+		"inode=%llu mft_record_size=%u\n",
+		(unsigned long long)ni->mft_no,
+		(unsigned)vol->mft_record_size);
 
 	mrec = ni->mrec;
-	RD("record: magic=%c%c%c%c seq=%u links=%u flags=0x%04x bytes_in_use=%u "
+	RD(
+		"record: magic=%c%c%c%c seq=%u links=%u flags=0x%04x bytes_in_use=%u "
 		"bytes_allocated=%u base_record_ref=0x%llx next_attr=0x%x\n",
-		isprint((unsigned char)((const u8*)&mrec->magic)[0]) ? ((const u8*)&mrec->magic)[0] : '.',
-		isprint((unsigned char)((const u8*)&mrec->magic)[1]) ? ((const u8*)&mrec->magic)[1] : '.',
-		isprint((unsigned char)((const u8*)&mrec->magic)[2]) ? ((const u8*)&mrec->magic)[2] : '.',
-		isprint((unsigned char)((const u8*)&mrec->magic)[3]) ? ((const u8*)&mrec->magic)[3] : '.',
-		le16_to_cpu(mrec->sequence_number), le16_to_cpu(mrec->link_count),
-		le16_to_cpu(mrec->flags), le32_to_cpu(mrec->bytes_in_use),
+		isprint((unsigned char)((const u8*)&mrec->magic)[0]) ? ((const u8*)&mrec->magic)[0
+		] : '.',
+		isprint((unsigned char)((const u8*)&mrec->magic)[1]) ? ((const u8*)&mrec->magic)[1
+		] : '.',
+		isprint((unsigned char)((const u8*)&mrec->magic)[2]) ? ((const u8*)&mrec->magic)[2
+		] : '.',
+		isprint((unsigned char)((const u8*)&mrec->magic)[3]) ? ((const u8*)&mrec->magic)[3
+		] : '.',
+		le16_to_cpu(mrec->sequence_number),
+		le16_to_cpu(mrec->link_count),
+		le16_to_cpu(mrec->flags),
+		le32_to_cpu(mrec->bytes_in_use),
 		le32_to_cpu(mrec->bytes_allocated),
 		(unsigned long long)le64_to_cpu(mrec->base_mft_record),
 		le16_to_cpu(mrec->next_attr_instance));
@@ -1801,20 +2048,31 @@ int ntfs_record_dump_direct(const char *device, const char *path, char *out, siz
 	 * 是非驻留 $DATA 的关键三元组；dump 原始字节能看出"哪半截是新的"。 */
 	{
 		ntfs_attr_search_ctx *ctx = ntfs_attr_get_search_ctx(ni, NULL);
-		if (!ctx) {
+		if (!ctx)
+		{
 			RD("attr scan: FAILED to get search ctx (%s)\n", strerror(errno));
-		} else {
+		}
+		else
+		{
 			int idx = 0;
-			while (!ntfs_attr_lookup(AT_UNUSED, NULL, 0, 0, 0, NULL, 0, ctx)) {
-				attr = ctx->attr;
+			while (!ntfs_attr_lookup(AT_UNUSED, NULL, 0, 0, 0, NULL, 0, ctx))
+			{
+				attr           = ctx->attr;
 				const u32 type = le32_to_cpu(attr->type);
-				const u32 len = le32_to_cpu(attr->length);
-				RD("attr[%d]: %s(0x%x) off=%u len=%u nonres=%u name_len=%u",
-					idx, attr_type_name(type), type,
-					le16_to_cpu(attr->name_offset), len,
-					attr->non_resident, attr->name_length);
-				if (attr->non_resident) {
-					RD(" lowest_vcn=%llu highest_vcn=%llu alloc=%llu "
+				const u32 len  = le32_to_cpu(attr->length);
+				RD(
+					"attr[%d]: %s(0x%x) off=%u len=%u nonres=%u name_len=%u",
+					idx,
+					attr_type_name(type),
+					type,
+					le16_to_cpu(attr->name_offset),
+					len,
+					attr->non_resident,
+					attr->name_length);
+				if (attr->non_resident)
+				{
+					RD(
+						" lowest_vcn=%llu highest_vcn=%llu alloc=%llu "
 						"data=%llu init=%llu comp=%llu",
 						(unsigned long long)le64_to_cpu(attr->lowest_vcn),
 						(unsigned long long)le64_to_cpu(attr->highest_vcn),
@@ -1822,18 +2080,24 @@ int ntfs_record_dump_direct(const char *device, const char *path, char *out, siz
 						(unsigned long long)sle64_to_cpu(attr->data_size),
 						(unsigned long long)sle64_to_cpu(attr->initialized_size),
 						(attr->compression_unit
-						 ? (unsigned long long)sle64_to_cpu(attr->compressed_size) : 0ull));
-				} else {
-					RD(" value_len=%u value_off=%u",
+							? (unsigned long long)sle64_to_cpu(attr->compressed_size) :
+							0ull));
+				}
+				else
+				{
+					RD(
+						" value_len=%u value_off=%u",
 						le32_to_cpu(attr->value_length),
 						le16_to_cpu(attr->value_offset));
 					/* $STANDARD_INFORMATION 的时间戳是"最后写入者"的笔迹：
 					 * ntfs-3g 关路径与 Windows/还原软件写的次序和值都不同。 */
-					if (type == AT_STANDARD_INFORMATION) {
+					if (type == AT_STANDARD_INFORMATION)
+					{
 						const STANDARD_INFORMATION *si =
-							(const STANDARD_INFORMATION*)((u8*)attr +
-							le16_to_cpu(attr->value_offset));
-						RD("\n  si: ctime=%llu atime=%llu mtime=%llu "
+								(const STANDARD_INFORMATION *) ((u8 *) attr +
+									le16_to_cpu(attr->value_offset));
+						RD(
+							"\n  si: ctime=%llu atime=%llu mtime=%llu "
 							"ntfs_etime=%llu",
 							(unsigned long long)le64_to_cpu(si->creation_time),
 							(unsigned long long)le64_to_cpu(si->last_access_time),
@@ -1852,14 +2116,16 @@ int ntfs_record_dump_direct(const char *device, const char *path, char *out, siz
 
 	/* 头 256 字节的十六进制倾倒：布局异常（错位/半新半旧）肉眼可辨。 */
 	{
-		const u8 *p = (const u8*)mrec;
-		u32 i;
-		for (i = 0; i < 256; i += 16) {
+		const u8 *p = (const u8 *) mrec;
+		u32       i;
+		for (i = 0; i < 256; i += 16)
+		{
 			RD("%04x  ", i);
 			for (u32 j = 0; j < 16; ++j)
 				RD("%02x ", p[i + j]);
 			RD(" |");
-			for (u32 j = 0; j < 16; ++j) {
+			for (u32 j = 0; j < 16; ++j)
+			{
 				const u8 c = p[i + j];
 				RD("%c", isprint(c) ? c : '.');
 			}
@@ -1873,18 +2139,19 @@ done:
 	ntfs_umount(vol, FALSE);
 	return res;
 }
+
 int ntfs_resolve_path_direct(const char *device, const char *path, char *out, size_t cap)
 {
 	ntfs_volume *vol;
-	ntfs_inode *ni;
-	char *work = NULL;
-	const char *parent;
-	const char *base;
-	const char *matched = NULL;
-	int matches = 0;
-	ci_dir_t *dir = NULL;
-	s64 pos = 0;
-	int res = 0;
+	ntfs_inode * ni;
+	char *       work = NULL;
+	const char * parent;
+	const char * base;
+	const char * matched = NULL;
+	int          matches = 0;
+	ci_dir_t *   dir     = NULL;
+	s64          pos     = 0;
+	int          res     = 0;
 
 	if (!device || !path || !out || cap < 2)
 		return -EINVAL;
@@ -1896,7 +2163,8 @@ int ntfs_resolve_path_direct(const char *device, const char *path, char *out, si
 
 	/* 1) 先按原样解析 */
 	ni = ntfs_pathname_to_inode(vol, NULL, path);
-	if (ni) {
+	if (ni)
+	{
 		ntfs_inode_close(ni);
 		snprintf(out, cap, "%s", path);
 		ntfs_umount(vol, FALSE);
@@ -1906,45 +2174,55 @@ int ntfs_resolve_path_direct(const char *device, const char *path, char *out, si
 	/* 2) 查不到就拆出父目录与最后一段，列父目录做大小写不敏感匹配。
 	 * 只对**最后一段**回退：若某层父目录也需要回退，路径探针会先报出来（它逐层 stat）。 */
 	work = strdup(path);
-	if (!work) {
+	if (!work)
+	{
 		ntfs_umount(vol, FALSE);
 		return -ENOMEM;
 	}
 	{
 		char *slash = strrchr(work, '/');
-		if (!slash) {
+		if (!slash)
+		{
 			parent = "/";
-			base = work;
-		} else {
+			base   = work;
+		}
+		else
+		{
 			*slash = 0;
 			parent = work[0] ? work : "/";
-			base = slash + 1;
+			base   = slash + 1;
 		}
 	}
 
-	if (!base[0]) {
+	if (!base[0])
+	{
 		res = -ENOENT;
 		goto out;
 	}
 
 	ni = ntfs_pathname_to_inode(vol, NULL, parent);
-	if (!ni) {
+	if (!ni)
+	{
 		res = -errno;
 		goto out;
 	}
 
 	dir = malloc(sizeof(ci_dir_t));
-	if (!dir) {
+	if (!dir)
+	{
 		ntfs_inode_close(ni);
 		res = -ENOMEM;
 		goto out;
 	}
-	dir->count = 0;
+	dir->count    = 0;
 	dir->overflow = 0;
-	if (ntfs_readdir(ni, &pos, dir, (ntfs_filldir_t)ci_dir_filler) == 0) {
+	if (ntfs_readdir(ni, &pos, dir, (ntfs_filldir_t) ci_dir_filler) == 0)
+	{
 		int i;
-		for (i = 0; i < dir->count; ++i) {
-			if (ascii_ci_equal(dir->names[i], base)) {
+		for (i = 0; i < dir->count; ++i)
+		{
+			if (ascii_ci_equal(dir->names[i], base))
+			{
 				/* 第一个作为匹配结果；同时记住**有几个**大小写不敏感匹配 ——
 				 * 多于一个就是"重名文件已经存在"（NTFS 按设计不允许，说明卷已经被
 				 * 写坏过），此时不能再往上写。 */
@@ -1955,17 +2233,24 @@ int ntfs_resolve_path_direct(const char *device, const char *path, char *out, si
 	}
 	ntfs_inode_close(ni);
 
-	if (!matched) {
+	if (!matched)
+	{
 		res = -ENOENT;
 		goto out;
 	}
 
 	/* 用真实名字重查一次，确认它确实能打开 */
-	snprintf(out, cap, "%s%s%s", parent,
-		 (parent[0] && parent[strlen(parent) - 1] == '/') ? "" : "/", matched);
+	snprintf(
+		out,
+		cap,
+		"%s%s%s",
+		parent,
+		(parent[0] && parent[strlen(parent) - 1] == '/') ? "" : "/",
+		matched);
 	ni = ntfs_pathname_to_inode(vol, NULL, out);
-	if (!ni) {
-		res = -errno;
+	if (!ni)
+	{
+		res    = -errno;
 		out[0] = 0;
 		goto out;
 	}
@@ -1986,13 +2271,13 @@ void ntfs_close(void)
 {
 	if (!ctx)
 		return;
-	
+
 	if (!ctx->vol)
 		return;
-	
+
 	if (ntfs_umount(ctx->vol, FALSE))
 		ntfs_log_perror("Failed to close volume");
-	
+
 	ctx->vol = NULL;
 }
 
@@ -2001,19 +2286,19 @@ int ntfs_fuse_init(void)
 	ctx = ntfs_calloc(sizeof(ntfs_fuse_context_t));
 	if (!ctx)
 		return -1;
-	
-	*ctx = (ntfs_fuse_context_t) {
-		.uid     = 0,
-		.gid     = 0,
-		.fmask   = 0,
-		.dmask   = 0,
-		.streams = NF_STREAMS_INTERFACE_NONE,
-		.ro      = FALSE,
-		.recover = TRUE,
+
+	*ctx = (ntfs_fuse_context_t){
+		.uid           = 0,
+		.gid           = 0,
+		.fmask         = 0,
+		.dmask         = 0,
+		.streams       = NF_STREAMS_INTERFACE_NONE,
+		.ro            = FALSE,
+		.recover       = TRUE,
 		.windows_names = TRUE,
-		.compression = FALSE,
-		.hiberfile = TRUE,
-		.exclusive = FALSE
+		.compression   = FALSE,
+		.hiberfile     = TRUE,
+		.exclusive     = FALSE
 	};
 	return 0;
 }
@@ -2021,23 +2306,23 @@ int ntfs_fuse_init(void)
 int ntfs_open(const char *device, BOOL ro, BOOL exclusive)
 {
 	unsigned long flags = 0;
-	
-	ctx->ro = ro;
+
+	ctx->ro        = ro;
 	ctx->exclusive = exclusive;
 	if (!ctx->exclusive)
 		flags |= NTFS_MNT_EXCLUSIVE;
 	if (ctx->ro)
 		flags |= NTFS_MNT_RDONLY;
-	else
-		if (!ctx->hiberfile)
-			flags |= NTFS_MNT_MAY_RDONLY;
+	else if (!ctx->hiberfile)
+		flags |= NTFS_MNT_MAY_RDONLY;
 	if (ctx->recover)
 		flags |= NTFS_MNT_RECOVER;
 	if (ctx->hiberfile)
 		flags |= NTFS_MNT_IGNORE_HIBERFILE;
 
 	ctx->vol = ntfs_mount(device, flags);
-	if (!ctx->vol) {
+	if (!ctx->vol)
+	{
 		ntfs_log_perror("Failed to mount '%s'", device);
 		goto err_out;
 	}
@@ -2049,25 +2334,28 @@ int ntfs_open(const char *device, BOOL ro, BOOL exclusive)
 		NVolClearCompression(ctx->vol);
 	if (ntfs_set_shown_files(ctx->vol, TRUE, TRUE, TRUE))
 		goto err_out;
-	
-	if (ntfs_volume_get_free_space(ctx->vol)) {
+
+	if (ntfs_volume_get_free_space(ctx->vol))
+	{
 		ntfs_log_perror("Failed to read NTFS $Bitmap");
 		goto err_out;
 	}
 
 	ctx->vol->free_mft_records = ntfs_get_nr_free_mft_records(ctx->vol);
-	if (ctx->vol->free_mft_records < 0) {
+	if (ctx->vol->free_mft_records < 0)
+	{
 		ntfs_log_perror("Failed to calculate free MFT records");
 		goto err_out;
 	}
 
-	if (ctx->hiberfile && ntfs_volume_check_hiberfile(ctx->vol, 0)) {
+	if (ctx->hiberfile && ntfs_volume_check_hiberfile(ctx->vol, 0))
+	{
 		if (errno != EPERM)
 			goto err_out;
 		if (ntfs_fuse_rm("/hiberfil.sys"))
 			goto err_out;
 	}
-	
+
 	errno = 0;
 	goto out;
 err_out:
@@ -2080,17 +2368,18 @@ out :
 // add stat support
 int ntfs_fuse_stat(const char *org_path, struct stat *sbuf)
 {
-	ntfs_inode *ni = NULL;
-	ntfs_attr *na = NULL;
-	char *path = NULL;
-	ntfschar *stream_name;
-	int stream_name_len, res;
+	ntfs_inode *ni   = NULL;
+	ntfs_attr * na   = NULL;
+	char *      path = NULL;
+	ntfschar *  stream_name;
+	int         stream_name_len, res;
 
 	stream_name_len = ntfs_fuse_parse_path(org_path, &path, &stream_name);
 	if (stream_name_len < 0)
 		return stream_name_len;
 	ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
-	if (!ni) {
+	if (!ni)
+	{
 		res = -errno;
 		goto exit;
 	}
@@ -2099,14 +2388,17 @@ int ntfs_fuse_stat(const char *org_path, struct stat *sbuf)
 	//	goto exit;
 	//}
 	na = ntfs_attr_open(ni, AT_DATA, stream_name, stream_name_len);
-	if (!na) {
+	if (!na)
+	{
 		sbuf->st_size = 0;
-	} else {
+	}
+	else
+	{
 		sbuf->st_size = na->data_size;
 	}
-	sbuf->st_ino = ni->mft_no;
-	sbuf->st_uid = 0;
-	sbuf->st_gid = 0;
+	sbuf->st_ino   = ni->mft_no;
+	sbuf->st_uid   = 0;
+	sbuf->st_gid   = 0;
 	sbuf->st_atime = ntfs2timespec(ni->last_access_time).tv_sec;
 	sbuf->st_mtime = ntfs2timespec(ni->last_data_change_time).tv_sec;
 	sbuf->st_ctime = ntfs2timespec(ni->last_mft_change_time).tv_sec;
@@ -2116,9 +2408,9 @@ int ntfs_fuse_stat(const char *org_path, struct stat *sbuf)
 		sbuf->st_mode = S_IFREG | 0777;
 	// TODO: fill st_mode
 	sbuf->st_nlink = ni->mrec->link_count;
-	sbuf->st_dev = 0; // TODO: fill st_dev and st_rdev
-	sbuf->st_rdev = 0;
-	res = 0;
+	sbuf->st_dev   = 0; // TODO: fill st_dev and st_rdev
+	sbuf->st_rdev  = 0;
+	res            = 0;
 exit:
 	if (na)
 		ntfs_attr_close(na);

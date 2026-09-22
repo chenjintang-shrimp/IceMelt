@@ -24,7 +24,7 @@
 #ifndef EA_H
 #define EA_H
 
-int ntfs_ea_check_wsldev(ntfs_inode *ni, dev_t *rdevp);
+int ntfs_ea_check_wsldev(ntfs_inode * ni, dev_t * rdevp);
 
 int ntfs_ea_set_wsl_not_symlink(ntfs_inode *ni, mode_t mode, dev_t dev);
 
@@ -32,6 +32,6 @@ int ntfs_get_ntfs_ea(ntfs_inode *ni, char *value, size_t size);
 
 int ntfs_set_ntfs_ea(ntfs_inode *ni, const char *value, size_t size, int flags);
 
-int ntfs_remove_ntfs_ea(ntfs_inode *ni);
+int ntfs_remove_ntfs_ea(ntfs_inode * ni);
 
 #endif /* EA_H */

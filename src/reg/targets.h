@@ -16,26 +16,28 @@
 #include <string>
 #include <vector>
 
-namespace icemelt {
+namespace icemelt
+{
+	struct Target
+	{
+		std::wstring name;  // 服务键名 / 过滤器项名（大小写不敏感）
+		std::wstring label; // 人类可读的显示名
+	};
 
-struct Target {
-    std::wstring name;   // 服务键名 / 过滤器项名（大小写不敏感）
-    std::wstring label;  // 人类可读的显示名
-};
+	// 编译内置的名单（config/targets.txt 的副本）
+	const std::vector<Target> &DefaultTargets();
 
-// 编译内置的名单（config/targets.txt 的副本）
-const std::vector<Target>& DefaultTargets();
+	// 依次尝试 <exeDir>/targets.txt、<exeDir>/config/targets.txt。
+	// 两个都不存在时返回 DefaultTargets()。searched 非空时回填实际查过的路径（供日志记录）。
+	std::vector<Target> LoadTargets(
+		const std::filesystem::path &       exeDir,
+		std::vector<std::filesystem::path> *searched = nullptr);
 
-// 依次尝试 <exeDir>/targets.txt、<exeDir>/config/targets.txt。
-// 两个都不存在时返回 DefaultTargets()。searched 非空时回填实际查过的路径（供日志记录）。
-std::vector<Target> LoadTargets(const std::filesystem::path& exeDir,
-                               std::vector<std::filesystem::path>* searched = nullptr);
+	// 解析一份名单文本；出错的行（非法/重复）通过 problems 回填。空文本返回空表。
+	std::vector<Target> ParseTargets(
+		const std::string &        utf8Text,
+		std::vector<std::wstring> *problems = nullptr);
 
-// 解析一份名单文本；出错的行（非法/重复）通过 problems 回填。空文本返回空表。
-std::vector<Target> ParseTargets(const std::string& utf8Text,
-                                 std::vector<std::wstring>* problems = nullptr);
-
-// 只需要名称列表时的便捷包装
-std::vector<std::wstring> TargetNames(const std::vector<Target>& targets);
-
-}  // namespace icemelt
+	// 只需要名称列表时的便捷包装
+	std::vector<std::wstring> TargetNames(const std::vector<Target> &targets);
+} // namespace icemelt

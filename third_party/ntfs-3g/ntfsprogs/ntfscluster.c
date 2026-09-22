@@ -52,7 +52,7 @@
 /* #include "version.h" */
 #include "logging.h"
 
-static const char *EXEC_NAME = "ntfscluster";
+static const char *   EXEC_NAME = "ntfscluster";
 static struct options opts;
 
 /**
@@ -64,8 +64,11 @@ static struct options opts;
  */
 static void version(void)
 {
-	ntfs_log_info("\n%s v%s (libntfs-3g) - Find the owner of any given sector or "
-			"cluster.\n\n", EXEC_NAME, VERSION);
+	ntfs_log_info(
+		"\n%s v%s (libntfs-3g) - Find the owner of any given sector or "
+		"cluster.\n\n",
+		EXEC_NAME,
+		VERSION);
 	ntfs_log_info("Copyright (c) 2002-2003 Richard Russon\n");
 	ntfs_log_info("Copyright (c) 2005 Anton Altaparmakov\n");
 	ntfs_log_info("Copyright (c) 2005-2006 Szabolcs Szakacsits\n");
@@ -81,14 +84,15 @@ static void version(void)
  */
 static void usage(void)
 {
-	ntfs_log_info("\nUsage: %s [options] device\n"
+	ntfs_log_info(
+		"\nUsage: %s [options] device\n"
 		"    -i, --info           Print information about the volume (default)\n"
 		"\n"
 		"    -c, --cluster RANGE  Look for objects in this range of clusters\n"
 		"    -s, --sector RANGE   Look for objects in this range of sectors\n"
 		"    -I, --inode NUM      Show information about this inode\n"
 		"    -F, --filename NAME  Show information about this file\n"
-	/*	"    -l, --last           Find the last file on the volume\n" */
+		/*	"    -l, --last           Find the last file on the volume\n" */
 		"\n"
 		"    -f, --force          Use less caution\n"
 		"    -q, --quiet          Less output\n"
@@ -110,28 +114,28 @@ static void usage(void)
  */
 static int parse_options(int argc, char **argv)
 {
-	static const char *sopt = "-c:F:fh?I:ilqs:vV";
+	static const char *        sopt   = "-c:F:fh?I:ilqs:vV";
 	static const struct option lopt[] = {
-		{ "cluster",	required_argument,	NULL, 'c' },
-		{ "filename",	required_argument,	NULL, 'F' },
-		{ "force",	no_argument,		NULL, 'f' },
-		{ "help",	no_argument,		NULL, 'h' },
-		{ "info",	no_argument,		NULL, 'i' },
-		{ "inode",	required_argument,	NULL, 'I' },
-		{ "last",	no_argument,		NULL, 'l' },
-		{ "quiet",	no_argument,		NULL, 'q' },
-		{ "sector",	required_argument,	NULL, 's' },
-		{ "verbose",	no_argument,		NULL, 'v' },
-		{ "version",	no_argument,		NULL, 'V' },
-		{ NULL,		0,			NULL, 0   }
+		{"cluster", required_argument, NULL, 'c'},
+		{"filename", required_argument, NULL, 'F'},
+		{"force", no_argument, NULL, 'f'},
+		{"help", no_argument, NULL, 'h'},
+		{"info", no_argument, NULL, 'i'},
+		{"inode", required_argument, NULL, 'I'},
+		{"last", no_argument, NULL, 'l'},
+		{"quiet", no_argument, NULL, 'q'},
+		{"sector", required_argument, NULL, 's'},
+		{"verbose", no_argument, NULL, 'v'},
+		{"version", no_argument, NULL, 'V'},
+		{NULL, 0, NULL, 0}
 	};
 
-	int c = -1;
-	int err  = 0;
-	int ver  = 0;
-	int help = 0;
-	int levels = 0;
-	char *end = NULL;
+	int   c      = -1;
+	int   err    = 0;
+	int   ver    = 0;
+	int   help   = 0;
+	int   levels = 0;
+	char *end    = NULL;
 
 	opterr = 0; /* We'll handle the errors, thank you. */
 
@@ -139,92 +143,114 @@ static int parse_options(int argc, char **argv)
 	opts.range_begin = -1;
 	opts.range_end   = -1;
 
-	while ((c = getopt_long(argc, argv, sopt, lopt, NULL)) != -1) {
-		switch (c) {
-		case 1:	/* A non-option argument */
-			if (!opts.device) {
-				opts.device = argv[optind-1];
-			} else {
-				opts.device = NULL;
-				err++;
-			}
-			break;
-
-		case 'c':
-			if ((opts.action == act_none) &&
-			    (utils_parse_range(optarg, &opts.range_begin, &opts.range_end, FALSE)))
-				opts.action = act_cluster;
-			else
-				opts.action = act_error;
-			break;
-		case 'F':
-			if (opts.action == act_none) {
-				opts.action = act_file;
-				opts.filename = optarg;
-			} else {
-				opts.action = act_error;
-			}
-			break;
-		case 'f':
-			opts.force++;
-			break;
-		case 'h':
-			help++;
-			break;
-		case 'I':
-			if (opts.action == act_none) {
-				opts.action = act_inode;
-				opts.inode = strtol(optarg, &end, 0);
-				if (end && *end)
+	while ((c = getopt_long(argc, argv, sopt, lopt, NULL)) != -1)
+	{
+		switch (c)
+		{
+			case 1: /* A non-option argument */
+				if (!opts.device)
+				{
+					opts.device = argv[optind - 1];
+				}
+				else
+				{
+					opts.device = NULL;
 					err++;
-			} else {
-				opts.action = act_error;
-			}
-			break;
-		case 'i':
-			if (opts.action == act_none)
-				opts.action = act_info;
-			else
-				opts.action = act_error;
-			break;
-		case 'l':
-			if (opts.action == act_none)
-				opts.action = act_last;
-			else
-				opts.action = act_error;
-			break;
-		case 'q':
-			opts.quiet++;
-			ntfs_log_clear_levels(NTFS_LOG_LEVEL_QUIET);
-			break;
-		case 's':
-			if ((opts.action == act_none) &&
-			    (utils_parse_range(optarg, &opts.range_begin, &opts.range_end, FALSE)))
-				opts.action = act_sector;
-			else
-				opts.action = act_error;
-			break;
-		case 'v':
-			opts.verbose++;
-			ntfs_log_set_levels(NTFS_LOG_LEVEL_VERBOSE);
-			break;
-		case 'V':
-			ver++;
-			break;
-		case '?':
-			if (strncmp (argv[optind-1], "--log-", 6) == 0) {
-				if (!ntfs_log_parse_option (argv[optind-1]))
-					err++;
+				}
 				break;
-			}
+
+			case 'c':
+				if ((opts.action == act_none) &&
+					(utils_parse_range(
+						optarg,
+						&opts.range_begin,
+						&opts.range_end,
+						FALSE)))
+					opts.action = act_cluster;
+				else
+					opts.action = act_error;
+				break;
+			case 'F':
+				if (opts.action == act_none)
+				{
+					opts.action   = act_file;
+					opts.filename = optarg;
+				}
+				else
+				{
+					opts.action = act_error;
+				}
+				break;
+			case 'f':
+				opts.force++;
+				break;
+			case 'h':
+				help++;
+				break;
+			case 'I':
+				if (opts.action == act_none)
+				{
+					opts.action = act_inode;
+					opts.inode  = strtol(optarg, &end, 0);
+					if (end && *end)
+						err++;
+				}
+				else
+				{
+					opts.action = act_error;
+				}
+				break;
+			case 'i':
+				if (opts.action == act_none)
+					opts.action = act_info;
+				else
+					opts.action = act_error;
+				break;
+			case 'l':
+				if (opts.action == act_none)
+					opts.action = act_last;
+				else
+					opts.action = act_error;
+				break;
+			case 'q':
+				opts.quiet++;
+				ntfs_log_clear_levels(NTFS_LOG_LEVEL_QUIET);
+				break;
+			case 's':
+				if ((opts.action == act_none) &&
+					(utils_parse_range(
+						optarg,
+						&opts.range_begin,
+						&opts.range_end,
+						FALSE)))
+					opts.action = act_sector;
+				else
+					opts.action = act_error;
+				break;
+			case 'v':
+				opts.verbose++;
+				ntfs_log_set_levels(NTFS_LOG_LEVEL_VERBOSE);
+				break;
+			case 'V':
+				ver++;
+				break;
+			case '?':
+				if (strncmp(argv[optind - 1], "--log-", 6) == 0)
+				{
+					if (!ntfs_log_parse_option(argv[optind - 1]))
+						err++;
+					break;
+				}
 			/* fall through */
-		default:
-			if ((optopt == 'c') || (optopt == 's'))
-				ntfs_log_error("Option '%s' requires an argument.\n", argv[optind-1]);
-			else
-				ntfs_log_error("Unknown option '%s'.\n", argv[optind-1]);
-			err++;
-			break;
+			default:
+				if ((optopt == 'c') || (optopt == 's'))
+					ntfs_log_error(
+						"Option '%s' requires an argument.\n",
+						argv[optind - 1]);
+				else
+					ntfs_log_error("Unknown option '%s'.\n", argv[optind - 1]);
+				err++;
+				break;
 		}
 	}
 
@@ -235,29 +261,38 @@ static int parse_options(int argc, char **argv)
 	if (!(levels & NTFS_LOG_LEVEL_QUIET))
 		opts.quiet++;
 
-	if (help || ver) {
+	if (help || ver)
+	{
 		opts.quiet = 0;
-	} else {
+	}
+	else
+	{
 		if (opts.action == act_none)
 			opts.action = act_info;
 		if (opts.action == act_info)
 			opts.quiet = 0;
 
-		if (opts.device == NULL) {
+		if (opts.device == NULL)
+		{
 			if (argc > 1)
 				ntfs_log_error("You must specify exactly one device.\n");
 			err++;
 		}
 
-		if (opts.quiet && opts.verbose) {
+		if (opts.quiet && opts.verbose)
+		{
 			ntfs_log_error("You may not use --quiet and --verbose at the same time.\n");
 			err++;
 		}
 
-		if (opts.action == act_error) {
-			ntfs_log_error("You may only specify one action: --info, --cluster, --sector or --last.\n");
+		if (opts.action == act_error)
+		{
+			ntfs_log_error(
+				"You may only specify one action: --info, --cluster, --sector or --last.\n");
 			err++;
-		} else if (opts.range_begin > opts.range_end) {
+		}
+		else if (opts.range_begin > opts.range_end)
+		{
 			ntfs_log_error("The range must be in ascending order.\n");
 			err++;
 		}
@@ -268,7 +303,7 @@ static int parse_options(int argc, char **argv)
 	if (help || err)
 		usage();
 
-		/* tri-state 0 : done, 1 : error, -1 : proceed */
+	/* tri-state 0 : done, 1 : error, -1 : proceed */
 	return (err ? 1 : (help || ver ? 0 : -1));
 }
 
@@ -278,21 +313,22 @@ static int parse_options(int argc, char **argv)
  */
 static int info(ntfs_volume *vol)
 {
-	u64 a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u;
-	int cb, sb, cps;
+	u64 a,      b,      c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u;
+	int cb,     sb,     cps;
 	u64 uc = 0, mc = 0, fc = 0;
 
 	struct mft_search_ctx *m_ctx;
-	ntfs_attr_search_ctx *a_ctx;
-	runlist_element *rl;
-	ATTR_RECORD *rec;
-	int z;
-	int inuse = 0;
+	ntfs_attr_search_ctx * a_ctx;
+	runlist_element *      rl;
+	ATTR_RECORD *          rec;
+	int                    z;
+	int                    inuse = 0;
 
-	m_ctx = mft_get_search_ctx(vol);
-	m_ctx->flags_search = FEMR_IN_USE | FEMR_METADATA | FEMR_BASE_RECORD | FEMR_NOT_BASE_RECORD;
-	while (mft_next_record(m_ctx) == 0) {
-
+	m_ctx               = mft_get_search_ctx(vol);
+	m_ctx->flags_search = FEMR_IN_USE | FEMR_METADATA | FEMR_BASE_RECORD |
+			FEMR_NOT_BASE_RECORD;
+	while (mft_next_record(m_ctx) == 0)
+	{
 		if (!(m_ctx->flags_match & FEMR_IN_USE))
 			continue;
 
@@ -300,8 +336,8 @@ static int info(ntfs_volume *vol)
 
 		a_ctx = ntfs_attr_get_search_ctx(m_ctx->inode, NULL);
 
-		while ((rec = find_attribute(AT_UNUSED, a_ctx))) {
-
+		while ((rec = find_attribute(AT_UNUSED, a_ctx)))
+		{
 			if (!rec->non_resident)
 				continue;
 
@@ -309,13 +345,13 @@ static int info(ntfs_volume *vol)
 
 			for (z = 0; rl[z].length > 0; z++)
 			{
-				if (rl[z].lcn >= 0) {
+				if (rl[z].lcn >= 0)
+				{
 					if (m_ctx->flags_match & FEMR_METADATA)
 						mc += rl[z].length;
 					else
 						uc += rl[z].length;
 				}
-
 			}
 
 			free(rl);
@@ -329,10 +365,10 @@ static int info(ntfs_volume *vol)
 	sb  = vol->sector_size_bits;
 	cps = cb - sb;
 
-	fc  = vol->nr_clusters-mc-uc;
-	fc  <<= cb;
-	mc  <<= cb;
-	uc  <<= cb;
+	fc = vol->nr_clusters - mc - uc;
+	fc <<= cb;
+	mc <<= cb;
+	uc <<= cb;
 
 	a = vol->sector_size;
 	b = vol->cluster_size;
@@ -356,27 +392,27 @@ static int info(ntfs_volume *vol)
 	t = mc >> cb;
 	u = mc * 100 / b / e;
 
-	ntfs_log_info("bytes per sector        : %llu\n", (unsigned long long)a);
-	ntfs_log_info("bytes per cluster       : %llu\n", (unsigned long long)b);
-	ntfs_log_info("sectors per cluster     : %llu\n", (unsigned long long)c);
-	ntfs_log_info("bytes per volume        : %llu\n", (unsigned long long)d);
-	ntfs_log_info("sectors per volume      : %llu\n", (unsigned long long)e);
-	ntfs_log_info("clusters per volume     : %llu\n", (unsigned long long)f);
-	ntfs_log_info("initialized mft records : %llu\n", (unsigned long long)g);
-	ntfs_log_info("mft records in use      : %llu\n", (unsigned long long)h);
-	ntfs_log_info("mft records percentage  : %llu\n", (unsigned long long)i);
-	ntfs_log_info("bytes of free space     : %llu\n", (unsigned long long)j);
-	ntfs_log_info("sectors of free space   : %llu\n", (unsigned long long)k);
-	ntfs_log_info("clusters of free space  : %llu\n", (unsigned long long)l);
-	ntfs_log_info("percentage free space   : %llu\n", (unsigned long long)m);
-	ntfs_log_info("bytes of user data      : %llu\n", (unsigned long long)n);
-	ntfs_log_info("sectors of user data    : %llu\n", (unsigned long long)o);
-	ntfs_log_info("clusters of user data   : %llu\n", (unsigned long long)p);
-	ntfs_log_info("percentage user data    : %llu\n", (unsigned long long)q);
-	ntfs_log_info("bytes of metadata       : %llu\n", (unsigned long long)r);
-	ntfs_log_info("sectors of metadata     : %llu\n", (unsigned long long)s);
-	ntfs_log_info("clusters of metadata    : %llu\n", (unsigned long long)t);
-	ntfs_log_info("percentage metadata     : %llu\n", (unsigned long long)u);
+	ntfs_log_info("bytes per sector        : %llu\n", (unsigned long long) a);
+	ntfs_log_info("bytes per cluster       : %llu\n", (unsigned long long) b);
+	ntfs_log_info("sectors per cluster     : %llu\n", (unsigned long long) c);
+	ntfs_log_info("bytes per volume        : %llu\n", (unsigned long long) d);
+	ntfs_log_info("sectors per volume      : %llu\n", (unsigned long long) e);
+	ntfs_log_info("clusters per volume     : %llu\n", (unsigned long long) f);
+	ntfs_log_info("initialized mft records : %llu\n", (unsigned long long) g);
+	ntfs_log_info("mft records in use      : %llu\n", (unsigned long long) h);
+	ntfs_log_info("mft records percentage  : %llu\n", (unsigned long long) i);
+	ntfs_log_info("bytes of free space     : %llu\n", (unsigned long long) j);
+	ntfs_log_info("sectors of free space   : %llu\n", (unsigned long long) k);
+	ntfs_log_info("clusters of free space  : %llu\n", (unsigned long long) l);
+	ntfs_log_info("percentage free space   : %llu\n", (unsigned long long) m);
+	ntfs_log_info("bytes of user data      : %llu\n", (unsigned long long) n);
+	ntfs_log_info("sectors of user data    : %llu\n", (unsigned long long) o);
+	ntfs_log_info("clusters of user data   : %llu\n", (unsigned long long) p);
+	ntfs_log_info("percentage user data    : %llu\n", (unsigned long long) q);
+	ntfs_log_info("bytes of metadata       : %llu\n", (unsigned long long) r);
+	ntfs_log_info("sectors of metadata     : %llu\n", (unsigned long long) s);
+	ntfs_log_info("clusters of metadata    : %llu\n", (unsigned long long) t);
+	ntfs_log_info("percentage metadata     : %llu\n", (unsigned long long) u);
 
 	return 0;
 }
@@ -386,11 +422,11 @@ static int info(ntfs_volume *vol)
  */
 static int dump_file(ntfs_volume *vol, ntfs_inode *ino)
 {
-	char buffer[1024];
+	char                  buffer[1024];
 	ntfs_attr_search_ctx *ctx;
-	ATTR_RECORD *rec;
-	int i;
-	runlist *runs;
+	ATTR_RECORD *         rec;
+	int                   i;
+	runlist *             runs;
 
 	utils_inode_get_name(ino, buffer, sizeof(buffer));
 
@@ -398,23 +434,30 @@ static int dump_file(ntfs_volume *vol, ntfs_inode *ino)
 
 	ctx = ntfs_attr_get_search_ctx(ino, NULL);
 
-	while ((rec = find_attribute(AT_UNUSED, ctx))) {
-		ntfs_log_info("    0x%02x - ", (int)le32_to_cpu(rec->type));
-		if (rec->non_resident) {
+	while ((rec = find_attribute(AT_UNUSED, ctx)))
+	{
+		ntfs_log_info("    0x%02x - ", (int) le32_to_cpu(rec->type));
+		if (rec->non_resident)
+		{
 			ntfs_log_info("non-resident\n");
 			runs = ntfs_mapping_pairs_decompress(vol, rec, NULL);
-			if (runs) {
+			if (runs)
+			{
 				ntfs_log_info("             VCN     LCN     Length\n");
-				for (i = 0; runs[i].length > 0; i++) {
-					ntfs_log_info("        %8lld %8lld %8lld\n",
-							(long long)runs[i].vcn,
-							(long long)runs[i].lcn,
-							(long long)
-							runs[i].length);
+				for (i = 0; runs[i].length > 0; i++)
+				{
+					ntfs_log_info(
+						"        %8lld %8lld %8lld\n",
+						(long long) runs[i].vcn,
+						(long long) runs[i].lcn,
+						(long long)
+						runs[i].length);
 				}
 				free(runs);
 			}
-		} else {
+		}
+		else
+		{
 			ntfs_log_info("resident\n");
 		}
 	}
@@ -426,8 +469,13 @@ static int dump_file(ntfs_volume *vol, ntfs_inode *ino)
 /**
  * print_match
  */
-static int print_match(ntfs_inode *ino, ATTR_RECORD *attr,
-	runlist_element *run, void *data __attribute__((unused)))
+static int print_match(
+	ntfs_inode *     ino,
+	ATTR_RECORD *    attr,
+	runlist_element *run,
+	void *data __attribute__((unused))
+
+)
 {
 	char *buffer;
 
@@ -453,8 +501,11 @@ static int print_match(ntfs_inode *ino, ATTR_RECORD *attr,
 /**
  * find_last
  */
-static int find_last(ntfs_inode *ino, ATTR_RECORD *attr, runlist_element *run,
-	void *data)
+static int find_last(
+	ntfs_inode *     ino,
+	ATTR_RECORD *    attr,
+	runlist_element *run,
+	void *           data)
 {
 	struct match *m;
 
@@ -463,7 +514,8 @@ static int find_last(ntfs_inode *ino, ATTR_RECORD *attr, runlist_element *run,
 
 	m = data;
 
-	if ((run->lcn + run->length) > m->lcn) {
+	if ((run->lcn + run->length) > m->lcn)
+	{
 		m->inum = ino->mft_no;
 		m->lcn  = run->lcn + run->length;
 	}
@@ -482,13 +534,13 @@ static int find_last(ntfs_inode *ino, ATTR_RECORD *attr, runlist_element *run,
 int main(int argc, char *argv[])
 {
 	ntfs_volume *vol;
-	ntfs_inode *ino = NULL;
+	ntfs_inode * ino = NULL;
 	struct match m;
-	int res;
-	int result = 1;
-#ifdef HAVE_WINDOWS_H
+	int          res;
+	int          result = 1;
+	#ifdef HAVE_WINDOWS_H
 	char *unix_name;
-#endif
+	#endif
 
 	ntfs_log_set_handler(ntfs_log_handler_outerr);
 
@@ -498,72 +550,107 @@ int main(int argc, char *argv[])
 
 	utils_set_locale();
 
-	vol = utils_mount_volume(opts.device, NTFS_MNT_RDONLY |
-			(opts.force ? NTFS_MNT_RECOVER : 0));
+	vol = utils_mount_volume(
+		opts.device,
+		NTFS_MNT_RDONLY |
+		(opts.force ? NTFS_MNT_RECOVER : 0));
 	if (!vol)
 		return 1;
 
-	switch (opts.action) {
+	switch (opts.action)
+	{
 		case act_sector:
 			if (opts.range_begin == opts.range_end)
-				ntfs_log_quiet("Searching for sector %llu\n",
-						(unsigned long long)opts.range_begin);
+				ntfs_log_quiet(
+					"Searching for sector %llu\n",
+					(unsigned long long) opts.range_begin);
 			else
-				ntfs_log_quiet("Searching for sector range %llu-%llu\n", (unsigned long long)opts.range_begin, (unsigned long long)opts.range_end);
+				ntfs_log_quiet(
+					"Searching for sector range %llu-%llu\n",
+					(unsigned long long) opts.range_begin,
+					(unsigned long long) opts.range_end);
 			/* Convert to clusters */
 			opts.range_begin >>= (vol->cluster_size_bits - vol->sector_size_bits);
 			opts.range_end   >>= (vol->cluster_size_bits - vol->sector_size_bits);
-			result = cluster_find(vol, opts.range_begin, opts.range_end, (cluster_cb*)&print_match, NULL);
+			result           = cluster_find(
+				vol,
+				opts.range_begin,
+				opts.range_end,
+				(cluster_cb *) &print_match,
+				NULL);
 			break;
 		case act_cluster:
 			if (opts.range_begin == opts.range_end)
-				ntfs_log_quiet("Searching for cluster %llu\n",
-						(unsigned long long)opts.range_begin);
+				ntfs_log_quiet(
+					"Searching for cluster %llu\n",
+					(unsigned long long) opts.range_begin);
 			else
-				ntfs_log_quiet("Searching for cluster range %llu-%llu\n", (unsigned long long)opts.range_begin, (unsigned long long)opts.range_end);
-			result = cluster_find(vol, opts.range_begin, opts.range_end, (cluster_cb*)&print_match, NULL);
+				ntfs_log_quiet(
+					"Searching for cluster range %llu-%llu\n",
+					(unsigned long long) opts.range_begin,
+					(unsigned long long) opts.range_end);
+			result = cluster_find(
+				vol,
+				opts.range_begin,
+				opts.range_end,
+				(cluster_cb *) &print_match,
+				NULL);
 			break;
 		case act_file:
-#ifdef HAVE_WINDOWS_H
+			#ifdef HAVE_WINDOWS_H
 			unix_name = ntfs_utils_unix_path(opts.filename);
-			ino = 0;
-			if (unix_name) {
-				ino = ntfs_pathname_to_inode(vol, NULL,
-								unix_name);
+			ino       = 0;
+			if (unix_name)
+			{
+				ino = ntfs_pathname_to_inode(
+					vol,
+					NULL,
+					unix_name);
 				free(unix_name);
 			}
-#else
+			#else
 			ino = ntfs_pathname_to_inode(vol, NULL, opts.filename);
-#endif
+			#endif
 			if (ino)
 				result = dump_file(vol, ino);
 			break;
 		case act_inode:
 			ino = ntfs_inode_open(vol, opts.inode);
-			if (ino) {
+			if (ino)
+			{
 				result = dump_file(vol, ino);
 				ntfs_inode_close(ino);
-			} else {
-				ntfs_log_error("Cannot open inode %llu\n",
-						(unsigned long long)opts.inode);
+			}
+			else
+			{
+				ntfs_log_error(
+					"Cannot open inode %llu\n",
+					(unsigned long long) opts.inode);
 			}
 			break;
 		case act_last:
 			memset(&m, 0, sizeof(m));
-			m.lcn = -1;
-			result = cluster_find(vol, 0, LONG_MAX, (cluster_cb*)&find_last, &m);
-			if (m.lcn >= 0) {
+			m.lcn  = -1;
+			result = cluster_find(vol, 0, LONG_MAX, (cluster_cb *) &find_last, &m);
+			if (m.lcn >= 0)
+			{
 				ino = ntfs_inode_open(vol, m.inum);
-				if (ino) {
+				if (ino)
+				{
 					result = dump_file(vol, ino);
 					ntfs_inode_close(ino);
-				} else {
-					ntfs_log_error("Cannot open inode %llu\n",
-							(unsigned long long)
-							opts.inode);
+				}
+				else
+				{
+					ntfs_log_error(
+						"Cannot open inode %llu\n",
+						(unsigned long long)
+						opts.inode);
 				}
 				result = 0;
-			} else {
+			}
+			else
+			{
 				result = 1;
 			}
 			break;

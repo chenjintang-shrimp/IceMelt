@@ -26,10 +26,10 @@
 
 #include "attrib.h"
 
-extern int ntfs_attrlist_need(ntfs_inode *ni);
+extern int ntfs_attrlist_need(ntfs_inode * ni);
 
-extern int ntfs_attrlist_entry_add(ntfs_inode *ni, ATTR_RECORD *attr);
-extern int ntfs_attrlist_entry_rm(ntfs_attr_search_ctx *ctx);
+extern int ntfs_attrlist_entry_add(ntfs_inode * ni, ATTR_RECORD * attr);
+extern int ntfs_attrlist_entry_rm(ntfs_attr_search_ctx * ctx);
 
 /**
  * ntfs_attrlist_mark_dirty - set the attribute list dirty

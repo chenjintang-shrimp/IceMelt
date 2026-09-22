@@ -30,7 +30,7 @@
 
 #if defined(linux) || defined(__uClinux__) || defined(__sun) \
 		|| defined(__APPLE__) || defined(__DARWIN__)
-  /* Make sure the presence of <windows.h> means compiling for Windows */
+/* Make sure the presence of <windows.h> means compiling for Windows */
 #undef HAVE_WINDOWS_H
 #endif
 
@@ -46,11 +46,12 @@
 /**
  * struct hd_geometry -
  */
-struct hd_geometry {
-	unsigned char heads;
-	unsigned char sectors;
+struct hd_geometry
+{
+	unsigned char  heads;
+	unsigned char  sectors;
 	unsigned short cylinders;
-	unsigned long start;
+	unsigned long  start;
 };
 #endif
 #ifndef BLKGETSIZE
@@ -73,7 +74,7 @@ struct hd_geometry {
 int ntfs_win32_set_sparse(int);
 int ntfs_win32_ftruncate(int fd, s64 size);
 struct ntfs_device;
-int ntfs_device_win32_ftruncate(struct ntfs_device*, s64);
+int ntfs_device_win32_ftruncate(struct ntfs_device *, s64);
 
 #endif /* HAVE_WINDOWS_H */
 

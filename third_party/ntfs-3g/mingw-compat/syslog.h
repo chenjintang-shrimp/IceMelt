@@ -24,8 +24,10 @@
 #define LOG_NDELAY 0x08
 
 /* Unused by the tools built here; declared so the header is self-consistent. */
-void openlog(const char* ident, int option, int facility);
+void openlog(const char *ident, int option, int facility);
+
 void closelog(void);
-void syslog(int priority, const char* format, ...);
+
+void syslog(int priority, const char *format, ...);
 
 #endif /* NTFS_MINGW_SYSLOG_H */

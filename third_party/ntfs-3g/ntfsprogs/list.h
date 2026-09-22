@@ -34,7 +34,8 @@
  * generate better code by using them directly rather than
  * using the generic single-entry routines.
  */
-struct ntfs_list_head {
+struct ntfs_list_head
+{
 	struct ntfs_list_head *next, *prev;
 };
 
@@ -56,12 +57,14 @@ struct ntfs_list_head {
  * This is only for internal list manipulation where we know the prev/next
  * entries already!
  */
-static __inline__ void __ntfs_list_add(struct ntfs_list_head * new,
-		struct ntfs_list_head * prev, struct ntfs_list_head * next)
+static __inline__ void __ntfs_list_add(
+struct ntfs_list_head * new,
+		struct ntfs_list_head * prev,
+ struct ntfs_list_head * next)
 {
 	next->prev = new;
-	new->next = next;
-	new->prev = prev;
+	new->next  = next;
+	new->prev  = prev;
 	prev->next = new;
 }
 
@@ -73,8 +76,9 @@ static __inline__ void __ntfs_list_add(struct ntfs_list_head * new,
  * Insert a new entry after the specified head.
  * This is good for implementing stacks.
  */
-static __inline__ void ntfs_list_add(struct ntfs_list_head *new,
-		struct ntfs_list_head *head)
+static __inline__ void ntfs_list_add(
+struct ntfs_list_head * new,
+		struct ntfs_list_head * head)
 {
 	__ntfs_list_add(new, head, head->next);
 }
@@ -87,8 +91,9 @@ static __inline__ void ntfs_list_add(struct ntfs_list_head *new,
  * Insert a new entry before the specified head.
  * This is useful for implementing queues.
  */
-static __inline__ void ntfs_list_add_tail(struct ntfs_list_head *new,
-		struct ntfs_list_head *head)
+static __inline__ void ntfs_list_add_tail(
+struct ntfs_list_head * new,
+		struct ntfs_list_head * head)
 {
 	__ntfs_list_add(new, head->prev, head);
 }
@@ -103,8 +108,9 @@ static __inline__ void ntfs_list_add_tail(struct ntfs_list_head *new,
  * This is only for internal list manipulation where we know the prev/next
  * entries already!
  */
-static __inline__ void __ntfs_list_del(struct ntfs_list_head * prev,
-		struct ntfs_list_head * next)
+static __inline__ void __ntfs_list_del(
+	struct ntfs_list_head *prev,
+	struct ntfs_list_head *next)
 {
 	next->prev = prev;
 	prev->next = next;
@@ -146,20 +152,22 @@ static __inline__ int ntfs_list_empty(struct ntfs_list_head *head)
  * @list:	the new list to add.
  * @head:	the place to add it in the first list.
  */
-static __inline__ void ntfs_list_splice(struct ntfs_list_head *list,
-		struct ntfs_list_head *head)
+static __inline__ void ntfs_list_splice(
+	struct ntfs_list_head *list,
+	struct ntfs_list_head *head)
 {
 	struct ntfs_list_head *first = list->next;
 
-	if (first != list) {
+	if (first != list)
+	{
 		struct ntfs_list_head *last = list->prev;
-		struct ntfs_list_head *at = head->next;
+		struct ntfs_list_head *at   = head->next;
 
 		first->prev = head;
-		head->next = first;
+		head->next  = first;
 
 		last->next = at;
-		at->prev = last;
+		at->prev   = last;
 	}
 }
 

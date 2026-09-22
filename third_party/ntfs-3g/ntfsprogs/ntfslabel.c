@@ -57,15 +57,16 @@
 
 static const char *EXEC_NAME = "ntfslabel";
 
-static struct options {
-	char	*device;	/* Device/File to work with */
-	char	*label;		/* Set the label to this */
-	int	 quiet;		/* Less output */
-	int	 verbose;	/* Extra output */
-	int	 force;		/* Override common sense */
-	int	 new_serial;	/* Change the serial number */
-	unsigned long long serial;	/* Forced serial number value */
-	int	 noaction;	/* Do not write to disk */
+static struct options
+{
+	char *             device;     /* Device/File to work with */
+	char *             label;      /* Set the label to this */
+	int                quiet;      /* Less output */
+	int                verbose;    /* Extra output */
+	int                force;      /* Override common sense */
+	int                new_serial; /* Change the serial number */
+	unsigned long long serial;     /* Forced serial number value */
+	int                noaction;   /* Do not write to disk */
 } opts;
 
 /**
@@ -77,8 +78,11 @@ static struct options {
  */
 static void version(void)
 {
-	ntfs_log_info("\n%s v%s (libntfs-3g) - Display, or set, the label for an "
-			"NTFS Volume.\n\n", EXEC_NAME, VERSION);
+	ntfs_log_info(
+		"\n%s v%s (libntfs-3g) - Display, or set, the label for an "
+		"NTFS Volume.\n\n",
+		EXEC_NAME,
+		VERSION);
 	ntfs_log_info("Copyright (c)\n");
 	ntfs_log_info("    2002      Matthew J. Fanto\n");
 	ntfs_log_info("    2002-2005 Anton Altaparmakov\n");
@@ -96,16 +100,17 @@ static void version(void)
  */
 static void usage(void)
 {
-	ntfs_log_info("\nUsage: %s [options] device [label]\n"
-	       "    -n, --no-action    Do not write to disk\n"
-	       "    -f, --force        Use less caution\n"
-	       "        --new-serial   Set a new serial number\n"
-	       "        --new-half-serial Set a partial new serial number\n"
-	       "    -q, --quiet        Less output\n"
-	       "    -v, --verbose      More output\n"
-	       "    -V, --version      Display version information\n"
-	       "    -h, --help         Display this help\n\n",
-	       EXEC_NAME);
+	ntfs_log_info(
+		"\nUsage: %s [options] device [label]\n"
+		"    -n, --no-action    Do not write to disk\n"
+		"    -f, --force        Use less caution\n"
+		"        --new-serial   Set a new serial number\n"
+		"        --new-half-serial Set a partial new serial number\n"
+		"    -q, --quiet        Less output\n"
+		"    -v, --verbose      More output\n"
+		"    -V, --version      Display version information\n"
+		"    -h, --help         Display this help\n\n",
+		EXEC_NAME);
 	ntfs_log_info("%s%s\n", ntfs_bugs, ntfs_home);
 }
 
@@ -120,86 +125,91 @@ static void usage(void)
  */
 static int parse_options(int argc, char *argv[])
 {
-	static const char *sopt = "-fh?IinqvV";
+	static const char *        sopt   = "-fh?IinqvV";
 	static const struct option lopt[] = {
-		{ "force",	 no_argument,		NULL, 'f' },
-		{ "help",	 no_argument,		NULL, 'h' },
-		{ "new-serial",  optional_argument,	NULL, 'I' },
-		{ "new-half-serial", optional_argument,	NULL, 'i' },
-		{ "no-action",	 no_argument,		NULL, 'n' },
-		{ "quiet",	 no_argument,		NULL, 'q' },
-		{ "verbose",	 no_argument,		NULL, 'v' },
-		{ "version",	 no_argument,		NULL, 'V' },
-		{ NULL, 0, NULL, 0 },
+		{"force", no_argument, NULL, 'f'},
+		{"help", no_argument, NULL, 'h'},
+		{"new-serial", optional_argument, NULL, 'I'},
+		{"new-half-serial", optional_argument, NULL, 'i'},
+		{"no-action", no_argument, NULL, 'n'},
+		{"quiet", no_argument, NULL, 'q'},
+		{"verbose", no_argument, NULL, 'v'},
+		{"version", no_argument, NULL, 'V'},
+		{NULL, 0, NULL, 0},
 	};
 
-	int c = -1;
-	int err  = 0;
-	int ver  = 0;
-	int help = 0;
-	int levels = 0;
+	int   c      = -1;
+	int   err    = 0;
+	int   ver    = 0;
+	int   help   = 0;
+	int   levels = 0;
 	char *endserial;
 
 	opterr = 0; /* We'll handle the errors, thank you. */
 
-	while ((c = getopt_long(argc, argv, sopt, lopt, NULL)) != -1) {
-		switch (c) {
-		case 1:	/* A non-option argument */
-			if (!err && !opts.device)
-				opts.device = argv[optind-1];
-			else if (!err && !opts.label)
-				opts.label = argv[optind-1];
-			else
-				err++;
-			break;
-		case 'f':
-			opts.force++;
-			break;
-		case 'h':
-			help++;
-			break;
-		case 'I' :	/* not proposed as a short option letter */
-			if (optarg) {
-				opts.serial = strtoull(optarg, &endserial, 16);
-				if (*endserial)
-					ntfs_log_error("Bad hexadecimal serial number.\n");
-			}
-			opts.new_serial |= 2;
-			break;
-		case 'i' :	/* not proposed as a short option letter */
-			if (optarg) {
-				opts.serial = strtoull(optarg, &endserial, 16)
-							<< 32;
-				if (*endserial)
-					ntfs_log_error("Bad hexadecimal serial number.\n");
-			}
-			opts.new_serial |= 1;
-			break;
-		case 'n':
-			opts.noaction++;
-			break;
-		case 'q':
-			opts.quiet++;
-			ntfs_log_clear_levels(NTFS_LOG_LEVEL_QUIET);
-			break;
-		case 'v':
-			opts.verbose++;
-			ntfs_log_set_levels(NTFS_LOG_LEVEL_VERBOSE);
-			break;
-		case 'V':
-			ver++;
-			break;
-		case '?':
-			if (strncmp (argv[optind-1], "--log-", 6) == 0) {
-				if (!ntfs_log_parse_option (argv[optind-1]))
+	while ((c = getopt_long(argc, argv, sopt, lopt, NULL)) != -1)
+	{
+		switch (c)
+		{
+			case 1: /* A non-option argument */
+				if (!err && !opts.device)
+					opts.device = argv[optind - 1];
+				else if (!err && !opts.label)
+					opts.label = argv[optind - 1];
+				else
 					err++;
 				break;
-			}
+			case 'f':
+				opts.force++;
+				break;
+			case 'h':
+				help++;
+				break;
+			case 'I': /* not proposed as a short option letter */
+				if (optarg)
+				{
+					opts.serial = strtoull(optarg, &endserial, 16);
+					if (*endserial)
+						ntfs_log_error("Bad hexadecimal serial number.\n");
+				}
+				opts.new_serial |= 2;
+				break;
+			case 'i': /* not proposed as a short option letter */
+				if (optarg)
+				{
+					opts.serial = strtoull(optarg, &endserial, 16)
+							<< 32;
+					if (*endserial)
+						ntfs_log_error("Bad hexadecimal serial number.\n");
+				}
+				opts.new_serial |= 1;
+				break;
+			case 'n':
+				opts.noaction++;
+				break;
+			case 'q':
+				opts.quiet++;
+				ntfs_log_clear_levels(NTFS_LOG_LEVEL_QUIET);
+				break;
+			case 'v':
+				opts.verbose++;
+				ntfs_log_set_levels(NTFS_LOG_LEVEL_VERBOSE);
+				break;
+			case 'V':
+				ver++;
+				break;
+			case '?':
+				if (strncmp(argv[optind - 1], "--log-", 6) == 0)
+				{
+					if (!ntfs_log_parse_option(argv[optind - 1]))
+						err++;
+					break;
+				}
 			/* fall through */
-		default:
-			ntfs_log_error("Unknown option '%s'.\n", argv[optind-1]);
-			err++;
-			break;
+			default:
+				ntfs_log_error("Unknown option '%s'.\n", argv[optind - 1]);
+				err++;
+				break;
 		}
 	}
 
@@ -210,18 +220,24 @@ static int parse_options(int argc, char *argv[])
 	if (!(levels & NTFS_LOG_LEVEL_QUIET))
 		opts.quiet++;
 
-	if (help || ver) {
+	if (help || ver)
+	{
 		opts.quiet = 0;
-	} else {
-		if (opts.device == NULL) {
+	}
+	else
+	{
+		if (opts.device == NULL)
+		{
 			if (argc > 1)
 				ntfs_log_error("You must specify a device.\n");
 			err++;
 		}
 
-		if (opts.quiet && opts.verbose) {
-			ntfs_log_error("You may not use --quiet and --verbose at "
-					"the same time.\n");
+		if (opts.quiet && opts.verbose)
+		{
+			ntfs_log_error(
+				"You may not use --quiet and --verbose at "
+				"the same time.\n");
 			err++;
 		}
 	}
@@ -231,44 +247,60 @@ static int parse_options(int argc, char *argv[])
 	if (help || err)
 		usage();
 
-		/* tri-state 0 : done, 1 : error, -1 : proceed */
+	/* tri-state 0 : done, 1 : error, -1 : proceed */
 	return (err ? 1 : (help || ver ? 0 : -1));
 }
 
-static int change_serial(ntfs_volume *vol, u64 sector, le64 serial_number,
-			NTFS_BOOT_SECTOR *bs, NTFS_BOOT_SECTOR *oldbs)
+static int change_serial(
+	ntfs_volume *     vol,
+	u64               sector,
+	le64              serial_number,
+	NTFS_BOOT_SECTOR *bs,
+	NTFS_BOOT_SECTOR *oldbs)
 {
-	int res;
+	int  res;
 	le64 mask;
 	BOOL same;
 
 	res = -1;
-        if ((ntfs_pread(vol->dev, sector << vol->sector_size_bits,
-			vol->sector_size, bs) == vol->sector_size)) {
+	if ((ntfs_pread(
+		vol->dev,
+		sector << vol->sector_size_bits,
+		vol->sector_size,
+		bs) == vol->sector_size))
+	{
 		same = TRUE;
 		if (!sector)
-				/* save the real bootsector */
+			/* save the real bootsector */
 			memcpy(oldbs, bs, vol->sector_size);
 		else
-				/* backup bootsector must be similar */
+			/* backup bootsector must be similar */
 			same = !memcmp(oldbs, bs, vol->sector_size);
-		if (same) {
+		if (same)
+		{
 			if (opts.new_serial & 2)
 				bs->volume_serial_number = serial_number;
-			else {
+			else
+			{
 				mask = const_cpu_to_le64(~0x0ffffffffULL);
 				bs->volume_serial_number
-				    = (serial_number & mask)
-					| (bs->volume_serial_number & ~mask);
+						= (serial_number & mask)
+						| (bs->volume_serial_number & ~mask);
 			}
 			if (opts.noaction
-			    || (ntfs_pwrite(vol->dev,
-				sector << vol->sector_size_bits,
-				vol->sector_size, bs) == vol->sector_size)) {
+				|| (ntfs_pwrite(
+					vol->dev,
+					sector << vol->sector_size_bits,
+					vol->sector_size,
+					bs) == vol->sector_size))
+			{
 				res = 0;
 			}
-		} else {
-			ntfs_log_info("* Warning : the backup boot sector"
+		}
+		else
+		{
+			ntfs_log_info(
+				"* Warning : the backup boot sector"
 				" does not match (leaving unchanged)\n");
 			res = 0;
 		}
@@ -278,36 +310,46 @@ static int change_serial(ntfs_volume *vol, u64 sector, le64 serial_number,
 
 static int set_new_serial(ntfs_volume *vol)
 {
-	NTFS_BOOT_SECTOR *bs; /* full boot sectors */
+	NTFS_BOOT_SECTOR *bs;    /* full boot sectors */
 	NTFS_BOOT_SECTOR *oldbs; /* full original boot sector */
-	le64 serial_number;
-	u64 number_of_sectors;
-	u64 sn;
-	int res;
+	le64              serial_number;
+	u64               number_of_sectors;
+	u64               sn;
+	int               res;
 
-	res = -1;
-	bs = (NTFS_BOOT_SECTOR*)ntfs_malloc(vol->sector_size);
-	oldbs = (NTFS_BOOT_SECTOR*)ntfs_malloc(vol->sector_size);
-	if (bs && oldbs) {
+	res   = -1;
+	bs    = (NTFS_BOOT_SECTOR *) ntfs_malloc(vol->sector_size);
+	oldbs = (NTFS_BOOT_SECTOR *) ntfs_malloc(vol->sector_size);
+	if (bs && oldbs)
+	{
 		if (opts.serial)
 			serial_number = cpu_to_le64(opts.serial);
-		else {
+		else
+		{
 			/* different values for parallel processes */
-			srandom(time((time_t*)NULL) ^ (getpid() << 16));
-			sn = ((u64)random() << 32)
-					| ((u64)random() & 0xffffffff);
+			srandom(time((time_t *) NULL) ^ (getpid() << 16));
+			sn = ((u64) random() << 32)
+					| ((u64) random() & 0xffffffff);
 			serial_number = cpu_to_le64(sn);
 		}
-		if (!change_serial(vol, 0, serial_number, bs, oldbs)) {
-			number_of_sectors = ntfs_device_size_get(vol->dev,
-						vol->sector_size);
-			if (!change_serial(vol, number_of_sectors - 1,
-						serial_number, bs, oldbs)) {
-				ntfs_log_info("New serial number : %016llx\n",
-					(long long)le64_to_cpu(
+		if (!change_serial(vol, 0, serial_number, bs, oldbs))
+		{
+			number_of_sectors = ntfs_device_size_get(
+				vol->dev,
+				vol->sector_size);
+			if (!change_serial(
+				vol,
+				number_of_sectors - 1,
+				serial_number,
+				bs,
+				oldbs))
+			{
+				ntfs_log_info(
+					"New serial number : %016llx\n",
+					(long long) le64_to_cpu(
 						bs->volume_serial_number));
 				res = 0;
-				}
+			}
 		}
 		free(bs);
 		free(oldbs);
@@ -320,15 +362,20 @@ static int set_new_serial(ntfs_volume *vol)
 static int print_serial(ntfs_volume *vol)
 {
 	NTFS_BOOT_SECTOR *bs; /* full boot sectors */
-	int res;
+	int               res;
 
 	res = -1;
-	bs = (NTFS_BOOT_SECTOR*)ntfs_malloc(vol->sector_size);
+	bs  = (NTFS_BOOT_SECTOR *) ntfs_malloc(vol->sector_size);
 	if (bs
-	    && (ntfs_pread(vol->dev, 0,
-			vol->sector_size, bs) == vol->sector_size)) {
-		ntfs_log_info("Serial number : %016llx\n",
-			(long long)le64_to_cpu(bs->volume_serial_number));
+		&& (ntfs_pread(
+			vol->dev,
+			0,
+			vol->sector_size,
+			bs) == vol->sector_size))
+	{
+		ntfs_log_info(
+			"Serial number : %016llx\n",
+			(long long) le64_to_cpu(bs->volume_serial_number));
 		res = 0;
 		free(bs);
 	}
@@ -350,9 +397,12 @@ static int print_label(ntfs_volume *vol, unsigned long mnt_flags)
 	int result = 0;
 	//XXX significant?
 	if ((mnt_flags & (NTFS_MF_MOUNTED | NTFS_MF_READONLY)) ==
-			NTFS_MF_MOUNTED) {
-		ntfs_log_error("%s is mounted read-write, results may be "
-			"unreliable.\n", opts.device);
+		NTFS_MF_MOUNTED)
+	{
+		ntfs_log_error(
+			"%s is mounted read-write, results may be "
+			"unreliable.\n",
+			opts.device);
 		result = 1;
 	}
 
@@ -375,25 +425,28 @@ static int print_label(ntfs_volume *vol, unsigned long mnt_flags)
 static int change_label(ntfs_volume *vol, char *label)
 {
 	ntfschar *new_label = NULL;
-	int label_len;
-	int result = 0;
+	int       label_len;
+	int       result = 0;
 
 	label_len = ntfs_mbstoucs(label, &new_label);
-	if (label_len == -1) {
+	if (label_len == -1)
+	{
 		ntfs_log_perror("Unable to convert label string to Unicode");
 		return 1;
 	}
-	else if (label_len*sizeof(ntfschar) > 0x100) {
-		ntfs_log_warning("New label is too long. Maximum %u characters "
-				"allowed. Truncating %u excess characters.\n",
-				(unsigned)(0x100 / sizeof(ntfschar)),
-				(unsigned)(label_len -
+	else if (label_len * sizeof(ntfschar) > 0x100)
+	{
+		ntfs_log_warning(
+			"New label is too long. Maximum %u characters "
+			"allowed. Truncating %u excess characters.\n",
+			(unsigned) (0x100 / sizeof(ntfschar)),
+			(unsigned) (label_len -
 				(0x100 / sizeof(ntfschar))));
-		label_len = 0x100 / sizeof(ntfschar);
+		label_len            = 0x100 / sizeof(ntfschar);
 		new_label[label_len] = const_cpu_to_le16(0);
 	}
 
-	if(!opts.noaction)
+	if (!opts.noaction)
 		result = ntfs_volume_rename(vol, new_label, label_len) ? 1 : 0;
 
 	free(new_label);
@@ -411,8 +464,8 @@ static int change_label(ntfs_volume *vol, char *label)
 int main(int argc, char **argv)
 {
 	unsigned long mnt_flags = 0;
-	int result = 0;
-	ntfs_volume *vol;
+	int           result    = 0;
+	ntfs_volume * vol;
 
 	ntfs_log_set_handler(ntfs_log_handler_outerr);
 
@@ -424,10 +477,11 @@ int main(int argc, char **argv)
 	utils_set_locale();
 
 	if ((opts.label || opts.new_serial)
-	    && !opts.noaction
-	    && !opts.force
-	    && !ntfs_check_if_mounted(opts.device, &mnt_flags)
-	    && (mnt_flags & NTFS_MF_MOUNTED)) {
+		&& !opts.noaction
+		&& !opts.force
+		&& !ntfs_check_if_mounted(opts.device, &mnt_flags)
+		&& (mnt_flags & NTFS_MF_MOUNTED))
+	{
 		ntfs_log_error("Cannot make changes to a mounted device\n");
 		result = 1;
 		goto abort;
@@ -436,17 +490,21 @@ int main(int argc, char **argv)
 	if (!opts.label && !opts.new_serial)
 		opts.noaction++;
 
-	vol = utils_mount_volume(opts.device,
-			(opts.noaction ? NTFS_MNT_RDONLY : 0) |
-			(opts.force ? NTFS_MNT_RECOVER : 0));
+	vol = utils_mount_volume(
+		opts.device,
+		(opts.noaction ? NTFS_MNT_RDONLY : 0) |
+		(opts.force ? NTFS_MNT_RECOVER : 0));
 	if (!vol)
 		return 1;
 
-	if (opts.new_serial) {
+	if (opts.new_serial)
+	{
 		result = set_new_serial(vol);
 		if (result)
 			goto unmount;
-	} else {
+	}
+	else
+	{
 		if (opts.verbose)
 			result = print_serial(vol);
 	}
@@ -458,7 +516,7 @@ int main(int argc, char **argv)
 unmount :
 	ntfs_umount(vol, FALSE);
 abort :
-		/* "result" may be a negative reply of a library function */
+	/* "result" may be a negative reply of a library function */
 	return (result ? 1 : 0);
 }
 

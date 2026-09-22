@@ -34,12 +34,12 @@
 #include <sys/types.h>
 #endif
 
-typedef uint8_t  u8;			/* Unsigned types of an exact size */
+typedef uint8_t  u8; /* Unsigned types of an exact size */
 typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 
-typedef int8_t  s8;			/* Signed types of an exact size */
+typedef int8_t  s8; /* Signed types of an exact size */
 typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
@@ -64,16 +64,16 @@ typedef u16 sbe16;
 typedef u32 sbe32;
 typedef u64 sbe64;
 
-typedef le16 ntfschar;			/* 2-byte Unicode character type. */
+typedef le16 ntfschar; /* 2-byte Unicode character type. */
 #define UCHAR_T_SIZE_BITS 1
 
 /*
  * Clusters are signed 64-bit values on NTFS volumes.  We define two types, LCN
  * and VCN, to allow for type checking and better code readability.
  */
-typedef s64 VCN;
+typedef s64   VCN;
 typedef sle64 leVCN;
-typedef s64 LCN;
+typedef s64   LCN;
 typedef sle64 leLCN;
 
 /*
@@ -81,7 +81,7 @@ typedef sle64 leLCN;
  * values.  We define our own type LSN, to allow for type checking and better
  * code readability.
  */
-typedef s64 LSN;
+typedef s64   LSN;
 typedef sle64 leLSN;
 
 /*
@@ -92,34 +92,36 @@ typedef sle64 leLSN;
 /**
  * enum BOOL - These are just to make the code more readable...
  */
-typedef enum {
-#ifndef FALSE
+typedef enum
+{
+	#ifndef FALSE
 	FALSE = 0,
-#endif
-#ifndef NO
+	#endif
+	#ifndef NO
 	NO = 0,
-#endif
-#ifndef ZERO
+	#endif
+	#ifndef ZERO
 	ZERO = 0,
-#endif
-#ifndef TRUE
+	#endif
+	#ifndef TRUE
 	TRUE = 1,
-#endif
-#ifndef YES
+	#endif
+	#ifndef YES
 	YES = 1,
-#endif
-#ifndef ONE
+	#endif
+	#ifndef ONE
 	ONE = 1,
-#endif
+	#endif
 } BOOL;
 #endif /* defined _WINDEF_H */
 
 /**
  * enum IGNORE_CASE_BOOL -
  */
-typedef enum {
+typedef enum
+{
 	CASE_SENSITIVE = 0,
-	IGNORE_CASE = 1,
+	IGNORE_CASE    = 1,
 } IGNORE_CASE_BOOL;
 
 #define STATUS_OK				(0)
@@ -131,10 +133,11 @@ typedef enum {
 /*
  *	Force alignment in a struct if required by processor
  */
-union ALIGNMENT {
-	u64 u64align;
+union ALIGNMENT
+{
+	u64   u64align;
 	void *ptralign;
-} ;
+};
 
 #endif /* defined _NTFS_TYPES_H */
 

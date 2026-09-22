@@ -31,63 +31,67 @@
 
 #include "raw/win_disk.h"  // DriverLoad
 
-namespace icemelt {
+namespace icemelt
+{
+	// 「未签名的 WinDisk 能不能装载」这一次探测的完整结果。
+	//
+	// 判据只有一个 —— 装载返回码（见 win_disk.h::DriverLoad）：577 就是签名强制还在拦。
+	// 被拦下时**不是**去换个接口"查 DSE"，而是直接 kdu -dse 0，然后**重新装载一次**：
+	// 装上了才算真的解开。kdu 自己的退出码不作数（它的 ControlDSE 回调在"值本来就是 0"时
+	// 也返回 1，实测）。
+	struct DriverLoadOutcome
+	{
+		DriverLoad   result = DriverLoad::Failed; // 最终的装载结果
+		bool         kduRan = false;              // 这次是否真的调用过 kdu
+		std::wstring firstError;                  // 第一次装载失败的原因（空 = 没失败）
+		std::wstring kduLog;                      // kdu 的原始输出（空 = 没调用）
+		std::wstring retryError;                  // 重新装载失败的原因（空 = 没失败或已成功）
+	};
 
-// 「未签名的 WinDisk 能不能装载」这一次探测的完整结果。
-//
-// 判据只有一个 —— 装载返回码（见 win_disk.h::DriverLoad）：577 就是签名强制还在拦。
-// 被拦下时**不是**去换个接口"查 DSE"，而是直接 kdu -dse 0，然后**重新装载一次**：
-// 装上了才算真的解开。kdu 自己的退出码不作数（它的 ControlDSE 回调在"值本来就是 0"时
-// 也返回 1，实测）。
-struct DriverLoadOutcome {
-    DriverLoad result = DriverLoad::Failed;  // 最终的装载结果
-    bool kduRan = false;                     // 这次是否真的调用过 kdu
-    std::wstring firstError;                 // 第一次装载失败的原因（空 = 没失败）
-    std::wstring kduLog;                     // kdu 的原始输出（空 = 没调用）
-    std::wstring retryError;                 // 重新装载失败的原因（空 = 没失败或已成功）
-};
+	// 确保「未签名的 WinDisk 能被装载」这件事成立：
+	//   装载 → 被 577(ERROR_INVALID_IMAGE_HASH) 拒绝 → kdu -dse 0 → 重新装载 → 复测结果。
+	//
+	// melt 的第一步和环境自检共用这一份实现，免得两处各写一遍然后漂移（环境自检原先只报
+	// "melt runs kdu -dse 0 and retries"，那是预测不是结论）。
+	//
+	// allowKdu=false：只探测、不调用 kdu（用于 --dump 这类必须保持"只读"的纯报告路径）。
+	// 探测失败时会顺手删掉本次探测建出来的服务键 —— 前提正是"装载被拒"，没有驱动在跑，
+	// 注册表与 SCM 因此一致；反过来装载成功时**绝不能删**（驱动还加载着，删键会让两者脱节）。
+	DriverLoadOutcome EnsureUnsignedDriverLoads(
+		const std::filesystem::path &exeDir,
+		bool                         allowKdu);
 
-// 确保「未签名的 WinDisk 能被装载」这件事成立：
-//   装载 → 被 577(ERROR_INVALID_IMAGE_HASH) 拒绝 → kdu -dse 0 → 重新装载 → 复测结果。
-//
-// melt 的第一步和环境自检共用这一份实现，免得两处各写一遍然后漂移（环境自检原先只报
-// "melt runs kdu -dse 0 and retries"，那是预测不是结论）。
-//
-// allowKdu=false：只探测、不调用 kdu（用于 --dump 这类必须保持"只读"的纯报告路径）。
-// 探测失败时会顺手删掉本次探测建出来的服务键 —— 前提正是"装载被拒"，没有驱动在跑，
-// 注册表与 SCM 因此一致；反过来装载成功时**绝不能删**（驱动还加载着，删键会让两者脱节）。
-DriverLoadOutcome EnsureUnsignedDriverLoads(const std::filesystem::path& exeDir, bool allowKdu);
+	struct MeltOptions
+	{
+		bool dryRun = false;
+		std::filesystem::path winDiskSysPath; // 缺省 <exeDir>/WinDisk_x64.sys
+		std::filesystem::path hiveOutPath; // 缺省 %TEMP%\icemelt-system.hive
+		std::filesystem::path exeDir; // 缺省 ExeDir()
+		// 非 dryRun 时必需：收到「待确认」清单后返回是否继续。为空即中止。
+		std::function<bool(const struct MeltResult &)> confirm;
+	};
 
-struct MeltOptions {
-    bool dryRun = false;
-    std::filesystem::path winDiskSysPath;   // 缺省 <exeDir>/WinDisk_x64.sys
-    std::filesystem::path hiveOutPath;      // 缺省 %TEMP%\icemelt-system.hive
-    std::filesystem::path exeDir;           // 缺省 ExeDir()
-    // 非 dryRun 时必需：收到「待确认」清单后返回是否继续。为空即中止。
-    std::function<bool(const struct MeltResult&)> confirm;
-};
+	struct MeltResult
+	{
+		bool                      ok        = false;
+		// 是否已经动过裸盘。失败时调用方据此区分「什么都没发生」与「状态可能不一致」——
+		// 这两种情况给用户的指示完全不同。
+		bool                      wroteDisk = false;
+		std::vector<std::wstring> log;     // 全量日志（ASCII）
+		std::vector<std::wstring> pending; // 待用户确认的动作（仅第 7 步）：
+		// 将写入的 hive 与其 RegBack 副本、将置的卷标记、重启指引
+	};
 
-struct MeltResult {
-    bool ok = false;
-    // 是否已经动过裸盘。失败时调用方据此区分「什么都没发生」与「状态可能不一致」——
-    // 这两种情况给用户的指示完全不同。
-    bool wroteDisk = false;
-    std::vector<std::wstring> log;      // 全量日志（ASCII）
-    std::vector<std::wstring> pending;  // 待用户确认的动作（仅第 7 步）：
-                                        // 将写入的 hive 与其 RegBack 副本、将置的卷标记、重启指引
-};
+	using MeltLogger = std::function<void(const std::wstring &)>;
 
-using MeltLogger = std::function<void(const std::wstring&)>;
+	// 执行整条链路。log 可为空；只读阶段（dryRun / 预检 / 第 6 步）不需要提权以外的条件。
+	MeltResult RunMelt(const MeltOptions &opt, const MeltLogger &log);
 
-// 执行整条链路。log 可为空；只读阶段（dryRun / 预检 / 第 6 步）不需要提权以外的条件。
-MeltResult RunMelt(const MeltOptions& opt, const MeltLogger& log);
+	// 供两个前端复用的只读预演（等价于 RunMelt(opt{dryRun=true})）
+	MeltResult DryRun(const MeltOptions &opt, const MeltLogger &log);
 
-// 供两个前端复用的只读预演（等价于 RunMelt(opt{dryRun=true})）
-MeltResult DryRun(const MeltOptions& opt, const MeltLogger& log);
-
-// --preflight 一次性位置扫描：装驱动 + 打开设备后跳过注册表与 hive 写回，只做
-// logstate + 四深度目录对照写/校验/取证 + 失败时三级 DiagnoseWritePath 拆解。
-// 不写 SYSTEM、不碰 RegBack、不复位；结束卸载并删除 WinDisk。
-MeltResult RunPreflightScan(const MeltOptions& opt, const MeltLogger& log);
-
-}  // namespace icemelt
+	// --preflight 一次性位置扫描：装驱动 + 打开设备后跳过注册表与 hive 写回，只做
+	// logstate + 四深度目录对照写/校验/取证 + 失败时三级 DiagnoseWritePath 拆解。
+	// 不写 SYSTEM、不碰 RegBack、不复位；结束卸载并删除 WinDisk。
+	MeltResult RunPreflightScan(const MeltOptions &opt, const MeltLogger &log);
+} // namespace icemelt

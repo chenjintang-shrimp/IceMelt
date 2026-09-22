@@ -89,15 +89,18 @@
 static int fstrim_clusters(ntfs_volume *vol, LCN lcn, s64 length)
 {
 	struct ntfs_device *dev = vol->dev;
-	uint64_t range[2];
+	uint64_t            range[2];
 
-	ntfs_log_debug("fstrim_clusters: %lld length %lld\n",
-		(long long) lcn, (long long) length);
+	ntfs_log_debug(
+		"fstrim_clusters: %lld length %lld\n",
+		(long long) lcn,
+		(long long) length);
 
 	range[0] = lcn << vol->cluster_size_bits;
 	range[1] = length << vol->cluster_size_bits;
 
-	if (dev->d_ops->ioctl(dev, BLKDISCARD, range) == -1) {
+	if (dev->d_ops->ioctl(dev, BLKDISCARD, range) == -1)
+	{
 		ntfs_log_debug("fstrim_one_cluster: ioctl failed: %m\n");
 		return -errno;
 	}
@@ -111,19 +114,20 @@ static int read_line(const char *path, char *line, size_t max_bytes)
 	fp = fopen(path, "r");
 	if (fp == NULL)
 		return -errno;
-	if (fgets(line, max_bytes, fp) == NULL) {
+	if (fgets(line, max_bytes, fp) == NULL)
+	{
 		int ret = -EIO; /* fgets doesn't set errno */
 		fclose(fp);
 		return ret;
 	}
-	fclose (fp);
+	fclose(fp);
 	return 0;
 }
 
 static int read_u64(const char *path, u64 *n)
 {
 	char line[64];
-	int ret;
+	int  ret;
 
 	ret = read_line(path, line, sizeof line);
 	if (ret)
@@ -135,19 +139,22 @@ static int read_u64(const char *path, u64 *n)
 
 /* Find discard limits for current backing device.
  */
-static int fstrim_limits(ntfs_volume *vol,
-			u64 *discard_alignment,
-			u64 *discard_granularity,
-			u64 *discard_max_bytes)
+static int fstrim_limits(
+	ntfs_volume *vol,
+	u64 *        discard_alignment,
+	u64 *        discard_granularity,
+	u64 *        discard_max_bytes)
 {
 	struct stat statbuf;
-	char path1[40]; /* holds "/sys/dev/block/%d:%d" */
-	char path2[40 + sizeof(path1)]; /* less than 40 bytes more than path1 */
-	int ret;
+	char        path1[40];                 /* holds "/sys/dev/block/%d:%d" */
+	char        path2[40 + sizeof(path1)]; /* less than 40 bytes more than path1 */
+	int         ret;
 
 	/* Stat the backing device.  Caller has ensured it is a block device. */
-	if (stat(vol->dev->d_name, &statbuf) == -1) {
-		ntfs_log_debug("fstrim_limits: could not stat %s\n",
+	if (stat(vol->dev->d_name, &statbuf) == -1)
+	{
+		ntfs_log_debug(
+			"fstrim_limits: could not stat %s\n",
 			vol->dev->d_name);
 		return -errno;
 	}
@@ -161,12 +168,17 @@ static int fstrim_limits(ntfs_volume *vol,
 	 * /sys/dev/block/MAJOR:MINOR/../queue/discard_granularity
 	 * /sys/dev/block/MAJOR:MINOR/../queue/discard_max_bytes
 	 */
-	snprintf(path1, sizeof path1, "/sys/dev/block/%d:%d",
-		major(statbuf.st_rdev), minor(statbuf.st_rdev));
+	snprintf(
+		path1,
+		sizeof path1,
+		"/sys/dev/block/%d:%d",
+		major(statbuf.st_rdev),
+		minor(statbuf.st_rdev));
 
 	snprintf(path2, sizeof path2, "%s/discard_alignment", path1);
 	ret = read_u64(path2, discard_alignment);
-	if (ret) {
+	if (ret)
+	{
 		if (ret != -ENOENT)
 			return ret;
 		else
@@ -179,14 +191,20 @@ static int fstrim_limits(ntfs_volume *vol,
 
 	snprintf(path2, sizeof path2, "%s/queue/discard_granularity", path1);
 	ret = read_u64(path2, discard_granularity);
-	if (ret) {
+	if (ret)
+	{
 		if (ret != -ENOENT)
 			return ret;
-		else {
-			snprintf(path2, sizeof path2,
-				"%s/../queue/discard_granularity", path1);
+		else
+		{
+			snprintf(
+				path2,
+				sizeof path2,
+				"%s/../queue/discard_granularity",
+				path1);
 			ret = read_u64(path2, discard_granularity);
-			if (ret) {
+			if (ret)
+			{
 				if (ret != -ENOENT)
 					return ret;
 				else
@@ -197,14 +215,20 @@ static int fstrim_limits(ntfs_volume *vol,
 
 	snprintf(path2, sizeof path2, "%s/queue/discard_max_bytes", path1);
 	ret = read_u64(path2, discard_max_bytes);
-	if (ret) {
+	if (ret)
+	{
 		if (ret != -ENOENT)
 			return ret;
-		else {
-			snprintf(path2, sizeof path2,
-				"%s/../queue/discard_max_bytes", path1);
+		else
+		{
+			snprintf(
+				path2,
+				sizeof path2,
+				"%s/../queue/discard_max_bytes",
+				path1);
 			ret = read_u64(path2, discard_max_bytes);
-			if (ret) {
+			if (ret)
+			{
 				if (ret != -ENOENT)
 					return ret;
 				else
@@ -222,7 +246,7 @@ not_found:
 	 */
 	*discard_alignment = 0;
 	*discard_granularity = 0;
-	*discard_max_bytes = 0;
+	*discard_max_bytes   = 0;
 	return 0;
 }
 
@@ -254,16 +278,17 @@ static inline u64 align_down(ntfs_volume *vol, u64 count, u64 granularity)
  */
 static int fstrim(ntfs_volume *vol, void *data, u64 *trimmed)
 {
-	struct fstrim_range *range = data;
-	u64 start = range->start;
-	u64 len = range->len;
-	u64 minlen = range->minlen;
-	u64 discard_alignment, discard_granularity, discard_max_bytes;
-	u8 *buf = NULL;
-	LCN start_buf;
-	int ret;
+	struct fstrim_range *range  = data;
+	u64                  start  = range->start;
+	u64                  len    = range->len;
+	u64                  minlen = range->minlen;
+	u64                  discard_alignment, discard_granularity, discard_max_bytes;
+	u8 *                 buf = NULL;
+	LCN                  start_buf;
+	int                  ret;
 
-	ntfs_log_debug("fstrim: start=%llu len=%llu minlen=%llu\n",
+	ntfs_log_debug(
+		"fstrim: start=%llu len=%llu minlen=%llu\n",
 		(unsigned long long) start,
 		(unsigned long long) len,
 		(unsigned long long) minlen);
@@ -273,11 +298,13 @@ static int fstrim(ntfs_volume *vol, void *data, u64 *trimmed)
 	/* Fail if user tries to use the fstrim -o/-l/-m options.
 	 * XXX We could fix these limitations in future.
 	 */
-	if (start != 0 || len != (uint64_t)-1) {
+	if (start != 0 || len != (uint64_t) - 1)
+	{
 		ntfs_log_error("fstrim: setting start or length is not supported\n");
 		return -EINVAL;
 	}
-	if (minlen > vol->cluster_size) {
+	if (minlen > vol->cluster_size)
+	{
 		ntfs_log_error("fstrim: minlen > cluster size is not supported\n");
 		return -EINVAL;
 	}
@@ -287,22 +314,29 @@ static int fstrim(ntfs_volume *vol, void *data, u64 *trimmed)
 	 * ioctls used to punch holes in files are completely
 	 * different.
 	 */
-	if (!NDevBlock(vol->dev)) {
+	if (!NDevBlock(vol->dev))
+	{
 		ntfs_log_error("fstrim: not supported for non-block-device\n");
 		return -EOPNOTSUPP;
 	}
 
-	ret = fstrim_limits(vol, &discard_alignment,
-			&discard_granularity, &discard_max_bytes);
+	ret = fstrim_limits(
+		vol,
+		&discard_alignment,
+		&discard_granularity,
+		&discard_max_bytes);
 	if (ret)
 		return ret;
-	if (discard_alignment != 0) {
+	if (discard_alignment != 0)
+	{
 		ntfs_log_error("fstrim: backing device is not aligned for discards\n");
 		return -EOPNOTSUPP;
 	}
 
-	if (discard_max_bytes == 0) {
-		ntfs_log_error("fstrim: backing device does not support discard (discard_max_bytes == 0)\n");
+	if (discard_max_bytes == 0)
+	{
+		ntfs_log_error(
+			"fstrim: backing device does not support discard (discard_max_bytes == 0)\n");
 		return -EOPNOTSUPP;
 	}
 
@@ -316,7 +350,8 @@ static int fstrim(ntfs_volume *vol, void *data, u64 *trimmed)
 	if (buf == NULL)
 		return -errno;
 	for (start_buf = 0; start_buf < vol->nr_clusters;
-	     start_buf += FSTRIM_BUFSIZ * 8) {
+	     start_buf += FSTRIM_BUFSIZ * 8)
+	{
 		s64 count;
 		s64 br;
 		LCN end_buf, start_lcn;
@@ -324,13 +359,14 @@ static int fstrim(ntfs_volume *vol, void *data, u64 *trimmed)
 		/* start_buf is LCN of first cluster in the current buffer.
 		 * end_buf is LCN of last cluster + 1 in the current buffer.
 		 */
-		end_buf = start_buf + FSTRIM_BUFSIZ*8;
+		end_buf = start_buf + FSTRIM_BUFSIZ * 8;
 		if (end_buf > vol->nr_clusters)
 			end_buf = vol->nr_clusters;
 		count = (end_buf - start_buf) / 8;
 
-		br = ntfs_attr_pread(vol->lcnbmp_na, start_buf/8, count, buf);
-		if (br != count) {
+		br = ntfs_attr_pread(vol->lcnbmp_na, start_buf / 8, count, buf);
+		if (br != count)
+		{
 			if (br >= 0)
 				ret = -EIO;
 			else
@@ -342,8 +378,10 @@ static int fstrim(ntfs_volume *vol, void *data, u64 *trimmed)
 		 * not larger than discard_max_bytes, and compatible
 		 * with the supported trim granularity.
 		 */
-		for (start_lcn = start_buf; start_lcn < end_buf; ++start_lcn) {
-			if (!ntfs_bit_get(buf, start_lcn-start_buf)) {
+		for (start_lcn = start_buf; start_lcn < end_buf; ++start_lcn)
+		{
+			if (!ntfs_bit_get(buf, start_lcn - start_buf))
+			{
 				LCN end_lcn;
 				LCN aligned_lcn;
 				u64 aligned_count;
@@ -351,32 +389,39 @@ static int fstrim(ntfs_volume *vol, void *data, u64 *trimmed)
 				/* Cluster 'start_lcn' is not in use,
 				 * find end of this run.
 				 */
-				end_lcn = start_lcn+1;
+				end_lcn = start_lcn + 1;
 				while (end_lcn < end_buf &&
-					(u64) (end_lcn-start_lcn) << vol->cluster_size_bits
-					  < discard_max_bytes &&
-					!ntfs_bit_get(buf, end_lcn-start_buf))
+					(u64)(end_lcn - start_lcn) << vol->cluster_size_bits
+					< discard_max_bytes &&
+					!ntfs_bit_get(buf, end_lcn - start_buf))
 					end_lcn++;
-				aligned_lcn = align_up(vol, start_lcn,
-						discard_granularity);
+				aligned_lcn = align_up(
+					vol,
+					start_lcn,
+					discard_granularity);
 				if (aligned_lcn >= end_lcn)
 					aligned_count = 0;
-				else {
-					aligned_count = 
-						align_down(vol,
-							end_lcn - aligned_lcn,
-							discard_granularity);
+				else
+				{
+					aligned_count =
+							align_down(
+								vol,
+								end_lcn - aligned_lcn,
+								discard_granularity);
 				}
-				if (aligned_count) {
-					ret = fstrim_clusters(vol,
-						aligned_lcn, aligned_count);
+				if (aligned_count)
+				{
+					ret = fstrim_clusters(
+						vol,
+						aligned_lcn,
+						aligned_count);
 					if (ret)
 						goto free_out;
 
 					*trimmed += aligned_count
-						<< vol->cluster_size_bits;
+							<< vol->cluster_size_bits;
 				}
-				start_lcn = end_lcn-1;
+				start_lcn = end_lcn - 1;
 			}
 		}
 	}
@@ -389,17 +434,22 @@ free_out:
 
 #endif /* FITRIM && BLKDISCARD */
 
-int ntfs_ioctl(ntfs_inode *ni, unsigned long cmd,
+int ntfs_ioctl(
+			ntfs_inode *  ni,
+			unsigned long cmd,
 			void *arg __attribute__((unused)),
-			unsigned int flags __attribute__((unused)), void *data)
+
+unsigned int flags __attribute__((unused)),
+void *             data
+)
 {
 	int ret = 0;
 
 	switch (cmd) {
 #if defined(FITRIM) && defined(BLKDISCARD)
-	case FITRIM:
-		if (!ni || !data)
-			ret = -EINVAL;
+	case FITRIM :
+		if (!ni|| !data)
+			ret=-EINVAL;
 		else {
 			u64 trimmed;
 			struct fstrim_range *range = (struct fstrim_range*)data;

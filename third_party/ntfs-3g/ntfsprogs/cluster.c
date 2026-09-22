@@ -43,70 +43,78 @@
  */
 int cluster_find(ntfs_volume *vol, LCN c_begin, LCN c_end, cluster_cb *cb, void *data)
 {
-	int j;
-	int result = -1;
-	struct mft_search_ctx *m_ctx = NULL;
-	ntfs_attr_search_ctx  *a_ctx = NULL;
-	s64 count;
-	BOOL found;
-	ATTR_RECORD *rec;
-	runlist *runs;
+	int                    j;
+	int                    result = -1;
+	struct mft_search_ctx *m_ctx  = NULL;
+	ntfs_attr_search_ctx * a_ctx  = NULL;
+	s64                    count;
+	BOOL                   found;
+	ATTR_RECORD *          rec;
+	runlist *              runs;
 
 	if (!vol || !cb)
 		return -1;
 
-	m_ctx = mft_get_search_ctx(vol);
+	m_ctx               = mft_get_search_ctx(vol);
 	m_ctx->flags_search = FEMR_IN_USE | FEMR_BASE_RECORD;
-	count = 0;
+	count               = 0;
 
-	while (mft_next_record(m_ctx) == 0) {
-
+	while (mft_next_record(m_ctx) == 0)
+	{
 		if (!(m_ctx->flags_match & FEMR_BASE_RECORD))
 			continue;
 
-		ntfs_log_verbose("Inode: %llu\n", (unsigned long long)
-				m_ctx->inode->mft_no);
+		ntfs_log_verbose(
+			"Inode: %llu\n",
+			(unsigned long long)
+			m_ctx->inode->mft_no);
 
 		a_ctx = ntfs_attr_get_search_ctx(m_ctx->inode, NULL);
 
 		found = FALSE;
-		while ((rec = find_attribute(AT_UNUSED, a_ctx))) {
-
-			if (!rec->non_resident) {
-				ntfs_log_verbose("0x%02x skipped - attr is resident\n",
-					(int)le32_to_cpu(a_ctx->attr->type));
+		while ((rec = find_attribute(AT_UNUSED, a_ctx)))
+		{
+			if (!rec->non_resident)
+			{
+				ntfs_log_verbose(
+					"0x%02x skipped - attr is resident\n",
+					(int) le32_to_cpu(a_ctx->attr->type));
 				continue;
 			}
 
 			runs = ntfs_mapping_pairs_decompress(vol, a_ctx->attr, NULL);
-			if (!runs) {
+			if (!runs)
+			{
 				ntfs_log_error("Couldn't read the data runs.\n");
 				goto done;
 			}
 
-			ntfs_log_verbose("\t[0x%02X]\n",
-					(int)le32_to_cpu(a_ctx->attr->type));
+			ntfs_log_verbose(
+				"\t[0x%02X]\n",
+				(int) le32_to_cpu(a_ctx->attr->type));
 
 			ntfs_log_verbose("\t\tVCN\tLCN\tLength\n");
-			for (j = 0; runs[j].length > 0; j++) {
+			for (j = 0; runs[j].length > 0; j++)
+			{
 				LCN a_begin = runs[j].lcn;
 				LCN a_end   = a_begin + runs[j].length - 1;
 
 				if (a_begin < 0)
-					continue;	// sparse, discontiguous, etc
+					continue; // sparse, discontiguous, etc
 
-				ntfs_log_verbose("\t\t%lld\t%lld-%lld (%lld)\n",
-						(long long)runs[j].vcn,
-						(long long)runs[j].lcn,
-						(long long)(runs[j].lcn +
+				ntfs_log_verbose(
+					"\t\t%lld\t%lld-%lld (%lld)\n",
+					(long long) runs[j].vcn,
+					(long long) runs[j].lcn,
+					(long long) (runs[j].lcn +
 						runs[j].length - 1),
-						(long long)runs[j].length);
+					(long long) runs[j].length);
 				//dprint list
 
 				if ((a_begin > c_end) || (a_end < c_begin))
-					continue;	// before or after search range
+					continue; // before or after search range
 
-				if ((*cb) (m_ctx->inode, a_ctx->attr, runs+j, data))
+				if ((*cb)(m_ctx->inode, a_ctx->attr, runs + j, data))
 					return 1;
 				found = TRUE;
 			}
@@ -119,7 +127,7 @@ int cluster_find(ntfs_volume *vol, LCN c_begin, LCN c_end, cluster_cb *cb, void 
 	}
 
 	if (count > 1)
-		ntfs_log_info("* %lld inodes found\n",(long long)count);
+		ntfs_log_info("* %lld inodes found\n", (long long) count);
 	else
 		ntfs_log_info("* %s inode found\n", (count ? "one" : "no"));
 	result = 0;

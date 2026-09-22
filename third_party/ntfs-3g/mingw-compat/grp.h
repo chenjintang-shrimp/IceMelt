@@ -19,14 +19,16 @@ typedef unsigned int uid_t;
 typedef unsigned int gid_t;
 #endif
 
-struct group {
-    char* gr_name;
-    char* gr_passwd;
-    gid_t gr_gid;
-    char** gr_mem;
+struct group
+{
+	char * gr_name;
+	char * gr_passwd;
+	gid_t  gr_gid;
+	char **gr_mem;
 };
 
-struct group* getgrnam(const char* name);
-struct group* getgrgid(gid_t gid);
+struct group *getgrnam(const char *name);
+
+struct group *getgrgid(gid_t gid);
 
 #endif /* NTFS_MINGW_GRP_H */

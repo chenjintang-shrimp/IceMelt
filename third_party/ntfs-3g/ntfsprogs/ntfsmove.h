@@ -25,20 +25,21 @@
 #define _NTFSMOVE_H_
 
 #include "types.h"
-					/* Move files to */
+/* Move files to */
 #define NTFS_MOVE_LOC_START	-1000	/*   the first available space */
 #define NTFS_MOVE_LOC_BEST	-1001	/*   place big enough for entire file */
 #define NTFS_MOVE_LOC_END	-1002	/*   the last available space */
 
-struct options {
-	char		*device;	/* Device/File to work with */
-	char		*file;		/* File to display */
-	s64		 location;	/* Where to place the file */
-	int		 force;		/* Override common sense */
-	int		 quiet;		/* Less output */
-	int		 verbose;	/* Extra output */
-	int		 noaction;	/* Do not write to disk */
-	int		 nodirty;	/* Do not mark volume dirty */
+struct options
+{
+	char *device;   /* Device/File to work with */
+	char *file;     /* File to display */
+	s64   location; /* Where to place the file */
+	int   force;    /* Override common sense */
+	int   quiet;    /* Less output */
+	int   verbose;  /* Extra output */
+	int   noaction; /* Do not write to disk */
+	int   nodirty;  /* Do not mark volume dirty */
 };
 
 #endif /* _NTFSMOVE_H_ */

@@ -25,27 +25,32 @@
 
 #include "inode.h"
 
-struct ntfs_options {
-        char    *mnt_point;     /* Mount point */    
-        char    *options;       /* Mount options */  
-        char    *device;        /* Device to mount */
-	char	*arg_device;	/* Device requested in argv */
-} ;
+struct ntfs_options
+{
+	char *mnt_point;  /* Mount point */
+	char *options;    /* Mount options */
+	char *device;     /* Device to mount */
+	char *arg_device; /* Device requested in argv */
+};
 
-typedef enum {
-	NF_STREAMS_INTERFACE_NONE,	/* No access to named data streams. */
-	NF_STREAMS_INTERFACE_XATTR,	/* Map named data streams to xattrs. */
-	NF_STREAMS_INTERFACE_OPENXATTR,	/* Same, not limited to "user." */
-	NF_STREAMS_INTERFACE_WINDOWS,	/* "file:stream" interface. */
+typedef enum
+{
+	NF_STREAMS_INTERFACE_NONE,      /* No access to named data streams. */
+	NF_STREAMS_INTERFACE_XATTR,     /* Map named data streams to xattrs. */
+	NF_STREAMS_INTERFACE_OPENXATTR, /* Same, not limited to "user." */
+	NF_STREAMS_INTERFACE_WINDOWS,   /* "file:stream" interface. */
 } ntfs_fuse_streams_interface;
 
-struct DEFOPTION {
+struct DEFOPTION
+{
 	const char *name;
-	int type;
-	int flags;
-} ;
-			/* Options, order not significant */
-enum {
+	int         type;
+	int         flags;
+};
+
+/* Options, order not significant */
+enum
+{
 	OPT_RO,
 	OPT_NOATIME,
 	OPT_ATIME,
@@ -96,88 +101,93 @@ enum {
 	OPT_SPECIAL_FILES,
 	OPT_HELP,
 	OPT_VERSION,
-} ;
+};
 
-			/* Option flags */
-enum {
-	FLGOPT_BOGUS = 1,
-	FLGOPT_STRING = 2,
-	FLGOPT_OCTAL = 4,
-	FLGOPT_DECIMAL = 8,
-	FLGOPT_APPEND = 16,
+/* Option flags */
+enum
+{
+	FLGOPT_BOGUS     = 1,
+	FLGOPT_STRING    = 2,
+	FLGOPT_OCTAL     = 4,
+	FLGOPT_DECIMAL   = 8,
+	FLGOPT_APPEND    = 16,
 	FLGOPT_NOSUPPORT = 32,
-	FLGOPT_OPTIONAL = 64
-} ;
+	FLGOPT_OPTIONAL  = 64
+};
 
-typedef enum {
+typedef enum
+{
 	ATIME_ENABLED,
 	ATIME_DISABLED,
 	ATIME_RELATIVE
 } ntfs_atime_t;
 
-typedef enum {
+typedef enum
+{
 	ERR_PLUGIN = 1
 } single_log_t;
 
 #ifndef DISABLE_PLUGINS
 
-typedef struct plugin_list {
-	struct plugin_list *next;
-	void *handle;
+typedef struct plugin_list
+{
+	struct plugin_list *       next;
+	void *                     handle;
 	const plugin_operations_t *ops;
-	le32 tag;
+	le32                       tag;
 } plugin_list_t;
 
 #endif /* DISABLE_PLUGINS */
 
-typedef struct {
-	ntfs_volume *vol;
-	unsigned int uid;
-	unsigned int gid;
-	unsigned int fmask;
-	unsigned int dmask;
+typedef struct
+{
+	ntfs_volume *               vol;
+	unsigned int                uid;
+	unsigned int                gid;
+	unsigned int                fmask;
+	unsigned int                dmask;
 	ntfs_fuse_streams_interface streams;
-	ntfs_atime_t atime;
-	s64 dmtime;
-	BOOL ro;
-	BOOL rw;
-	BOOL show_sys_files;
-	BOOL hide_hid_files;
-	BOOL hide_dot_files;
-	BOOL windows_names;
-	BOOL ignore_case;
-	BOOL compression;
-	BOOL acl;
-	BOOL silent;
-	BOOL recover;
-	BOOL hiberfile;
-	BOOL sync;
-	BOOL big_writes;
-	BOOL debug;
-	BOOL no_detach;
-	BOOL blkdev;
-	BOOL mounted;
-	BOOL posix_nlink;
-	ntfs_volume_special_files special_files;
-#ifdef HAVE_SETXATTR	/* extended attributes interface required */
+	ntfs_atime_t                atime;
+	s64                         dmtime;
+	BOOL                        ro;
+	BOOL                        rw;
+	BOOL                        show_sys_files;
+	BOOL                        hide_hid_files;
+	BOOL                        hide_dot_files;
+	BOOL                        windows_names;
+	BOOL                        ignore_case;
+	BOOL                        compression;
+	BOOL                        acl;
+	BOOL                        silent;
+	BOOL                        recover;
+	BOOL                        hiberfile;
+	BOOL                        sync;
+	BOOL                        big_writes;
+	BOOL                        debug;
+	BOOL                        no_detach;
+	BOOL                        blkdev;
+	BOOL                        mounted;
+	BOOL                        posix_nlink;
+	ntfs_volume_special_files   special_files;
+	#ifdef HAVE_SETXATTR	/* extended attributes interface required */
 	BOOL efs_raw;
-#ifdef XATTR_MAPPINGS
+	#ifdef XATTR_MAPPINGS
 	char *xattrmap_path;
-#endif /* XATTR_MAPPINGS */
-#endif /* HAVE_SETXATTR */
+	#endif /* XATTR_MAPPINGS */
+	#endif /* HAVE_SETXATTR */
 	struct fuse_chan *fc;
-	BOOL inherit;
-	unsigned int secure_flags;
-	single_log_t errors_logged;
-	char *usermap_path;
-	char *abs_mnt_point;
-#ifndef DISABLE_PLUGINS
+	BOOL              inherit;
+	unsigned int      secure_flags;
+	single_log_t      errors_logged;
+	char *            usermap_path;
+	char *            abs_mnt_point;
+	#ifndef DISABLE_PLUGINS
 	plugin_list_t *plugins;
-#endif /* DISABLE_PLUGINS */
+	#endif /* DISABLE_PLUGINS */
 	struct PERMISSIONS_CACHE *seccache;
-	struct SECURITY_CONTEXT security;
-	struct open_file *open_files; /* only defined in lowntfs-3g */
-	u64 latest_ghost;
+	struct SECURITY_CONTEXT   security;
+	struct open_file *        open_files; /* only defined in lowntfs-3g */
+	u64                       latest_ghost;
 } ntfs_fuse_context_t;
 
 extern const char *EXEC_NAME;
@@ -191,32 +201,52 @@ extern const char *EXEC_NAME;
 extern const char xattr_ntfs_3g[];
 
 extern const char nf_ns_user_prefix[];
-extern const int nf_ns_user_prefix_len;
+extern const int  nf_ns_user_prefix_len;
 extern const char nf_ns_system_prefix[];
-extern const int nf_ns_system_prefix_len;
+extern const int  nf_ns_system_prefix_len;
 extern const char nf_ns_security_prefix[];
-extern const int nf_ns_security_prefix_len;
+extern const int  nf_ns_security_prefix_len;
 extern const char nf_ns_trusted_prefix[];
-extern const int nf_ns_trusted_prefix_len;
+extern const int  nf_ns_trusted_prefix_len;
 
 int ntfs_strappend(char **dest, const char *append);
-int ntfs_strinsert(char **dest, const char *append);
-char *parse_mount_options(ntfs_fuse_context_t *ctx,
-			const struct ntfs_options *popts, BOOL low_fuse);
-int ntfs_parse_options(struct ntfs_options *popts, void (*usage)(void),
-			int argc, char *argv[]);
 
-int ntfs_fuse_listxattr_common(ntfs_inode *ni, ntfs_attr_search_ctx *actx,
- 			char *list, size_t size, BOOL prefixing);
-BOOL user_xattrs_allowed(ntfs_fuse_context_t *ctx, ntfs_inode *ni);
+int ntfs_strinsert(char **dest, const char *append);
+
+char *parse_mount_options(
+	ntfs_fuse_context_t *      ctx,
+	const struct ntfs_options *popts,
+	BOOL                       low_fuse);
+
+int ntfs_parse_options(
+	struct ntfs_options *popts,
+	void (*              usage)(void),
+	int                  argc,
+	char *               argv[]);
+
+int ntfs_fuse_listxattr_common(
+	ntfs_inode *          ni,
+	ntfs_attr_search_ctx *actx,
+	char *                list,
+	size_t                size,
+	BOOL                  prefixing);
+
+BOOL user_xattrs_allowed(ntfs_fuse_context_t * ctx, ntfs_inode * ni);
 
 #ifndef DISABLE_PLUGINS
 
 void close_reparse_plugins(ntfs_fuse_context_t *ctx);
-const struct plugin_operations *select_reparse_plugin(ntfs_fuse_context_t *ctx,
-				ntfs_inode *ni, REPARSE_POINT **reparse);
-int register_reparse_plugin(ntfs_fuse_context_t *ctx, le32 tag,
-                                const plugin_operations_t *ops, void *handle);
+
+const struct plugin_operations *select_reparse_plugin(
+	ntfs_fuse_context_t * ctx,
+	ntfs_inode * ni,
+	REPARSE_POINT * *reparse);
+
+int register_reparse_plugin(
+	ntfs_fuse_context_t *      ctx,
+	le32                       tag,
+	const plugin_operations_t *ops,
+	void *                     handle);
 
 #endif /* DISABLE_PLUGINS */
 

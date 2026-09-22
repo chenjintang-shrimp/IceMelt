@@ -11,6 +11,9 @@
 
 size_t fuse_dirent_size(size_t namelen);
 
-char *fuse_add_dirent(char *buf, const char *name, const struct stat *stbuf,
-		      off_t off);
+char *fuse_add_dirent(
+	char *             buf,
+	const char *       name,
+	const struct stat *stbuf,
+	off_t              off);
 

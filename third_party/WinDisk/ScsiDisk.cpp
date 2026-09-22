@@ -2,9 +2,10 @@
 
 NTSTATUS ScsiReadWriteDiskCompletion(PDEVICE_OBJECT pDevObj, PIRP pIrp, PVOID Context)
 {
-	if (pIrp->UserIosb) {
+	if (pIrp->UserIosb)
+	{
 		pIrp->UserIosb->Information = pIrp->IoStatus.Information;
-		pIrp->UserIosb->Status = pIrp->IoStatus.Status;
+		pIrp->UserIosb->Status      = pIrp->IoStatus.Status;
 	}
 
 	if (Context != NULL && pIrp->MdlAddress != NULL)
@@ -22,15 +23,20 @@ NTSTATUS ScsiReadWriteDiskCompletion(PDEVICE_OBJECT pDevObj, PIRP pIrp, PVOID Co
 	return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULONG ulSectorPos, PVOID lpDataBuff, ULONG ulSecCount)
+NTSTATUS ScsiReadWriteDiskInternal(
+	PDEVICE_OBJECT pDevObj,
+	BOOLEAN        bIsRead,
+	ULONG          ulSectorPos,
+	PVOID          lpDataBuff,
+	ULONG          ulSecCount)
 {
-	NTSTATUS ntStatus = STATUS_SUCCESS;
-	PSCSI_REQUEST_BLOCK pSrb = NULL;
-	PSENSE_DATA pSenseData = NULL;
-	KEVENT Event;
-	PIRP pIrp = NULL;
-	PMDL pMdl = NULL;
-	IO_STATUS_BLOCK IoSB;
+	NTSTATUS            ntStatus   = STATUS_SUCCESS;
+	PSCSI_REQUEST_BLOCK pSrb       = NULL;
+	PSENSE_DATA         pSenseData = NULL;
+	KEVENT              Event;
+	PIRP                pIrp = NULL;
+	PMDL                pMdl = NULL;
+	IO_STATUS_BLOCK     IoSB;
 
 	/* IoCallDriver 是按 DeviceObject->DriverObject->MajorFunction[IRP_MJ_SCSI]
 	 * 取函数指针调用的。目标设备为空、或它不处理 IRP_MJ_SCSI，就等价于跳到地址 0，
@@ -43,7 +49,10 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 		return STATUS_DEVICE_NOT_READY;
 	}
 
-	pSrb = (PSCSI_REQUEST_BLOCK)ExAllocatePoolWithTag(NonPagedPool, sizeof(SCSI_REQUEST_BLOCK), 'WK');
+	pSrb = (PSCSI_REQUEST_BLOCK) ExAllocatePoolWithTag(
+		NonPagedPool,
+		sizeof(SCSI_REQUEST_BLOCK),
+		'WK');
 
 	if (pSrb == NULL)
 	{
@@ -52,7 +61,10 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 		goto Cleanup;
 	}
 
-	pSenseData = (PSENSE_DATA)ExAllocatePoolWithTag(NonPagedPool, sizeof(SENSE_DATA), 'WK');
+	pSenseData = (PSENSE_DATA) ExAllocatePoolWithTag(
+		NonPagedPool,
+		sizeof(SENSE_DATA),
+		'WK');
 
 	if (pSenseData == NULL)
 	{
@@ -64,21 +76,21 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 	RtlZeroMemory(pSrb, sizeof(SCSI_REQUEST_BLOCK));
 	RtlZeroMemory(pSenseData, sizeof(SENSE_DATA));
 
-	pSrb->Length = sizeof(SCSI_REQUEST_BLOCK);
+	pSrb->Length   = sizeof(SCSI_REQUEST_BLOCK);
 	pSrb->Function = SRB_FUNCTION_EXECUTE_SCSI;
 
-	pSrb->NextSrb = NULL;
+	pSrb->NextSrb          = NULL;
 	pSrb->LinkTimeoutValue = -1;
-	pSrb->SrbStatus = SRB_STATUS_PENDING;
-	pSrb->ScsiStatus = SCSISTAT_GOOD;
-	pSrb->QueueAction = 0;
+	pSrb->SrbStatus        = SRB_STATUS_PENDING;
+	pSrb->ScsiStatus       = SCSISTAT_GOOD;
+	pSrb->QueueAction      = 0;
 
-	pSrb->SenseInfoBuffer = pSenseData;
+	pSrb->SenseInfoBuffer       = pSenseData;
 	pSrb->SenseInfoBufferLength = sizeof(SENSE_DATA);
 
-	pSrb->DataBuffer = lpDataBuff;
+	pSrb->DataBuffer         = lpDataBuff;
 	pSrb->DataTransferLength = ulSecCount * g_ulBytesPerSector;
-	pSrb->QueueSortKey = ulSectorPos;
+	pSrb->QueueSortKey       = ulSectorPos;
 
 	// 方向和自动 sense 选项都属于 SrbFlags。RMW/写后验证不能使用
 	// 适配器缓存，否则读可能返回旧扇区内容，随后把旧数据重新写回去。
@@ -93,21 +105,33 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 	}
 
 	pSrb->CdbLength = 0x0A;
-	pSrb->Cdb[0] = bIsRead ? SCSIOP_READ : SCSIOP_WRITE;
-	pSrb->Cdb[1] = 0;
-	pSrb->Cdb[2] = (UCHAR)(ulSectorPos >> 0x18) & 0xFF;
-	pSrb->Cdb[3] = (UCHAR)(ulSectorPos >> 0x10) & 0xFF;
-	pSrb->Cdb[4] = (UCHAR)(ulSectorPos >> 0x08) & 0xFF;
-	pSrb->Cdb[5] = (UCHAR)ulSectorPos;
-	pSrb->Cdb[7] = (UCHAR)(ulSecCount >> 0x08);
-	pSrb->Cdb[8] = (UCHAR)ulSecCount;
+	pSrb->Cdb[0]    = bIsRead ? SCSIOP_READ : SCSIOP_WRITE;
+	pSrb->Cdb[1]    = 0;
+	pSrb->Cdb[2]    = (UCHAR)(ulSectorPos >> 0x18) & 0xFF;
+	pSrb->Cdb[3]    = (UCHAR)(ulSectorPos >> 0x10) & 0xFF;
+	pSrb->Cdb[4]    = (UCHAR)(ulSectorPos >> 0x08) & 0xFF;
+	pSrb->Cdb[5]    = (UCHAR) ulSectorPos;
+	pSrb->Cdb[7]    = (UCHAR)(ulSecCount >> 0x08);
+	pSrb->Cdb[8]    = (UCHAR) ulSecCount;
 
-	LogInfo("SCSI %s request: LBA=%lu sectors=%lu bytes=%lu buffer=%p flags=0x%.8X CDB=%02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n",
-		bIsRead ? "READ" : "WRITE", ulSectorPos, ulSecCount,
-		(unsigned long)(ulSecCount * g_ulBytesPerSector), lpDataBuff,
-		(unsigned long)pSrb->SrbFlags, pSrb->Cdb[0], pSrb->Cdb[1],
-		pSrb->Cdb[2], pSrb->Cdb[3], pSrb->Cdb[4], pSrb->Cdb[5],
-		pSrb->Cdb[6], pSrb->Cdb[7], pSrb->Cdb[8], pSrb->Cdb[9]);
+	LogInfo(
+		"SCSI %s request: LBA=%lu sectors=%lu bytes=%lu buffer=%p flags=0x%.8X CDB=%02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n",
+		bIsRead ? "READ" : "WRITE",
+		ulSectorPos,
+		ulSecCount,
+		(unsigned long) (ulSecCount * g_ulBytesPerSector),
+		lpDataBuff,
+		(unsigned long) pSrb->SrbFlags,
+		pSrb->Cdb[0],
+		pSrb->Cdb[1],
+		pSrb->Cdb[2],
+		pSrb->Cdb[3],
+		pSrb->Cdb[4],
+		pSrb->Cdb[5],
+		pSrb->Cdb[6],
+		pSrb->Cdb[7],
+		pSrb->Cdb[8],
+		pSrb->Cdb[9]);
 	KeInitializeEvent(&Event, NotificationEvent, FALSE);
 	pIrp = IoAllocateIrp(pDevObj->StackSize, FALSE);
 
@@ -118,7 +142,12 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 		goto Cleanup;
 	}
 
-	pMdl = IoAllocateMdl((PVOID)lpDataBuff, ulSecCount * g_ulBytesPerSector, FALSE, FALSE, pIrp);
+	pMdl = IoAllocateMdl(
+		(PVOID) lpDataBuff,
+		ulSecCount * g_ulBytesPerSector,
+		FALSE,
+		FALSE,
+		pIrp);
 
 	if (pMdl == NULL)
 	{
@@ -139,21 +168,21 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 	RtlZeroMemory(&IoSB, sizeof(IO_STATUS_BLOCK));
 	pIrp->UserIosb = &IoSB;
 	RtlZeroMemory(&pIrp->IoStatus, sizeof(IO_STATUS_BLOCK));
-	pIrp->UserEvent = &Event;
-	pIrp->Cancel = FALSE;
-	pIrp->CancelRoutine = NULL;
-	pIrp->MdlAddress = pMdl;
+	pIrp->UserEvent                  = &Event;
+	pIrp->Cancel                     = FALSE;
+	pIrp->CancelRoutine              = NULL;
+	pIrp->MdlAddress                 = pMdl;
 	pIrp->AssociatedIrp.SystemBuffer = NULL;
-	pIrp->Flags = IRP_NOCACHE | IRP_SYNCHRONOUS_API;
-	pIrp->RequestorMode = KernelMode;
-	pIrp->Tail.Overlay.Thread = PsGetCurrentThread();
+	pIrp->Flags                      = IRP_NOCACHE | IRP_SYNCHRONOUS_API;
+	pIrp->RequestorMode              = KernelMode;
+	pIrp->Tail.Overlay.Thread        = PsGetCurrentThread();
 
 	pSrb->OriginalRequest = pIrp;
 
 	PIO_STACK_LOCATION pIrpSp = IoGetNextIrpStackLocation(pIrp);
 
-	pIrpSp->DeviceObject = pDevObj;
-	pIrpSp->MajorFunction = IRP_MJ_SCSI;
+	pIrpSp->DeviceObject        = pDevObj;
+	pIrpSp->MajorFunction       = IRP_MJ_SCSI;
 	pIrpSp->Parameters.Scsi.Srb = pSrb;
 
 	/* 必须注册完成例程。pIrpSp 是自建 IRP 的目标栈单元：IoSetCompletionRoutine 会把
@@ -176,9 +205,11 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 	LogInfo("IoCallDriverStatus: 0x%.8x\n", ntStatus);
 	LogInfo("SrbStatus: 0x%.8x\n", pSrb->SrbStatus);
 	LogInfo("ScsiStatus: 0x%.8x\n", pSrb->ScsiStatus);
-	LogInfo("IoSB.Status: 0x%.8x Information=%llu Expected=%lu\n",
-		IoSB.Status, (unsigned long long)IoSB.Information,
-		(unsigned long)(ulSecCount * g_ulBytesPerSector));
+	LogInfo(
+		"IoSB.Status: 0x%.8x Information=%llu Expected=%lu\n",
+		IoSB.Status,
+		(unsigned long long) IoSB.Information,
+		(unsigned long) (ulSecCount * g_ulBytesPerSector));
 	if (!NT_SUCCESS(ntStatus))
 		goto Cleanup;
 	if (pSrb->SrbStatus != SRB_STATUS_SUCCESS)
@@ -193,9 +224,10 @@ NTSTATUS ScsiReadWriteDiskInternal(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULON
 	}
 	if (IoSB.Information != ulSecCount * g_ulBytesPerSector)
 	{
-		LogWarn("Short SCSI transfer: %llu/%lu bytes\n",
-			(unsigned long long)IoSB.Information,
-			(unsigned long)(ulSecCount * g_ulBytesPerSector));
+		LogWarn(
+			"Short SCSI transfer: %llu/%lu bytes\n",
+			(unsigned long long) IoSB.Information,
+			(unsigned long) (ulSecCount * g_ulBytesPerSector));
 		ntStatus = STATUS_DEVICE_DATA_ERROR;
 	}
 
@@ -218,14 +250,24 @@ Cleanup:
 	return ntStatus;
 }
 
-NTSTATUS ScsiReadWriteDisk(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULONG ulSectorPos, PVOID lpDataBuff, ULONG ulSecCount)
+NTSTATUS ScsiReadWriteDisk(
+	PDEVICE_OBJECT pDevObj,
+	BOOLEAN        bIsRead,
+	ULONG          ulSectorPos,
+	PVOID          lpDataBuff,
+	ULONG          ulSecCount)
 {
-	ULONG CurrentPos = 0;
-	NTSTATUS status = STATUS_SUCCESS;
+	ULONG    CurrentPos = 0;
+	NTSTATUS status     = STATUS_SUCCESS;
 	while (CurrentPos < ulSecCount)
 	{
 		ULONG SecCount = min(ulSecCount - CurrentPos, 8);
-		status = ScsiReadWriteDiskInternal(pDevObj, bIsRead, ulSectorPos + CurrentPos, ((PUCHAR)lpDataBuff) + CurrentPos * 512, SecCount);
+		status         = ScsiReadWriteDiskInternal(
+			pDevObj,
+			bIsRead,
+			ulSectorPos + CurrentPos,
+			((PUCHAR) lpDataBuff) + CurrentPos * 512,
+			SecCount);
 		if (!NT_SUCCESS(status))
 			return status;
 		CurrentPos += SecCount;
@@ -233,22 +275,41 @@ NTSTATUS ScsiReadWriteDisk(PDEVICE_OBJECT pDevObj, BOOLEAN bIsRead, ULONG ulSect
 	return status;
 }
 
-NTSTATUS ScsiReadDisk(PDEVICE_OBJECT pDevObj, ULONG ulSectorPos, PVOID lpDataBuff, ULONG ulSecCount)
+NTSTATUS ScsiReadDisk(
+	PDEVICE_OBJECT pDevObj,
+	ULONG          ulSectorPos,
+	PVOID          lpDataBuff,
+	ULONG          ulSecCount)
 {
 	return ScsiReadWriteDisk(pDevObj, TRUE, ulSectorPos, lpDataBuff, ulSecCount);
 }
 
-NTSTATUS ScsiWriteDisk(PDEVICE_OBJECT pDevObj, ULONG ulSectorPos, PVOID lpDataBuff, ULONG ulSecCount, int nRetryCount)
+NTSTATUS ScsiWriteDisk(
+	PDEVICE_OBJECT pDevObj,
+	ULONG          ulSectorPos,
+	PVOID          lpDataBuff,
+	ULONG          ulSecCount,
+	int            nRetryCount)
 {
 	NTSTATUS WriteStatus;
 	do
 	{
-		WriteStatus = ScsiReadWriteDisk(pDevObj, FALSE, ulSectorPos, lpDataBuff, ulSecCount);
+		WriteStatus = ScsiReadWriteDisk(
+			pDevObj,
+			FALSE,
+			ulSectorPos,
+			lpDataBuff,
+			ulSecCount);
 	} while (!NT_SUCCESS(WriteStatus) && (nRetryCount--));
 	return WriteStatus;
 }
 
-NTSTATUS ScsiWriteDisk(PDATA_LIST_ENTRY pDevObjs, ULONG ulSectorPos, PVOID lpDataBuff, ULONG ulSecCount, int nRetryCount)
+NTSTATUS ScsiWriteDisk(
+	PDATA_LIST_ENTRY pDevObjs,
+	ULONG            ulSectorPos,
+	PVOID            lpDataBuff,
+	ULONG            ulSecCount,
+	int              nRetryCount)
 {
 	if (IsListEmpty(&pDevObjs->DataList))
 		return STATUS_DEVICE_NOT_READY;
@@ -256,9 +317,14 @@ NTSTATUS ScsiWriteDisk(PDATA_LIST_ENTRY pDevObjs, ULONG ulSectorPos, PVOID lpDat
 	PLIST_ENTRY pTarget = pDevObjs->DataList.Flink;
 	while (pTarget != &pDevObjs->DataList)
 	{
-		PDATA_LIST pDataTarget = CONTAINING_RECORD(pTarget, DATA_LIST, ListEntry);
-		PDEVICE_OBJECT pDevObj = *((PDEVICE_OBJECT*)pDataTarget->Buffer);
-		const NTSTATUS status = ScsiWriteDisk(pDevObj, ulSectorPos, lpDataBuff, ulSecCount, nRetryCount);
+		PDATA_LIST     pDataTarget = CONTAINING_RECORD(pTarget, DATA_LIST, ListEntry);
+		PDEVICE_OBJECT pDevObj     = *((PDEVICE_OBJECT *) pDataTarget->Buffer);
+		const NTSTATUS status      = ScsiWriteDisk(
+			pDevObj,
+			ulSectorPos,
+			lpDataBuff,
+			ulSecCount,
+			nRetryCount);
 		if (!NT_SUCCESS(status))
 		{
 			LogWarn("Write failed on one target device: 0x%.8X\\n", status);

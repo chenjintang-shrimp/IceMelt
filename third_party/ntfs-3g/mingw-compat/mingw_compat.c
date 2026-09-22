@@ -18,27 +18,31 @@
 #include "pwd.h"
 
 /* No /etc/passwd on Windows: report "no such entry" per POSIX. */
-struct passwd* getpwnam(const char* name) {
-    (void)name;
-    errno = ENOENT;
-    return NULL;
+struct passwd *getpwnam(const char *name)
+{
+	(void) name;
+	errno = ENOENT;
+	return NULL;
 }
 
-struct passwd* getpwuid(uid_t uid) {
-    (void)uid;
-    errno = ENOENT;
-    return NULL;
+struct passwd *getpwuid(uid_t uid)
+{
+	(void) uid;
+	errno = ENOENT;
+	return NULL;
 }
 
 /* No /etc/group either. */
-struct group* getgrnam(const char* name) {
-    (void)name;
-    errno = ENOENT;
-    return NULL;
+struct group *getgrnam(const char *name)
+{
+	(void) name;
+	errno = ENOENT;
+	return NULL;
 }
 
-struct group* getgrgid(gid_t gid) {
-    (void)gid;
-    errno = ENOENT;
-    return NULL;
+struct group *getgrgid(gid_t gid)
+{
+	(void) gid;
+	errno = ENOENT;
+	return NULL;
 }

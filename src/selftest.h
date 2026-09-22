@@ -21,20 +21,23 @@
 
 #include <filesystem>
 
-namespace icemelt {
+namespace icemelt
+{
+	// --melt        非交互执行整条链路（命令行版的 Melt 入口，无任何界面）。
+	//               必须同时给 --yes-i-know：落盘不可逆，这个 token 就是"确认"本身。
+	int MeltApply(const std::filesystem::path &exeDir);
 
-// --melt        非交互执行整条链路（命令行版的 Melt 入口，无任何界面）。
-//               必须同时给 --yes-i-know：落盘不可逆，这个 token 就是"确认"本身。
-int MeltApply(const std::filesystem::path& exeDir);
+	// --preflight   melt 的一次性位置扫描：同一份字节写入卷根 → \Windows →
+	//               \Windows\System32 → \Windows\System32\config 并读回校验，
+	//               再附 DiagnoseWritePath 三级拆解与 logstate 守卫。
+	//               不写 SYSTEM、不碰 RegBack、不复位；写回导出没变。
+	int PreflightScan(const std::filesystem::path &exeDir);
 
-// --preflight   melt 的一次性位置扫描：同一份字节写入卷根 → \Windows →
-//               \Windows\System32 → \Windows\System32\config 并读回校验，
-//               再附 DiagnoseWritePath 三级拆解与 logstate 守卫。
-//               不写 SYSTEM、不碰 RegBack、不复位；写回导出没变。
-int PreflightScan(const std::filesystem::path& exeDir);
-int HiveSelfTest(const std::filesystem::path& exeDir);
-int RegistrySelfTest(const std::filesystem::path& exeDir);
-int RawSelfTest(const std::filesystem::path& exeDir);
-int MeltDryRun(const std::filesystem::path& exeDir);
+	int HiveSelfTest(const std::filesystem::path &exeDir);
 
-}  // namespace icemelt
+	int RegistrySelfTest(const std::filesystem::path &exeDir);
+
+	int RawSelfTest(const std::filesystem::path &exeDir);
+
+	int MeltDryRun(const std::filesystem::path &exeDir);
+} // namespace icemelt

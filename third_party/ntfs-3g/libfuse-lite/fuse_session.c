@@ -16,178 +16,193 @@
 #include <assert.h>
 #include <errno.h>
 
-struct fuse_session {
-    struct fuse_session_ops op;
+struct fuse_session
+{
+	struct fuse_session_ops op;
 
-    void *data;
+	void *data;
 
-    volatile int exited;
+	volatile int exited;
 
-    struct fuse_chan *ch;
+	struct fuse_chan *ch;
 };
 
-struct fuse_chan {
-    struct fuse_chan_ops op;
+struct fuse_chan
+{
+	struct fuse_chan_ops op;
 
-    struct fuse_session *se;
+	struct fuse_session *se;
 
-    int fd;
+	int fd;
 
-    size_t bufsize;
+	size_t bufsize;
 
-    void *data;
+	void *data;
 };
 
 struct fuse_session *fuse_session_new(struct fuse_session_ops *op, void *data)
 {
-    struct fuse_session *se = (struct fuse_session *) malloc(sizeof(*se));
-    if (se == NULL) {
-        fprintf(stderr, "fuse: failed to allocate session\n");
-        return NULL;
-    }
+	struct fuse_session *se = (struct fuse_session *) malloc(sizeof(*se));
+	if (se == NULL)
+	{
+		fprintf(stderr, "fuse: failed to allocate session\n");
+		return NULL;
+	}
 
-    memset(se, 0, sizeof(*se));
-    se->op = *op;
-    se->data = data;
+	memset(se, 0, sizeof(*se));
+	se->op   = *op;
+	se->data = data;
 
-    return se;
+	return se;
 }
 
 void fuse_session_add_chan(struct fuse_session *se, struct fuse_chan *ch)
 {
-    assert(se->ch == NULL);
-    assert(ch->se == NULL);
-    se->ch = ch;
-    ch->se = se;
+	assert(se->ch == NULL);
+	assert(ch->se == NULL);
+	se->ch = ch;
+	ch->se = se;
 }
 
 void fuse_session_remove_chan(struct fuse_chan *ch)
 {
-    struct fuse_session *se = ch->se;
-    if (se) {
-        assert(se->ch == ch);
-        se->ch = NULL;
-        ch->se = NULL;
-    }
+	struct fuse_session *se = ch->se;
+	if (se)
+	{
+		assert(se->ch == ch);
+		se->ch = NULL;
+		ch->se = NULL;
+	}
 }
 
-struct fuse_chan *fuse_session_next_chan(struct fuse_session *se,
-                                         struct fuse_chan *ch)
+struct fuse_chan *fuse_session_next_chan(
+	struct fuse_session *se,
+	struct fuse_chan *   ch)
 {
-    assert(ch == NULL || ch == se->ch);
-    if (ch == NULL)
-        return se->ch;
-    else
-        return NULL;
+	assert(ch == NULL || ch == se->ch);
+	if (ch == NULL)
+		return se->ch;
+	else
+		return NULL;
 }
 
-void fuse_session_process(struct fuse_session *se, const char *buf, size_t len,
-                          struct fuse_chan *ch)
+void fuse_session_process(
+	struct fuse_session *se,
+	const char *         buf,
+	size_t               len,
+	struct fuse_chan *   ch)
 {
-    se->op.process(se->data, buf, len, ch);
+	se->op.process(se->data, buf, len, ch);
 }
 
 void fuse_session_destroy(struct fuse_session *se)
 {
-    if (se->op.destroy)
-        se->op.destroy(se->data);
-    if (se->ch != NULL)
-        fuse_chan_destroy(se->ch);
-    free(se);
+	if (se->op.destroy)
+		se->op.destroy(se->data);
+	if (se->ch != NULL)
+		fuse_chan_destroy(se->ch);
+	free(se);
 }
 
 void fuse_session_exit(struct fuse_session *se)
 {
-    if (se->op.exit)
-        se->op.exit(se->data, 1);
-    se->exited = 1;
+	if (se->op.exit)
+		se->op.exit(se->data, 1);
+	se->exited = 1;
 }
 
 void fuse_session_reset(struct fuse_session *se)
 {
-    if (se->op.exit)
-        se->op.exit(se->data, 0);
-    se->exited = 0;
+	if (se->op.exit)
+		se->op.exit(se->data, 0);
+	se->exited = 0;
 }
 
 int fuse_session_exited(struct fuse_session *se)
 {
-    if (se->op.exited)
-        return se->op.exited(se->data);
-    else
-        return se->exited;
+	if (se->op.exited)
+		return se->op.exited(se->data);
+	else
+		return se->exited;
 }
 
-static struct fuse_chan *fuse_chan_new_common(struct fuse_chan_ops *op, int fd,
-                                size_t bufsize, void *data)
+static struct fuse_chan *fuse_chan_new_common(
+	struct fuse_chan_ops *op,
+	int                   fd,
+	size_t                bufsize,
+	void *                data)
 {
-    struct fuse_chan *ch = (struct fuse_chan *) malloc(sizeof(*ch));
-    if (ch == NULL) {
-        fprintf(stderr, "fuse: failed to allocate channel\n");
-        return NULL;
-    }
+	struct fuse_chan *ch = (struct fuse_chan *) malloc(sizeof(*ch));
+	if (ch == NULL)
+	{
+		fprintf(stderr, "fuse: failed to allocate channel\n");
+		return NULL;
+	}
 
-    memset(ch, 0, sizeof(*ch));
-    ch->op = *op;
-    ch->fd = fd;
-    ch->bufsize = bufsize;
-    ch->data = data;
+	memset(ch, 0, sizeof(*ch));
+	ch->op      = *op;
+	ch->fd      = fd;
+	ch->bufsize = bufsize;
+	ch->data    = data;
 
-    return ch;
+	return ch;
 }
 
-struct fuse_chan *fuse_chan_new(struct fuse_chan_ops *op, int fd,
-                                size_t bufsize, void *data)
+struct fuse_chan *fuse_chan_new(
+	struct fuse_chan_ops *op,
+	int                   fd,
+	size_t                bufsize,
+	void *                data)
 {
-    return fuse_chan_new_common(op, fd, bufsize, data);
+	return fuse_chan_new_common(op, fd, bufsize, data);
 }
 
 int fuse_chan_fd(struct fuse_chan *ch)
 {
-    return ch->fd;
+	return ch->fd;
 }
 
 size_t fuse_chan_bufsize(struct fuse_chan *ch)
 {
-    return ch->bufsize;
+	return ch->bufsize;
 }
 
 void *fuse_chan_data(struct fuse_chan *ch)
 {
-    return ch->data;
+	return ch->data;
 }
 
 struct fuse_session *fuse_chan_session(struct fuse_chan *ch)
 {
-    return ch->se;
+	return ch->se;
 }
 
 int fuse_chan_recv(struct fuse_chan **chp, char *buf, size_t size)
 {
-    struct fuse_chan *ch = *chp;
+	struct fuse_chan *ch = *chp;
 
-    return ch->op.receive(chp, buf, size);
+	return ch->op.receive(chp, buf, size);
 }
 
 #ifdef __SOLARIS__
 int fuse_chan_receive(struct fuse_chan *ch, char *buf, size_t size)
 {
-    int res;
+	int res;
 
-    res = fuse_chan_recv(&ch, buf, size);
-    return res >= 0 ? res : (res != -EINTR && res != -EAGAIN) ? -1 : 0;
+	res = fuse_chan_recv(&ch, buf, size);
+	return res >= 0 ? res : (res != -EINTR && res != -EAGAIN) ? -1 : 0;
 }
 #endif /* __SOLARIS__ */
 
 int fuse_chan_send(struct fuse_chan *ch, const struct iovec iov[], size_t count)
 {
-    return ch->op.send(ch, iov, count);
+	return ch->op.send(ch, iov, count);
 }
 
 void fuse_chan_destroy(struct fuse_chan *ch)
 {
-    fuse_session_remove_chan(ch);
-    if (ch->op.destroy)
-        ch->op.destroy(ch);
-    free(ch);
+	fuse_session_remove_chan(ch);
+	if (ch->op.destroy)
+		ch->op.destroy(ch);
+	free(ch);
 }

@@ -111,28 +111,34 @@
  * On success return a pointer to the allocated ntfs device structure and on
  * error return NULL with errno set to the error code returned by ntfs_malloc().
  */
-struct ntfs_device *ntfs_device_alloc(const char *name, const long state,
-		struct ntfs_device_operations *dops, void *priv_data)
+struct ntfs_device *ntfs_device_alloc(
+	const char *                   name,
+	const long                     state,
+	struct ntfs_device_operations *dops,
+	void *                         priv_data)
 {
 	struct ntfs_device *dev;
 
-	if (!name) {
+	if (!name)
+	{
 		errno = EINVAL;
 		return NULL;
 	}
 
 	dev = ntfs_malloc(sizeof(struct ntfs_device));
-	if (dev) {
-		if (!(dev->d_name = strdup(name))) {
+	if (dev)
+	{
+		if (!(dev->d_name = strdup(name)))
+		{
 			int eo = errno;
 			free(dev);
 			errno = eo;
 			return NULL;
 		}
-		dev->d_ops = dops;
-		dev->d_state = state;
-		dev->d_private = priv_data;
-		dev->d_heads = -1;
+		dev->d_ops               = dops;
+		dev->d_state             = state;
+		dev->d_private           = priv_data;
+		dev->d_heads             = -1;
 		dev->d_sectors_per_track = -1;
 	}
 	return dev;
@@ -151,11 +157,13 @@ struct ntfs_device *ntfs_device_alloc(const char *name, const long state,
  */
 int ntfs_device_free(struct ntfs_device *dev)
 {
-	if (!dev) {
+	if (!dev)
+	{
 		errno = EINVAL;
 		return -1;
 	}
-	if (NDevOpen(dev)) {
+	if (NDevOpen(dev))
+	{
 		errno = EBUSY;
 		return -1;
 	}
@@ -172,13 +180,15 @@ int ntfs_device_free(struct ntfs_device *dev)
 
 int ntfs_device_sync(struct ntfs_device *dev)
 {
-	int ret;
+	int                            ret;
 	struct ntfs_device_operations *dops;
 
-	if (NDevDirty(dev)) {
+	if (NDevDirty(dev))
+	{
 		dops = dev->d_ops;
-		ret = dops->sync(dev);
-	} else
+		ret  = dops->sync(dev);
+	}
+	else
 		ret = 0;
 	return ret;
 }
@@ -204,22 +214,24 @@ int ntfs_device_sync(struct ntfs_device *dev)
  */
 s64 ntfs_pread(struct ntfs_device *dev, const s64 pos, s64 count, void *b)
 {
-	s64 br, total;
+	s64                            br, total;
 	struct ntfs_device_operations *dops;
 
-	ntfs_log_trace("pos %lld, count %lld\n",(long long)pos,(long long)count);
-	
-	if (!b || count < 0 || pos < 0) {
+	ntfs_log_trace("pos %lld, count %lld\n", (long long) pos, (long long) count);
+
+	if (!b || count < 0 || pos < 0)
+	{
 		errno = EINVAL;
 		return -1;
 	}
 	if (!count)
 		return 0;
-	
+
 	dops = dev->d_ops;
 
-	for (total = 0; count; count -= br, total += br) {
-		br = dops->pread(dev, (char*)b + total, count, pos + total);
+	for (total = 0; count; count -= br, total += br)
+	{
+		br = dops->pread(dev, (char *) b + total, count, pos + total);
 		/* If everything ok, continue. */
 		if (br > 0)
 			continue;
@@ -252,31 +264,40 @@ s64 ntfs_pread(struct ntfs_device *dev, const s64 pos, s64 count, void *b)
  * appropriately to the return code of either seek, write, or set
  * to EINVAL in case of invalid arguments.
  */
-s64 ntfs_pwrite(struct ntfs_device *dev, const s64 pos, s64 count,
-		const void *b)
+s64 ntfs_pwrite(
+	struct ntfs_device *dev,
+	const s64           pos,
+	s64                 count,
+	const void *        b)
 {
-	s64 written, total, ret = -1;
+	s64                            written, total, ret = -1;
 	struct ntfs_device_operations *dops;
 
-	ntfs_log_trace("pos %lld, count %lld\n",(long long)pos,(long long)count);
+	ntfs_log_trace("pos %lld, count %lld\n", (long long) pos, (long long) count);
 
-	if (!b || count < 0 || pos < 0) {
+	if (!b || count < 0 || pos < 0)
+	{
 		errno = EINVAL;
 		goto out;
 	}
 	if (!count)
 		return 0;
-	if (NDevReadOnly(dev)) {
+	if (NDevReadOnly(dev))
+	{
 		errno = EROFS;
 		goto out;
 	}
-	
+
 	dops = dev->d_ops;
 
 	NDevSetDirty(dev);
-	for (total = 0; count; count -= written, total += written) {
-		written = dops->pwrite(dev, (const char*)b + total, count,
-				       pos + total);
+	for (total = 0; count; count -= written, total += written)
+	{
+		written = dops->pwrite(
+			dev,
+			(const char *) b + total,
+			count,
+			pos + total);
 		/* If everything ok, continue. */
 		if (written > 0)
 			continue;
@@ -289,11 +310,12 @@ s64 ntfs_pwrite(struct ntfs_device *dev, const s64 pos, s64 count,
 		total = written;
 		break;
 	}
-	if (NDevSync(dev) && total && dops->sync(dev)) {
+	if (NDevSync(dev) && total && dops->sync(dev))
+	{
 		total--; /* on sync error, return partially written */
 	}
 	ret = total;
-out:	
+out:
 	return ret;
 }
 
@@ -326,12 +348,17 @@ out:
  * sector transfer error. This should be detected by the caller by checking for
  * the magic being "BAAD".
  */
-s64 ntfs_mst_pread(struct ntfs_device *dev, const s64 pos, s64 count,
-		const u32 bksize, void *b)
+s64 ntfs_mst_pread(
+	struct ntfs_device *dev,
+	const s64           pos,
+	s64                 count,
+	const u32           bksize,
+	void *              b)
 {
 	s64 br, i;
 
-	if (bksize & (bksize - 1) || bksize % NTFS_BLOCK_SIZE) {
+	if (bksize & (bksize - 1) || bksize % NTFS_BLOCK_SIZE)
+	{
 		errno = EINVAL;
 		return -1;
 	}
@@ -347,8 +374,10 @@ s64 ntfs_mst_pread(struct ntfs_device *dev, const s64 pos, s64 count,
 	 */
 	count = br / bksize;
 	for (i = 0; i < count; ++i)
-		ntfs_mst_post_read_fixup((NTFS_RECORD*)
-				((u8*)b + i * bksize), bksize);
+		ntfs_mst_post_read_fixup(
+			(NTFS_RECORD *)
+			((u8 *) b + i * bksize),
+			bksize);
 	/* Finally, return the number of complete blocks read. */
 	return count;
 }
@@ -383,24 +412,33 @@ s64 ntfs_mst_pread(struct ntfs_device *dev, const s64 pos, s64 count,
  * simulating an mst read on the written data. This way cache coherency is
  * achieved.
  */
-s64 ntfs_mst_pwrite(struct ntfs_device *dev, const s64 pos, s64 count,
-		const u32 bksize, void *b)
+s64 ntfs_mst_pwrite(
+	struct ntfs_device *dev,
+	const s64           pos,
+	s64                 count,
+	const u32           bksize,
+	void *              b)
 {
 	s64 written, i;
 
-	if (count < 0 || bksize % NTFS_BLOCK_SIZE) {
+	if (count < 0 || bksize % NTFS_BLOCK_SIZE)
+	{
 		errno = EINVAL;
 		return -1;
 	}
 	if (!count)
 		return 0;
 	/* Prepare data for writing. */
-	for (i = 0; i < count; ++i) {
+	for (i = 0; i < count; ++i)
+	{
 		int err;
 
-		err = ntfs_mst_pre_write_fixup((NTFS_RECORD*)
-				((u8*)b + i * bksize), bksize);
-		if (err < 0) {
+		err = ntfs_mst_pre_write_fixup(
+			(NTFS_RECORD *)
+			((u8 *) b + i * bksize),
+			bksize);
+		if (err < 0)
+		{
 			/* Abort write at this position. */
 			if (!i)
 				return err;
@@ -412,7 +450,7 @@ s64 ntfs_mst_pwrite(struct ntfs_device *dev, const s64 pos, s64 count,
 	written = ntfs_pwrite(dev, pos, count * bksize, b);
 	/* Quickly deprotect the data again. */
 	for (i = 0; i < count; ++i)
-		ntfs_mst_post_write_fixup((NTFS_RECORD*)((u8*)b + i * bksize));
+		ntfs_mst_post_write_fixup((NTFS_RECORD *) ((u8 *) b + i * bksize));
 	if (written <= 0)
 		return written;
 	/* Finally, return the number of complete blocks written. */
@@ -430,25 +468,36 @@ s64 ntfs_mst_pwrite(struct ntfs_device *dev, const s64 pos, s64 count,
  * volume @vol into buffer @b. Return number of clusters read or -1 on error,
  * with errno set to the error code.
  */
-s64 ntfs_cluster_read(const ntfs_volume *vol, const s64 lcn, const s64 count,
-		void *b)
+s64 ntfs_cluster_read(
+	const ntfs_volume *vol,
+	const s64          lcn,
+	const s64          count,
+	void *             b)
 {
 	s64 br;
 
-	if (!vol || lcn < 0 || count < 0) {
+	if (!vol || lcn < 0 || count < 0)
+	{
 		errno = EINVAL;
 		return -1;
 	}
-	if (vol->nr_clusters < lcn + count) {
+	if (vol->nr_clusters < lcn + count)
+	{
 		errno = ESPIPE;
-		ntfs_log_perror("Trying to read outside of volume "
-				"(%lld < %lld)", (long long)vol->nr_clusters,
-			        (long long)lcn + count);
+		ntfs_log_perror(
+			"Trying to read outside of volume "
+			"(%lld < %lld)",
+			(long long) vol->nr_clusters,
+			(long long) lcn + count);
 		return -1;
 	}
-	br = ntfs_pread(vol->dev, lcn << vol->cluster_size_bits,
-			count << vol->cluster_size_bits, b);
-	if (br < 0) {
+	br = ntfs_pread(
+		vol->dev,
+		lcn << vol->cluster_size_bits,
+		count << vol->cluster_size_bits,
+		b);
+	if (br < 0)
+	{
 		ntfs_log_perror("Error reading cluster(s)");
 		return br;
 	}
@@ -466,28 +515,39 @@ s64 ntfs_cluster_read(const ntfs_volume *vol, const s64 lcn, const s64 count,
  * buffer @b to volume @vol. Return the number of clusters written or -1 on
  * error, with errno set to the error code.
  */
-s64 ntfs_cluster_write(const ntfs_volume *vol, const s64 lcn,
-		const s64 count, const void *b)
+s64 ntfs_cluster_write(
+	const ntfs_volume *vol,
+	const s64          lcn,
+	const s64          count,
+	const void *       b)
 {
 	s64 bw;
 
-	if (!vol || lcn < 0 || count < 0) {
+	if (!vol || lcn < 0 || count < 0)
+	{
 		errno = EINVAL;
 		return -1;
 	}
-	if (vol->nr_clusters < lcn + count) {
+	if (vol->nr_clusters < lcn + count)
+	{
 		errno = ESPIPE;
-		ntfs_log_perror("Trying to write outside of volume "
-				"(%lld < %lld)", (long long)vol->nr_clusters,
-			        (long long)lcn + count);
+		ntfs_log_perror(
+			"Trying to write outside of volume "
+			"(%lld < %lld)",
+			(long long) vol->nr_clusters,
+			(long long) lcn + count);
 		return -1;
 	}
 	if (!NVolReadOnly(vol))
-		bw = ntfs_pwrite(vol->dev, lcn << vol->cluster_size_bits,
-				count << vol->cluster_size_bits, b);
+		bw = ntfs_pwrite(
+			vol->dev,
+			lcn << vol->cluster_size_bits,
+			count << vol->cluster_size_bits,
+			b);
 	else
 		bw = count << vol->cluster_size_bits;
-	if (bw < 0) {
+	if (bw < 0)
+	{
 		ntfs_log_perror("Error writing cluster(s)");
 		return bw;
 	}
@@ -509,7 +569,7 @@ static int ntfs_device_offset_valid(struct ntfs_device *dev, s64 ofs)
 	char ch;
 
 	if (dev->d_ops->seek(dev, ofs, SEEK_SET) >= 0 &&
-			dev->d_ops->read(dev, &ch, 1) == 1)
+		dev->d_ops->read(dev, &ch, 1) == 1)
 		return 0;
 	return -1;
 }
@@ -530,72 +590,88 @@ s64 ntfs_device_size_get(struct ntfs_device *dev, int block_size)
 {
 	s64 high, low;
 
-	if (!dev || block_size <= 0 || (block_size - 1) & block_size) {
+	if (!dev || block_size <= 0 || (block_size - 1) & block_size)
+	{
 		errno = EINVAL;
 		return -1;
 	}
-#ifdef BLKGETSIZE64
-	{	u64 size;
+	#ifdef BLKGETSIZE64
+	{
+		u64 size;
 
-		if (dev->d_ops->ioctl(dev, BLKGETSIZE64, &size) >= 0) {
-			ntfs_log_debug("BLKGETSIZE64 nr bytes = %llu (0x%llx)\n",
-					(unsigned long long)size,
-					(unsigned long long)size);
-			return (s64)size / block_size;
+		if (dev->d_ops->ioctl(dev, BLKGETSIZE64, &size) >= 0)
+		{
+			ntfs_log_debug(
+				"BLKGETSIZE64 nr bytes = %llu (0x%llx)\n",
+				(unsigned long long) size,
+				(unsigned long long) size);
+			return (s64) size / block_size;
 		}
 	}
-#endif
-#ifdef BLKGETSIZE
-	{	unsigned long size;
+	#endif
+	#ifdef BLKGETSIZE
+	{
+		unsigned long size;
 
-		if (dev->d_ops->ioctl(dev, BLKGETSIZE, &size) >= 0) {
-			ntfs_log_debug("BLKGETSIZE nr 512 byte blocks = %lu (0x%lx)\n",
-					size, size);
-			return (s64)size * 512 / block_size;
+		if (dev->d_ops->ioctl(dev, BLKGETSIZE, &size) >= 0)
+		{
+			ntfs_log_debug(
+				"BLKGETSIZE nr 512 byte blocks = %lu (0x%lx)\n",
+				size,
+				size);
+			return (s64) size * 512 / block_size;
 		}
 	}
-#endif
-#ifdef FDGETPRM
-	{       struct floppy_struct this_floppy;
+	#endif
+	#ifdef FDGETPRM
+	{
+		struct floppy_struct this_floppy;
 
-		if (dev->d_ops->ioctl(dev, FDGETPRM, &this_floppy) >= 0) {
-			ntfs_log_debug("FDGETPRM nr 512 byte blocks = %lu (0x%lx)\n",
-					(unsigned long)this_floppy.size,
-					(unsigned long)this_floppy.size);
-			return (s64)this_floppy.size * 512 / block_size;
+		if (dev->d_ops->ioctl(dev, FDGETPRM, &this_floppy) >= 0)
+		{
+			ntfs_log_debug(
+				"FDGETPRM nr 512 byte blocks = %lu (0x%lx)\n",
+				(unsigned long) this_floppy.size,
+				(unsigned long) this_floppy.size);
+			return (s64) this_floppy.size * 512 / block_size;
 		}
 	}
-#endif
-#ifdef DIOCGMEDIASIZE
+	#endif
+	#ifdef DIOCGMEDIASIZE
 	{
 		/* FreeBSD */
 		off_t size;
 
-		if (dev->d_ops->ioctl(dev, DIOCGMEDIASIZE, &size) >= 0) {
-			ntfs_log_debug("DIOCGMEDIASIZE nr bytes = %llu (0x%llx)\n",
-					(unsigned long long)size,
-					(unsigned long long)size);
-			return (s64)size / block_size;
+		if (dev->d_ops->ioctl(dev, DIOCGMEDIASIZE, &size) >= 0)
+		{
+			ntfs_log_debug(
+				"DIOCGMEDIASIZE nr bytes = %llu (0x%llx)\n",
+				(unsigned long long) size,
+				(unsigned long long) size);
+			return (s64) size / block_size;
 		}
 	}
-#endif
-#ifdef DKIOCGETBLOCKCOUNT
+	#endif
+	#ifdef DKIOCGETBLOCKCOUNT
 	{
 		/* Mac OS X */
 		uint64_t blocks;
-		int sector_size;
+		int      sector_size;
 
 		sector_size = ntfs_device_sector_size_get(dev);
-		if (sector_size >= 0 && dev->d_ops->ioctl(dev,
-			DKIOCGETBLOCKCOUNT, &blocks) >= 0)
+		if (sector_size >= 0 && dev->d_ops->ioctl(
+			dev,
+			DKIOCGETBLOCKCOUNT,
+			&blocks) >= 0)
 		{
-			ntfs_log_debug("DKIOCGETBLOCKCOUNT nr blocks = %llu (0x%llx)\n",
+			ntfs_log_debug(
+				"DKIOCGETBLOCKCOUNT nr blocks = %llu (0x%llx)\n",
 				(unsigned long long) blocks,
 				(unsigned long long) blocks);
 			return blocks * sector_size / block_size;
 		}
 	}
-#endif
+	#endif
 	/*
 	 * We couldn't figure it out by using a specialized ioctl,
 	 * so do binary search to find the size of the device.
@@ -603,7 +679,8 @@ s64 ntfs_device_size_get(struct ntfs_device *dev, int block_size)
 	low = 0LL;
 	for (high = 1024LL; !ntfs_device_offset_valid(dev, high); high <<= 1)
 		low = high;
-	while (low < high - 1LL) {
+	while (low < high - 1LL)
+	{
 		const s64 mid = (low + high) / 2;
 
 		if (!ntfs_device_offset_valid(dev, mid))
@@ -629,22 +706,27 @@ s64 ntfs_device_size_get(struct ntfs_device *dev, int block_size)
  */
 s64 ntfs_device_partition_start_sector_get(struct ntfs_device *dev)
 {
-	if (!dev) {
+	if (!dev)
+	{
 		errno = EINVAL;
 		return -1;
 	}
-#ifdef HDIO_GETGEO
-	{	struct hd_geometry geo;
+	#ifdef HDIO_GETGEO
+	{
+		struct hd_geometry geo;
 
-		if (!dev->d_ops->ioctl(dev, HDIO_GETGEO, &geo)) {
-			ntfs_log_debug("HDIO_GETGEO start_sect = %lu (0x%lx)\n",
-					geo.start, geo.start);
+		if (!dev->d_ops->ioctl(dev, HDIO_GETGEO, &geo))
+		{
+			ntfs_log_debug(
+				"HDIO_GETGEO start_sect = %lu (0x%lx)\n",
+				geo.start,
+				geo.start);
 			return geo.start;
 		}
 	}
-#else
+	#else
 	errno = EOPNOTSUPP;
-#endif
+	#endif
 	return -1;
 }
 
@@ -652,28 +734,31 @@ static int ntfs_device_get_geo(struct ntfs_device *dev)
 {
 	int err;
 
-	if (!dev) {
+	if (!dev)
+	{
 		errno = EINVAL;
 		return -1;
 	}
 	err = EOPNOTSUPP;
-#ifdef ENABLE_HD
+	#ifdef ENABLE_HD
 	{
-		hd_data_t *hddata;
-		hd_t *hd, *devlist, *partlist = NULL;
+		hd_data_t * hddata;
+		hd_t *      hd, *devlist, *partlist = NULL;
 		str_list_t *names;
-		hd_res_t *res;
-		const int d_name_len = strlen(dev->d_name) + 1;
-		int done = 0;
+		hd_res_t *  res;
+		const int   d_name_len = strlen(dev->d_name) + 1;
+		int         done       = 0;
 
 		hddata = calloc(1, sizeof(*hddata));
-		if (!hddata) {
+		if (!hddata)
+		{
 			err = ENOMEM;
 			goto skip_hd;
 		}
 		/* List all "disk" class devices on the system. */
 		devlist = hd_list(hddata, hw_disk, 1, NULL);
-		if (!devlist) {
+		if (!devlist)
+		{
 			free(hddata);
 			err = ENOMEM;
 			goto skip_hd;
@@ -682,17 +767,25 @@ static int ntfs_device_get_geo(struct ntfs_device *dev)
 		 * Loop over each disk device looking for the device with the
 		 * same unix name as @dev.
 		 */
-		for (hd = devlist; hd; hd = hd->next) {
-			if (hd->unix_dev_name && !strncmp(dev->d_name,
-					hd->unix_dev_name, d_name_len))
+		for (hd = devlist; hd; hd = hd->next)
+		{
+			if (hd->unix_dev_name && !strncmp(
+				dev->d_name,
+				hd->unix_dev_name,
+				d_name_len))
 				goto got_hd;
-			if (hd->unix_dev_name2 && !strncmp(dev->d_name,
-					hd->unix_dev_name2, d_name_len))
+			if (hd->unix_dev_name2 && !strncmp(
+				dev->d_name,
+				hd->unix_dev_name2,
+				d_name_len))
 				goto got_hd;
 			for (names = hd->unix_dev_names; names;
-					names = names->next) {
-				if (names->str && !strncmp(dev->d_name,
-						names->str, d_name_len))
+			     names = names->next)
+			{
+				if (names->str && !strncmp(
+					dev->d_name,
+					names->str,
+					d_name_len))
 					goto got_hd;
 			}
 		}
@@ -702,28 +795,36 @@ static int ntfs_device_get_geo(struct ntfs_device *dev)
 		 * class devices on the system.
 		 */
 		partlist = hd_list(hddata, hw_partition, 1, NULL);
-		for (hd = partlist; hd; hd = hd->next) {
-			if (hd->unix_dev_name && !strncmp(dev->d_name,
-					hd->unix_dev_name, d_name_len))
+		for (hd = partlist; hd; hd = hd->next)
+		{
+			if (hd->unix_dev_name && !strncmp(
+				dev->d_name,
+				hd->unix_dev_name,
+				d_name_len))
 				goto got_part_hd;
-			if (hd->unix_dev_name2 && !strncmp(dev->d_name,
-					hd->unix_dev_name2, d_name_len))
+			if (hd->unix_dev_name2 && !strncmp(
+				dev->d_name,
+				hd->unix_dev_name2,
+				d_name_len))
 				goto got_part_hd;
 			for (names = hd->unix_dev_names; names;
-					names = names->next) {
-				if (names->str && !strncmp(dev->d_name,
-						names->str, d_name_len))
+			     names = names->next)
+			{
+				if (names->str && !strncmp(
+					dev->d_name,
+					names->str,
+					d_name_len))
 					goto got_part_hd;
 			}
 		}
 		/* Failed to find the device.  Stop trying and clean up. */
 		goto end_hd;
-got_part_hd:
+	got_part_hd:
 		/* Get the whole block device the partition device is on. */
 		hd = hd_get_device_by_idx(hddata, hd->attached_to);
 		if (!hd)
 			goto end_hd;
-got_hd:
+	got_hd:
 		/*
 		 * @hd is now the whole block device either being formatted or
 		 * that the partition being formatted is on.
@@ -732,44 +833,52 @@ got_hd:
 		 * BIOS legacy geometry obtained from EDD which is what Windows
 		 * needs to boot.
 		 */
-		for (res = hd->res; res; res = res->next) {
+		for (res = hd->res; res; res = res->next)
+		{
 			/* geotype 3 is BIOS legacy. */
 			if (res->any.type != res_disk_geo ||
-					res->disk_geo.geotype != 3)
+				res->disk_geo.geotype != 3)
 				continue;
-			dev->d_heads = res->disk_geo.heads;
+			dev->d_heads             = res->disk_geo.heads;
 			dev->d_sectors_per_track = res->disk_geo.sectors;
-			done = 1;
+			done                     = 1;
 		}
-end_hd:
+	end_hd:
 		if (partlist)
 			hd_free_hd_list(partlist);
 		hd_free_hd_list(devlist);
 		hd_free_hd_data(hddata);
 		free(hddata);
-		if (done) {
-			ntfs_log_debug("EDD/BIOD legacy heads = %u, sectors "
-					"per track = %u\n", dev->d_heads,
-					dev->d_sectors_per_track);
+		if (done)
+		{
+			ntfs_log_debug(
+				"EDD/BIOD legacy heads = %u, sectors "
+				"per track = %u\n",
+				dev->d_heads,
+				dev->d_sectors_per_track);
 			return 0;
 		}
 	}
 skip_hd:
-#endif
-#ifdef HDIO_GETGEO
-	{	struct hd_geometry geo;
+	#endif
+	#ifdef HDIO_GETGEO
+	{
+		struct hd_geometry geo;
 
-		if (!dev->d_ops->ioctl(dev, HDIO_GETGEO, &geo)) {
-			dev->d_heads = geo.heads;
+		if (!dev->d_ops->ioctl(dev, HDIO_GETGEO, &geo))
+		{
+			dev->d_heads             = geo.heads;
 			dev->d_sectors_per_track = geo.sectors;
-			ntfs_log_debug("HDIO_GETGEO heads = %u, sectors per "
-					"track = %u\n", dev->d_heads,
-					dev->d_sectors_per_track);
+			ntfs_log_debug(
+				"HDIO_GETGEO heads = %u, sectors per "
+				"track = %u\n",
+				dev->d_heads,
+				dev->d_sectors_per_track);
 			return 0;
 		}
 		err = errno;
 	}
-#endif
+	#endif
 	errno = err;
 	return -1;
 }
@@ -789,14 +898,17 @@ skip_hd:
  */
 int ntfs_device_heads_get(struct ntfs_device *dev)
 {
-	if (!dev) {
+	if (!dev)
+	{
 		errno = EINVAL;
 		return -1;
 	}
-	if (dev->d_heads == -1) {
+	if (dev->d_heads == -1)
+	{
 		if (ntfs_device_get_geo(dev) == -1)
 			return -1;
-		if (dev->d_heads == -1) {
+		if (dev->d_heads == -1)
+		{
 			errno = EINVAL;
 			return -1;
 		}
@@ -819,14 +931,17 @@ int ntfs_device_heads_get(struct ntfs_device *dev)
  */
 int ntfs_device_sectors_per_track_get(struct ntfs_device *dev)
 {
-	if (!dev) {
+	if (!dev)
+	{
 		errno = EINVAL;
 		return -1;
 	}
-	if (dev->d_sectors_per_track == -1) {
+	if (dev->d_sectors_per_track == -1)
+	{
 		if (ntfs_device_get_geo(dev) == -1)
 			return -1;
-		if (dev->d_sectors_per_track == -1) {
+		if (dev->d_sectors_per_track == -1)
+		{
 			errno = EINVAL;
 			return -1;
 		}
@@ -848,45 +963,52 @@ int ntfs_device_sectors_per_track_get(struct ntfs_device *dev)
  */
 int ntfs_device_sector_size_get(struct ntfs_device *dev)
 {
-	if (!dev) {
+	if (!dev)
+	{
 		errno = EINVAL;
 		return -1;
 	}
-#ifdef BLKSSZGET
+	#ifdef BLKSSZGET
 	{
 		int sect_size = 0;
 
-		if (!dev->d_ops->ioctl(dev, BLKSSZGET, &sect_size)) {
-			ntfs_log_debug("BLKSSZGET sector size = %d bytes\n",
-					sect_size);
+		if (!dev->d_ops->ioctl(dev, BLKSSZGET, &sect_size))
+		{
+			ntfs_log_debug(
+				"BLKSSZGET sector size = %d bytes\n",
+				sect_size);
 			return sect_size;
 		}
 	}
-#elif defined(DIOCGSECTORSIZE)
+	#elif defined(DIOCGSECTORSIZE)
 	{
 		/* FreeBSD */
 		size_t sect_size = 0;
 
-		if (!dev->d_ops->ioctl(dev, DIOCGSECTORSIZE, &sect_size)) {
-			ntfs_log_debug("DIOCGSECTORSIZE sector size = %d bytes\n",
-					(int) sect_size);
+		if (!dev->d_ops->ioctl(dev, DIOCGSECTORSIZE, &sect_size))
+		{
+			ntfs_log_debug(
+				"DIOCGSECTORSIZE sector size = %d bytes\n",
+				(int) sect_size);
 			return sect_size;
 		}
 	}
-#elif defined(DKIOCGETBLOCKSIZE)
+	#elif defined(DKIOCGETBLOCKSIZE)
 	{
 		/* Mac OS X */
 		uint32_t sect_size = 0;
 
-		if (!dev->d_ops->ioctl(dev, DKIOCGETBLOCKSIZE, &sect_size)) {
-			ntfs_log_debug("DKIOCGETBLOCKSIZE sector size = %d bytes\n",
-					(int) sect_size);
+		if (!dev->d_ops->ioctl(dev, DKIOCGETBLOCKSIZE, &sect_size))
+		{
+			ntfs_log_debug(
+				"DKIOCGETBLOCKSIZE sector size = %d bytes\n",
+				(int) sect_size);
 			return sect_size;
 		}
 	}
-#else
+	#else
 	errno = EOPNOTSUPP;
-#endif
+	#endif
 	return -1;
 }
 
@@ -903,8 +1025,11 @@ int ntfs_device_sector_size_get(struct ntfs_device *dev)
  *	EOPNOTSUPP	System does not support BLKBSZSET ioctl
  *	ENOTTY		@dev is a file or a device not supporting BLKBSZSET
  */
-int ntfs_device_block_size_set(struct ntfs_device *dev,
-		int block_size __attribute__((unused)))
+int ntfs_device_block_size_set(
+	struct ntfs_device *dev,
+	int block_size __attribute__((unused))
+
+)
 {
 	if (!dev) {
 		errno = EINVAL;

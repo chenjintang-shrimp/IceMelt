@@ -28,17 +28,18 @@
 #include "types.h"
 #include "layout.h"
 
-struct options {
-	char		*device;	/* Device/File to work with */
-	char		*file;		/* File to display */
-	s64		 inode;		/* Inode to work with */
-	ATTR_TYPES	 attr;		/* Attribute type to display */
-	ntfschar	*attr_name;	/* Attribute name to display */
-	int		 attr_name_len;	/* Attribute name length */
-	int		 force;		/* Override common sense */
-	int		 quiet;		/* Less output */
-	int		 verbose;	/* Extra output */
-	BOOL		 raw;		/* Raw data output */
+struct options
+{
+	char *     device;        /* Device/File to work with */
+	char *     file;          /* File to display */
+	s64        inode;         /* Inode to work with */
+	ATTR_TYPES attr;          /* Attribute type to display */
+	ntfschar * attr_name;     /* Attribute name to display */
+	int        attr_name_len; /* Attribute name length */
+	int        force;         /* Override common sense */
+	int        quiet;         /* Less output */
+	int        verbose;       /* Extra output */
+	BOOL       raw;           /* Raw data output */
 };
 
 #endif /* _NTFSCAT_H_ */

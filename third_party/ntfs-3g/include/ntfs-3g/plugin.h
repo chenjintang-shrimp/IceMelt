@@ -37,7 +37,7 @@
 struct fuse_file_info;
 struct stat;
 
-	/*
+/*
 	 *	The plugin operations currently defined.
 	 * These functions should return a non-negative value when they
 	 * succeed, or a negative errno value when they fail.
@@ -47,7 +47,8 @@ struct stat;
 	 * If an operation is not defined, an EOPNOTSUPP error is
 	 * returned to caller.
 	 */
-typedef struct plugin_operations {
+typedef struct plugin_operations
+{
 	/*
 	 *	Set the attributes st_size, st_blocks and st_mode
 	 * into a struct stat. The returned st_mode must at least
@@ -56,8 +57,10 @@ typedef struct plugin_operations {
 	 * permissions, or the permissions will be changed according
 	 * to the ACL set on the file.
 	 */
-	int (*getattr)(ntfs_inode *ni, const REPARSE_POINT *reparse,
-			struct stat *stbuf);
+	int (*getattr)(
+		ntfs_inode *         ni,
+		const REPARSE_POINT *reparse,
+		struct stat *        stbuf);
 
 	/*
 	 *	Open a file for reading or writing
@@ -68,8 +71,10 @@ typedef struct plugin_operations {
 	 * The returned value is zero for success and a negative errno
 	 * value for failure.
 	 */
-	int (*open)(ntfs_inode *ni, const REPARSE_POINT *reparse,
-			struct fuse_file_info *fi);
+	int (*open)(
+		ntfs_inode *           ni,
+		const REPARSE_POINT *  reparse,
+		struct fuse_file_info *fi);
 
 	/*
 	 *	Release an open file or directory
@@ -79,8 +84,10 @@ typedef struct plugin_operations {
 	 * The returned value is zero for success or a negative errno
 	 * value for failure.
 	 */
-	int (*release)(ntfs_inode *ni, const REPARSE_POINT *reparse,
-			struct fuse_file_info *fi);
+	int (*release)(
+		ntfs_inode *           ni,
+		const REPARSE_POINT *  reparse,
+		struct fuse_file_info *fi);
 
 	/*
 	 *	Read from an open file
@@ -89,9 +96,13 @@ typedef struct plugin_operations {
 	 * If the returned value is positive, the access time stamp
 	 * will be updated after the call.
 	 */
-	int (*read)(ntfs_inode *ni, const REPARSE_POINT *reparse,
-			char *buf, size_t size,
-			off_t offset, struct fuse_file_info *fi);
+	int (*read)(
+		ntfs_inode *           ni,
+		const REPARSE_POINT *  reparse,
+		char *                 buf,
+		size_t                 size,
+		off_t                  offset,
+		struct fuse_file_info *fi);
 
 	/*
 	 *	Write to an open file
@@ -103,9 +114,13 @@ typedef struct plugin_operations {
 	 * If the returned value is positive, the modified time stamp
 	 * will be updated after the call.
 	 */
-	int (*write)(ntfs_inode *ni, const REPARSE_POINT *reparse,
-			const char *buf, size_t size,
-			off_t offset, struct fuse_file_info *fi);
+	int (*write)(
+		ntfs_inode *           ni,
+		const REPARSE_POINT *  reparse,
+		const char *           buf,
+		size_t                 size,
+		off_t                  offset,
+		struct fuse_file_info *fi);
 
 	/*
 	 *	Get a symbolic link
@@ -115,8 +130,10 @@ typedef struct plugin_operations {
 	 * The returned value is zero for success or a negative errno
 	 * value for failure.
 	 */
-	int (*readlink)(ntfs_inode *ni, const REPARSE_POINT *reparse,
-			char **pbuf);
+	int (*readlink)(
+		ntfs_inode *         ni,
+		const REPARSE_POINT *reparse,
+		char **              pbuf);
 
 	/*
 	 *	Truncate a file (shorten or append zeroes)
@@ -125,8 +142,11 @@ typedef struct plugin_operations {
 	 * If the returned value is zero, the modified time stamp
 	 * will be updated after the call.
 	 */
-	int (*truncate)(ntfs_inode *ni, const REPARSE_POINT *reparse,
-			off_t size);
+	int (*truncate)(
+		ntfs_inode *         ni,
+		const REPARSE_POINT *reparse,
+		off_t                size);
+
 	/*
 	 *	Open a directory
 	 * The field fi->flags indicates the kind of opening.
@@ -136,8 +156,10 @@ typedef struct plugin_operations {
 	 * The returned value is zero for success and a negative errno
 	 * value for failure.
 	 */
-	int (*opendir)(ntfs_inode *ni, const REPARSE_POINT *reparse,
-			struct fuse_file_info *fi);
+	int (*opendir)(
+		ntfs_inode *           ni,
+		const REPARSE_POINT *  reparse,
+		struct fuse_file_info *fi);
 
 	/*
 	 *	Get entries from a directory
@@ -148,18 +170,28 @@ typedef struct plugin_operations {
 	 * The returned value is zero for success and a negative errno
 	 * value for failure.
 	 */
-	int (*readdir)(ntfs_inode *ni, const REPARSE_POINT *reparse,
-			s64 *pos, void *fillctx, ntfs_filldir_t filldir,
-			struct fuse_file_info *fi);
+	int (*readdir)(
+		ntfs_inode *           ni,
+		const REPARSE_POINT *  reparse,
+		s64 *                  pos,
+		void *                 fillctx,
+		ntfs_filldir_t         filldir,
+		struct fuse_file_info *fi);
+
 	/*
 	 *	Create a new file of any type
 	 *
 	 * The returned value is a pointer to the inode created, or
 	 * NULL if failed, with errno telling why.
 	 */
-	ntfs_inode *(*create)(ntfs_inode *dir_ni, const REPARSE_POINT *reparse,
-			le32 securid, ntfschar *name, int name_len,
-			mode_t type);
+	ntfs_inode *(*create)(
+		ntfs_inode *         dir_ni,
+		const REPARSE_POINT *reparse,
+		le32                 securid,
+		ntfschar *           name,
+		int                  name_len,
+		mode_t               type);
+
 	/*
 	 *	Link a new name to a file or directory
 	 * Linking a directory is needed for renaming a directory
@@ -168,17 +200,26 @@ typedef struct plugin_operations {
 	 * If the returned value is zero, the modified time stamp
 	 * will be updated after the call.
 	 */
-	int (*link)(ntfs_inode *dir_ni, const REPARSE_POINT *reparse,
-			ntfs_inode *ni, ntfschar *name, int name_len);
+	int (*link)(
+		ntfs_inode *         dir_ni,
+		const REPARSE_POINT *reparse,
+		ntfs_inode *         ni,
+		ntfschar *           name,
+		int                  name_len);
+
 	/*
 	 *	Unlink a name from a directory
 	 * The argument pathname may be NULL
 	 * The returned value is zero for success or a negative errno
 	 * value for failure.
 	 */
-	int (*unlink)(ntfs_inode *dir_ni, const REPARSE_POINT *reparse,
-			const char *pathname,
-			ntfs_inode *ni, ntfschar *name, int name_len);
+	int (*unlink)(
+		ntfs_inode *         dir_ni,
+		const REPARSE_POINT *reparse,
+		const char *         pathname,
+		ntfs_inode *         ni,
+		ntfschar *           name,
+		int                  name_len);
 } plugin_operations_t;
 
 
@@ -189,6 +230,7 @@ typedef struct plugin_operations {
  *	the plugin.)
  */
 typedef const struct plugin_operations *(*plugin_init_t)(le32 tag);
+
 const struct plugin_operations *init(le32 tag);
 
 #endif /* _NTFS_PLUGIN_H */

@@ -5,8 +5,8 @@ name: build
 # 所以这里显式断言"落位后的组合是完整的"——否则构建会"成功"但产物不可用。
 on:
   push:
-    branches: [main]
-    tags: ["v*", "[0-9]*"]
+    branches: [ main ]
+    tags: [ "v*", "[0-9]*" ]
   pull_request:
   workflow_dispatch:
 

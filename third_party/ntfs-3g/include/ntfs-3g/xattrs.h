@@ -45,7 +45,8 @@
  *		Identification of data mapped to the system name space
  */
 
-enum SYSTEMXATTRS {
+enum SYSTEMXATTRS
+{
 	XATTR_UNMAPPED,
 	XATTR_NTFS_ACL,
 	XATTR_NTFS_ATTRIB,
@@ -59,39 +60,53 @@ enum SYSTEMXATTRS {
 	XATTR_NTFS_CRTIME,
 	XATTR_NTFS_CRTIME_BE,
 	XATTR_NTFS_EA,
-	XATTR_POSIX_ACC, 
+	XATTR_POSIX_ACC,
 	XATTR_POSIX_DEF
-} ;
+};
 
-struct XATTRMAPPING {
+struct XATTRMAPPING
+{
 	struct XATTRMAPPING *next;
-	enum SYSTEMXATTRS xattr;
-	char name[1]; /* variable length */
-} ;
+	enum SYSTEMXATTRS    xattr;
+	char                 name[1]; /* variable length */
+};
 
 #ifdef XATTR_MAPPINGS
 
-struct XATTRMAPPING *ntfs_xattr_build_mapping(ntfs_volume *vol,
-			const char *path);
-void ntfs_xattr_free_mapping(struct XATTRMAPPING*);
+struct XATTRMAPPING *ntfs_xattr_build_mapping(
+	ntfs_volume *vol,
+	const char * path);
+void ntfs_xattr_free_mapping(struct XATTRMAPPING *);
 
 #endif /* XATTR_MAPPINGS */
 
-enum SYSTEMXATTRS ntfs_xattr_system_type(const char *name,
-			ntfs_volume *vol);
+enum SYSTEMXATTRS ntfs_xattr_system_type(
+	const char * name,
+	ntfs_volume *vol);
 
 struct SECURITY_CONTEXT;
 
-int ntfs_xattr_system_getxattr(struct SECURITY_CONTEXT *scx,
-			enum SYSTEMXATTRS attr,
-			ntfs_inode *ni, ntfs_inode *dir_ni,
-			char *value, size_t size);
-int ntfs_xattr_system_setxattr(struct SECURITY_CONTEXT *scx,
-			enum SYSTEMXATTRS attr,
-			ntfs_inode *ni, ntfs_inode *dir_ni,
-			const char *value, size_t size, int flags);
-int ntfs_xattr_system_removexattr(struct SECURITY_CONTEXT *scx,
-			enum SYSTEMXATTRS attr,
-			ntfs_inode *ni, ntfs_inode *dir_ni);
+int ntfs_xattr_system_getxattr(
+	struct SECURITY_CONTEXT *scx,
+	enum SYSTEMXATTRS        attr,
+	ntfs_inode *             ni,
+	ntfs_inode *             dir_ni,
+	char *                   value,
+	size_t                   size);
+
+int ntfs_xattr_system_setxattr(
+	struct SECURITY_CONTEXT *scx,
+	enum SYSTEMXATTRS        attr,
+	ntfs_inode *             ni,
+	ntfs_inode *             dir_ni,
+	const char *             value,
+	size_t                   size,
+	int                      flags);
+
+int ntfs_xattr_system_removexattr(
+	struct SECURITY_CONTEXT *scx,
+	enum SYSTEMXATTRS        attr,
+	ntfs_inode *             ni,
+	ntfs_inode *             dir_ni);
 
 #endif /* _NTFS_XATTRS_H_ */

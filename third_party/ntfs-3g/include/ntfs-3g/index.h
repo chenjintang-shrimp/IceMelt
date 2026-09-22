@@ -45,7 +45,7 @@
 
 /* allows us to warn about unused results of certain function calls */
 #ifndef __attribute_warn_unused_result__
-# if __GNUC_PREREQ (3,4)
+# if __GNUC_PREREQ(3, 4)
 #  define __attribute_warn_unused_result__ \
     __attribute__ ((__warn_unused_result__))
 # else
@@ -63,8 +63,12 @@
 
 #define  MAX_PARENT_VCN		32
 
-typedef int (*COLLATE)(ntfs_volume *vol, const void *data1, int len1,
-					 const void *data2, int len2);
+typedef int (*COLLATE)(
+	ntfs_volume *vol,
+	const void * data1,
+	int          len1,
+	const void * data2,
+	int          len2);
 
 /**
  * struct ntfs_index_context -
@@ -112,60 +116,82 @@ typedef int (*COLLATE)(ntfs_volume *vol, const void *data1, int len1,
  * the call to ntfs_index_ctx_put() to ensure that the changes are written
  * to disk.
  */
-typedef struct {
-	ntfs_inode *ni;
-	ntfschar *name;
-	u32 name_len;
-	INDEX_ENTRY *entry;
-	void *data;
-	u16 data_len;
-	COLLATE collate;
-	BOOL is_in_root;
-	INDEX_ROOT *ir;
+typedef struct
+{
+	ntfs_inode *          ni;
+	ntfschar *            name;
+	u32                   name_len;
+	INDEX_ENTRY *         entry;
+	void *                data;
+	u16                   data_len;
+	COLLATE               collate;
+	BOOL                  is_in_root;
+	INDEX_ROOT *          ir;
 	ntfs_attr_search_ctx *actx;
-	INDEX_BLOCK *ib;
-	ntfs_attr *ia_na;
-	int parent_pos[MAX_PARENT_VCN];  /* parent entries' positions */
-	VCN parent_vcn[MAX_PARENT_VCN]; /* entry's parent nodes */
-	int pindex;	     /* maximum it's the number of the parent nodes  */
-	BOOL ib_dirty;
-	BOOL bad_index;
-	u32 block_size;
-	u8 vcn_size_bits;
+	INDEX_BLOCK *         ib;
+	ntfs_attr *           ia_na;
+	int                   parent_pos[MAX_PARENT_VCN]; /* parent entries' positions */
+	VCN                   parent_vcn[MAX_PARENT_VCN]; /* entry's parent nodes */
+	int                   pindex; /* maximum it's the number of the parent nodes  */
+	BOOL                  ib_dirty;
+	BOOL                  bad_index;
+	u32                   block_size;
+	u8                    vcn_size_bits;
 } ntfs_index_context;
 
-extern ntfs_index_context *ntfs_index_ctx_get(ntfs_inode *ni,
-						ntfschar *name, u32 name_len);
+extern ntfs_index_context *ntfs_index_ctx_get(
+	ntfs_inode *ni,
+	ntfschar *  name,
+	u32         name_len);
+
 extern void ntfs_index_ctx_put(ntfs_index_context *ictx);
+
 extern void ntfs_index_ctx_reinit(ntfs_index_context *ictx);
 
-extern int ntfs_index_block_inconsistent(const INDEX_BLOCK *ib, u32 block_size,
-			u64 inum, VCN vcn);
-extern int ntfs_index_entry_inconsistent(const INDEX_ENTRY *ie,
-			COLLATION_RULES collation_rule, u64 inum);
-extern int ntfs_index_lookup(const void *key, const int key_len,
-		ntfs_index_context *ictx) __attribute_warn_unused_result__;
+extern int ntfs_index_block_inconsistent(
+	const INDEX_BLOCK *ib,
+	u32                block_size,
+	u64                inum,
+	VCN                vcn);
 
-extern INDEX_ENTRY *ntfs_index_next(INDEX_ENTRY *ie,
-		ntfs_index_context *ictx);
+extern int ntfs_index_entry_inconsistent(
+	const INDEX_ENTRY *ie,
+	COLLATION_RULES    collation_rule,
+	u64                inum);
 
-extern int ntfs_index_add_filename(ntfs_inode *ni, FILE_NAME_ATTR *fn,
-		MFT_REF mref);
-extern int ntfs_index_remove(ntfs_inode *dir_ni, ntfs_inode *ni,
-		const void *key, const int keylen);
+extern int ntfs_index_lookup(
+	const void *        key,
+	const int           key_len,
+	ntfs_index_context *ictx) __attribute_warn_unused_result__;
 
-extern INDEX_ROOT *ntfs_index_root_get(ntfs_inode *ni, ATTR_RECORD *attr);
+extern INDEX_ENTRY *ntfs_index_next(
+	INDEX_ENTRY * ie,
+	ntfs_index_context * ictx);
 
-extern VCN ntfs_ie_get_vcn(INDEX_ENTRY *ie);
+extern int ntfs_index_add_filename(
+	ntfs_inode *    ni,
+	FILE_NAME_ATTR *fn,
+	MFT_REF         mref);
+
+extern int ntfs_index_remove(
+	ntfs_inode *dir_ni,
+	ntfs_inode *ni,
+	const void *key,
+	const int   keylen);
+
+extern INDEX_ROOT *ntfs_index_root_get(ntfs_inode * ni, ATTR_RECORD * attr);
+
+extern VCN ntfs_ie_get_vcn(INDEX_ENTRY * ie);
 
 extern void ntfs_index_entry_mark_dirty(ntfs_index_context *ictx);
 
-extern char *ntfs_ie_filename_get(INDEX_ENTRY *ie);
-extern void ntfs_ie_filename_dump(INDEX_ENTRY *ie);
-extern void ntfs_ih_filename_dump(INDEX_HEADER *ih);
+extern char *ntfs_ie_filename_get(INDEX_ENTRY * ie);
+extern void  ntfs_ie_filename_dump(INDEX_ENTRY * ie);
+extern void  ntfs_ih_filename_dump(INDEX_HEADER * ih);
 
 /* the following was added by JPA for use in security.c */
-extern int ntfs_ie_add(ntfs_index_context *icx, INDEX_ENTRY *ie);
+extern int ntfs_ie_add(ntfs_index_context * icx, INDEX_ENTRY * ie);
+
 extern int ntfs_index_rm(ntfs_index_context *icx);
 
 #endif /* _NTFS_INDEX_H */

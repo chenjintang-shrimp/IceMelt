@@ -36,37 +36,39 @@
 #include "volume.h"
 #include "misc.h"
 
-typedef enum {
+typedef enum
+{
 	PROBE_UNSET,
 	PROBE_READONLY,
 	PROBE_READWRITE
 } probe_t;
 
-static struct options {
-	probe_t  probetype;
-	char	 *device;
+static struct options
+{
+	probe_t probetype;
+	char *  device;
 } opts;
 
 static const char *EXEC_NAME = "ntfs-3g.probe";
 
-static const char *usage_msg = 
-"\n"
-"%s %s - Probe NTFS volume mountability\n"
-"\n"
-"Copyright (C) 2007 Szabolcs Szakacsits\n"
-"\n"
-"Usage:    %s <--readonly|--readwrite> <device|image_file>\n"
-"\n"
-"Example:  ntfs-3g.probe --readwrite /dev/sda1\n"
-"\n"
-"%s";
+static const char *usage_msg =
+		"\n"
+		"%s %s - Probe NTFS volume mountability\n"
+		"\n"
+		"Copyright (C) 2007 Szabolcs Szakacsits\n"
+		"\n"
+		"Usage:    %s <--readonly|--readwrite> <device|image_file>\n"
+		"\n"
+		"Example:  ntfs-3g.probe --readwrite /dev/sda1\n"
+		"\n"
+		"%s";
 
 static int ntfs_open(const char *device)
 {
-	ntfs_volume *vol;
+	ntfs_volume * vol;
 	unsigned long flags = 0;
-	int ret = NTFS_VOLUME_OK;
-	
+	int           ret   = NTFS_VOLUME_OK;
+
 	if (opts.probetype == PROBE_READONLY)
 		flags |= NTFS_MNT_RDONLY;
 
@@ -89,55 +91,66 @@ static int parse_options(int argc, char *argv[])
 {
 	int c;
 
-	static const char *sopt = "-hrw";
+	static const char *        sopt   = "-hrw";
 	static const struct option lopt[] = {
-		{ "readonly",	no_argument,	NULL, 'r' },
-		{ "readwrite",	no_argument,	NULL, 'w' },
-		{ "help",	no_argument,	NULL, 'h' },
-		{ NULL,		0,		NULL,  0  }
+		{"readonly", no_argument, NULL, 'r'},
+		{"readwrite", no_argument, NULL, 'w'},
+		{"help", no_argument, NULL, 'h'},
+		{NULL, 0, NULL, 0}
 	};
 
-	opterr = 0; /* We handle errors. */
+	opterr         = 0; /* We handle errors. */
 	opts.probetype = PROBE_UNSET;
 
-	while ((c = getopt_long(argc, argv, sopt, lopt, NULL)) != -1) {
-		switch (c) {
-		case 1:	/* A non-option argument */
-			if (!opts.device) {
-				opts.device = ntfs_malloc(PATH_MAX + 1);
+	while ((c = getopt_long(argc, argv, sopt, lopt, NULL)) != -1)
+	{
+		switch (c)
+		{
+			case 1: /* A non-option argument */
 				if (!opts.device)
+				{
+					opts.device = ntfs_malloc(PATH_MAX + 1);
+					if (!opts.device)
+						return -1;
+
+					strncpy(opts.device, optarg, PATH_MAX);
+					opts.device[PATH_MAX] = 0;
+				}
+				else
+				{
+					ntfs_log_error(
+						"%s: You must specify exactly "
+						"one device\n",
+						EXEC_NAME);
 					return -1;
-				
-				strncpy(opts.device, optarg, PATH_MAX);
-				opts.device[PATH_MAX] = 0;
-			} else {
-				ntfs_log_error("%s: You must specify exactly "
-					       "one device\n", EXEC_NAME);
+				}
+				break;
+			case 'h':
+				usage();
+				exit(0);
+			case 'r':
+				opts.probetype = PROBE_READONLY;
+				break;
+			case 'w':
+				opts.probetype = PROBE_READWRITE;
+				break;
+			default:
+				ntfs_log_error(
+					"%s: Unknown option '%s'.\n",
+					EXEC_NAME,
+					argv[optind - 1]);
 				return -1;
-			}
-			break;
-		case 'h':
-			usage();
-			exit(0);
-		case 'r':
-			opts.probetype = PROBE_READONLY;
-			break;
-		case 'w':
-			opts.probetype = PROBE_READWRITE;
-			break;
-		default:
-			ntfs_log_error("%s: Unknown option '%s'.\n", EXEC_NAME,
-				       argv[optind - 1]);
-			return -1;
 		}
 	}
 
-	if (!opts.device) {
+	if (!opts.device)
+	{
 		ntfs_log_error("ERROR: %s: Device is missing\n", EXEC_NAME);
 		return -1;
 	}
 
-	if (opts.probetype == PROBE_UNSET) {
+	if (opts.probetype == PROBE_UNSET)
+	{
 		ntfs_log_error("ERROR: %s: Probe type is missing\n", EXEC_NAME);
 		return -1;
 	}
@@ -151,7 +164,8 @@ int main(int argc, char *argv[])
 
 	ntfs_log_set_handler(ntfs_log_handler_stderr);
 
-	if (parse_options(argc, argv)) {
+	if (parse_options(argc, argv))
+	{
 		usage();
 		exit(NTFS_VOLUME_SYNTAX_ERROR);
 	}

@@ -42,20 +42,30 @@ extern const char *ntfs_bugs;
 extern const char *ntfs_gpl;
 
 int utils_set_locale(void);
+
 int utils_parse_size(const char *value, s64 *size, BOOL scale);
+
 int utils_parse_range(const char *string, s64 *start, s64 *finish, BOOL scale);
+
 int utils_inode_get_name(ntfs_inode *inode, char *buffer, int bufsize);
+
 int utils_attr_get_name(ntfs_volume *vol, ATTR_RECORD *attr, char *buffer, int bufsize);
+
 int utils_cluster_in_use(ntfs_volume *vol, long long lcn);
+
 int utils_mftrec_in_use(ntfs_volume *vol, MFT_REF mref);
-int utils_is_metadata(ntfs_inode *inode);
+
+int utils_is_metadata(ntfs_inode * inode);
+
 void utils_dump_mem(void *buf, int start, int length, int flags);
 
-ATTR_RECORD * find_attribute(const ATTR_TYPES type, ntfs_attr_search_ctx *ctx);
-ATTR_RECORD * find_first_attribute(const ATTR_TYPES type, MFT_RECORD *mft);
+ATTR_RECORD *find_attribute(const ATTR_TYPES type, ntfs_attr_search_ctx *ctx);
+
+ATTR_RECORD *find_first_attribute(const ATTR_TYPES type, MFT_RECORD *mft);
 
 int utils_valid_device(const char *name, int force);
-ntfs_volume * utils_mount_volume(const char *device, unsigned long flags);
+
+ntfs_volume *utils_mount_volume(const char *device, unsigned long flags);
 
 /**
  * defines...
@@ -74,16 +84,19 @@ ntfs_volume * utils_mount_volume(const char *device, unsigned long flags);
 /**
  * struct mft_search_ctx
  */
-struct mft_search_ctx {
-	int flags_search;
-	int flags_match;
-	ntfs_inode *inode;
+struct mft_search_ctx
+{
+	int          flags_search;
+	int          flags_match;
+	ntfs_inode * inode;
 	ntfs_volume *vol;
-	u64 mft_num;
+	u64          mft_num;
 };
 
-struct mft_search_ctx * mft_get_search_ctx(ntfs_volume *vol);
+struct mft_search_ctx *mft_get_search_ctx(ntfs_volume * vol);
+
 void mft_put_search_ctx(struct mft_search_ctx *ctx);
+
 int mft_next_record(struct mft_search_ctx *ctx);
 
 // Flags for dump mem
@@ -126,13 +139,15 @@ char *ntfs_utils_unix_path(const char *in);
  * linux-ntfs's ntfs_mbstoucs has different semantics, so we emulate it with
  * ntfs-3g's.
  */
-int ntfs_mbstoucs_libntfscompat(const char *ins,
-		ntfschar **outs, int outs_len);
+int ntfs_mbstoucs_libntfscompat(
+	const char *ins,
+	ntfschar ** outs,
+	int         outs_len);
 
 /* This simple utility function was missing from libntfs-3g. */
 static __inline__ ntfschar *ntfs_attr_get_name(ATTR_RECORD *attr)
 {
-	return (ntfschar*)((u8*)attr + le16_to_cpu(attr->name_offset));
+	return (ntfschar *) ((u8 *) attr + le16_to_cpu(attr->name_offset));
 }
 
 #endif /* _NTFS_UTILS_H_ */
