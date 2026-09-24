@@ -18,6 +18,7 @@
 //   icemelt --selftest-hive 校验 hive base block 偏移与校验和算法
 //   icemelt --selftest-registry 在 scratch 键上验证过滤器摘除的写入路径
 //   icemelt --selftest-raw  裸盘写入/读回判定（会装载内核驱动、写系统卷，仅限虚拟机）
+//   icemelt --selftest-fat  FAT 写入器自检（合成镜像，不需要管理员、不碰真实卷）
 //
 // 文案刻意保持 ASCII —— Windows 控制台默认代码页多为 936(GBK)，非 ASCII 文案在部分
 // 终端会花屏；宽字符只用于 Win32 API 边界与 UTF-8 名单文件。着色规则见 util.h::CliPaint。
@@ -476,7 +477,11 @@ namespace
 				"  icemelt --selftest-registry\n"
 				"                           exercise the filter-stripping write path on a scratch key\n"
 				"  icemelt --selftest-raw   raw disk write/read-back check (loads a kernel driver,\n"
-				"                           writes the system volume: run in a VM only)\n";
+				"                           writes the system volume: run in a VM only)\n"
+				"  icemelt --selftest-fat [--image=<file>]\n"
+				"                           FAT writer self-test on a synthetic image in %TEMP%\n"
+				"                           (no admin, no real volume); with --image= it only reads\n"
+				"                           that image, e.g. one built by an independent tool\n";
 	}
 } // namespace
 
@@ -488,6 +493,8 @@ int main(int argc, char **argv)
 	bool selftestHive     = false;
 	bool selftestRegistry = false;
 	bool selftestRaw      = false;
+	bool selftestFat      = false;
+	std::wstring fatImage; // --image=<path> (给 --selftest-fat 校验外部造的镜像)
 	bool dump             = false;
 	bool help             = false;
 	bool melt             = false;
@@ -523,6 +530,9 @@ int main(int argc, char **argv)
 		else if (arg == "--selftest-hive") selftestHive = true;
 		else if (arg == "--selftest-registry") selftestRegistry = true;
 		else if (arg == "--selftest-raw") selftestRaw = true;
+		else if (arg == "--selftest-fat") selftestFat = true;
+		else if (arg.rfind("--image=", 0) == 0)
+			fatImage = icemelt::Widen(std::string(arg.substr(8)));
 		else if (arg == "--help" || arg == "-h") help = true;
 		else
 		{
@@ -572,8 +582,8 @@ int main(int argc, char **argv)
 					"--deploy-esp replaces bootmgfw.efi on the ESP with the UEFI Shell and\n"
 					"stages startup.nsh + ntfs-3g.efi + the patched SYSTEM hive. The next boot\n"
 					"runs the pre-boot melt (Secure Boot must be off). Undo: boot the Shell and\n"
-					"copy \\EFI\\IceMelt\\bootmgfw-original.efi back over bootmgfw.efi, and\n"
-					"\\EFI\\IceMelt\\bootx64-original.efi back over \\EFI\\Boot\\BOOTX64.EFI if present).\n"
+					"copy \\EFI\\IceMelt\\BOOTMGW.OLD back over bootmgfw.efi, and\n"
+					"\\EFI\\IceMelt\\BOOTX64.OLD back over \\EFI\\Boot\\BOOTX64.EFI if present).\n"
 					"\n"
 					"PREREQUISITE: the firmware must load one of the two files this deploy replaces:\n"
 					"  a) the NVRAM boot entry (Boot####) -> \\EFI\\Microsoft\\Boot\\bootmgfw.efi (usual)\n"
@@ -619,6 +629,7 @@ int main(int argc, char **argv)
 	if (selftestHive) return icemelt::HiveSelfTest(exeDir);
 	if (selftestRegistry) return icemelt::RegistrySelfTest(exeDir);
 	if (selftestRaw) return icemelt::RawSelfTest(exeDir);
+	if (selftestFat) return icemelt::FatSelfTest(exeDir, fatImage);
 	if (dryRun) return icemelt::MeltDryRun(exeDir.empty() ? root : exeDir);
 	if (dump) return DumpMode(root);
 

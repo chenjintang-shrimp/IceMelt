@@ -1,5 +1,7 @@
 #include "selftest.h"
 
+#include "raw/fat.h"
+
 #include <windows.h>
 
 #include <cstdio>
@@ -811,5 +813,230 @@ namespace icemelt
 			});
 		Print(result.ok ? L"PREFLIGHT PASS" : L"PREFLIGHT FAIL (see scan lines above)");
 		return result.ok ? 0 : 1;
+	}
+	// ---------------------------------------------------------------- FAT 自检
+	//
+	// 这一项存在的理由：ESP 上要写的是 FAT，而写路径是"裸扇区"（没有文件系统替我们兜底）。
+	// 一个错的 FAT 写入器会把 ESP 写坏 —— 那台机器就再也引导不进 Windows。所以：
+	//   * 全部动作在一个**合成镜像**上做（%TEMP% 的普通文件），不碰任何真实卷；
+	//   * 图像由本文件自己格式化（FormatFat32ForTest），因此自检不依赖管理员/驱动/真磁盘；
+	//   * 交叉验证交给外部独立实现：打印镜像路径，用 pyfatfs 读它；
+	//   * 反向（我们的读 + LFN 查找）用 --image=<外部镜像> 校验 —— 真实 ESP 的
+	//     \EFI\Microsoft 是 LFN 名字，而我们只能新建 8.3，所以那一条必须靠外部造的镜像验。
+	int FatSelfTest(const std::filesystem::path &exeDir, const std::wstring &imagePath)
+	{
+		(void) exeDir;
+		bool ok = true;
+		const auto check = [&](const wchar_t *what, bool value)
+		{
+			Print(FormatW(L"%-54ls: %ls", what, value ? L"OK" : L"FAILED"));
+			if (!value) ok = false;
+		};
+
+		// 与写入器同源的图案生成：外部工具（pyfatfs）也能按同一公式造/验内容
+		const auto pattern = [](unsigned char seed)
+		{
+			return [seed](uint64_t offset, void *dst, size_t len) -> bool
+			{
+				auto *p = static_cast<unsigned char *>(dst);
+				for (size_t i = 0; i < len; ++i)
+					p[i] = static_cast<unsigned char>(
+						(seed + ((offset + i) * 31 + 17)) & 0xFF);
+				return true;
+			};
+		};
+
+		if (!imagePath.empty())
+		{
+			// ---- 只读校验一个外部造的镜像（验证 LFN 查找 + 内容读取）----
+			Print(FormatW(L"--- FAT read-only check on %ls ---", imagePath.c_str()));
+			FileSectorIo io;
+			std::wstring error;
+			if (!io.Open(imagePath, /*create=*/false, 0, error))
+			{
+				Print(FormatW(L"FAIL open: %ls", error.c_str()));
+				return 1;
+			}
+			FatFileSystem fs;
+			if (!fs.Mount(io, 0, error))
+			{
+				Print(FormatW(L"FAIL mount: %ls", error.c_str()));
+				io.Close();
+				return 1;
+			}
+			Print(FormatW(L"type=%ls cluster=%llu bytes free=%llu",
+			              fs.type(),
+			              static_cast<unsigned long long>(fs.clusterSize()),
+			              static_cast<unsigned long long>(fs.freeBytes())));
+
+			// 外部镜像里应有的结构：LFN 目录（Microsoft / Boot）+ 一个按图案写的文件
+			const char *kPaths[] = {
+				"EFI\\Microsoft\\Boot\\BOOTMGFW.EFI",
+				"EFI\\Boot\\BOOTX64.EFI",
+				"EFI\\IceMelt\\SYSTEM",
+				"EFI\\IceMelt\\PATTERN.BIN",
+			};
+			for (const char *path: kPaths)
+			{
+				uint64_t size  = 0;
+				bool     isDir = false;
+				const bool exists = fs.Exists(path, &size, &isDir, error);
+				check(Widen(path).c_str(), exists);
+				if (exists)
+					Print(FormatW(
+						L"    %hs: %llu bytes%s",
+						path,
+						static_cast<unsigned long long>(size),
+						isDir ? L" (dir)" : L""));
+			}
+
+			// 内容校验：PATTERN.BIN 必须是 (seed + (off*31+17)) 的重复图案
+			uint64_t patternSize = 0;
+			if (fs.Exists("EFI\\IceMelt\\PATTERN.BIN", &patternSize, nullptr, error))
+			{
+				std::vector<uint8_t> bytes;
+				if (!fs.ReadFile("EFI\\IceMelt\\PATTERN.BIN", bytes, error))
+				{
+					Print(FormatW(L"FAIL read PATTERN.BIN: %ls", error.c_str()));
+					ok = false;
+				}
+				else
+				{
+					std::vector<uint8_t> expected(bytes.size());
+					pattern(0x5A)(0, expected.data(), expected.size());
+					check(
+						L"PATTERN.BIN content matches the shared formula",
+						std::memcmp(bytes.data(), expected.data(), bytes.size()) == 0);
+				}
+			}
+			io.Close();
+			Print(ok ? L"FAT SELFTEST PASS" : L"FAT SELFTEST FAIL");
+			return ok ? 0 : 1;
+		}
+
+		// ---- 在合成镜像上跑写入器 ----
+		// 几何要落在规范内：FAT32 要求簇数 >= 65525（[MS-FAT] / pyfatfs 都按这条判型）。
+		// 64 MB + 512 字节簇 → ~129k 簇，正好和真实的 100 MB ESP 同型（Windows 给小的
+		// FAT32 卷就是 1 扇区/簇）。用 48 MB + 4 KiB 簇会造出一个"技术上不是 FAT32"的卷，
+		// 外部实现拒绝对它判型 —— 那是自检镜像的问题，不是写入器的问题。
+		const uint64_t kImageSize = 64ull * 1024 * 1024;
+		const std::filesystem::path image = TempFile(L"icemelt-fat-selftest.img");
+		Print(FormatW(L"--- FAT writer self-test on a synthetic image ---"));
+		Print(FormatW(L"image: %ls (%llu MB)", image.c_str(), kImageSize / (1024 * 1024)));
+
+		FileSectorIo io;
+		std::wstring error;
+		if (!io.Open(image, /*create=*/true, kImageSize, error))
+		{
+			Print(FormatW(L"FAIL create image: %ls", error.c_str()));
+			return 1;
+		}
+		if (!FormatFat32ForTest(io, 0, kImageSize, 512, /*sectorsPerCluster=*/1, error))
+		{
+			Print(FormatW(L"FAIL format: %ls", error.c_str()));
+			io.Close();
+			return 1;
+		}
+		FatFileSystem fs;
+		if (!fs.Mount(io, 0, error))
+		{
+			Print(FormatW(L"FAIL mount: %ls", error.c_str()));
+			io.Close();
+			return 1;
+		}
+		check(L"mount", fs.mounted());
+		check(L"recognised as FAT32", std::wcscmp(fs.type(), L"FAT32") == 0);
+		check(L"cluster size is 512 B (1 sector, like a small ESP)", fs.clusterSize() == 512);
+
+		// 目录结构与真实 ESP 同形：\EFI\Microsoft\Boot 里的 "Microsoft" 只能用 LFN
+		// 表达（8.3 装不下），所以这条同时验证 LFN 条目生成与 LFN 查找。
+		check(L"mkdir EFI", fs.MakeDirectory("EFI", error));
+		check(L"mkdir EFI\\Microsoft (long name via LFN)", fs.MakeDirectory("EFI\\Microsoft", error));
+		check(L"mkdir EFI\\Microsoft\\Boot", fs.MakeDirectory("EFI\\Microsoft\\Boot", error));
+		check(L"mkdir EFI\\Boot", fs.MakeDirectory("EFI\\Boot", error));
+		check(L"mkdir EFI\\IceMelt (idempotent)", fs.MakeDirectory("EFI\\IceMelt", error));
+		check(
+			L"the long name resolves (LFN lookup)",
+			fs.Exists("EFI\\Microsoft\\Boot", nullptr, nullptr, error));
+
+		const uint64_t big     = 3ull * 1024 * 1024 + 12345;
+		const uint64_t smaller = 900ull * 1024 + 7;
+		const uint64_t payload = 12ull * 1024 * 1024 + 4711;
+
+		check(
+			L"write bootmgfw under the LFN path",
+			fs.WriteFile("EFI\\Microsoft\\Boot\\BOOTMGFW.EFI", 1536 * 1024, pattern(0x11), error));
+		check(
+			L"verify it",
+			fs.VerifyFile("EFI\\Microsoft\\Boot\\BOOTMGFW.EFI", 1536 * 1024, pattern(0x11), error));
+		check(L"write a 3 MB file", fs.WriteFile("EFI\\Boot\\BOOTX64.EFI", big, pattern(0x44), error));
+		check(L"verify it", fs.VerifyFile("EFI\\Boot\\BOOTX64.EFI", big, pattern(0x44), error));
+		check(
+			L"replace it with a smaller file",
+			fs.WriteFile("EFI\\Boot\\BOOTX64.EFI", smaller, pattern(0x22), error));
+		check(
+			L"verify after replace",
+			fs.VerifyFile("EFI\\Boot\\BOOTX64.EFI", smaller, pattern(0x22), error));
+		{
+			uint64_t size  = 0;
+			bool     isDir = true;
+			const bool got = fs.Exists("EFI\\Boot\\BOOTX64.EFI", &size, &isDir, error);
+			check(L"Exists reports the new size", got && size == smaller && !isDir);
+		}
+		// 目录树必须真的是树：根目录里不能看见孙辈。这条断言存在的理由是一次真实事故 ——
+		// 测试格式化器把根簇的 EOC 写错了偏移，分配器于是把子目录分到了根簇上；读写器
+		// 自洽，所有"能读到自己写的东西"的断言全绿，只有独立实现（pyfatfs）看出来塌了。
+		check(
+			L"a subdirectory's contents are not reachable from the root",
+			!fs.Exists("BOOTX64.EFI", nullptr, nullptr, error) &&
+			!fs.Exists("Boot\\BOOTX64.EFI", nullptr, nullptr, error));
+		check(
+			L"the root does not contain a nested EFI directory",
+			!fs.Exists("EFI\\EFI", nullptr, nullptr, error));
+
+		check(
+			L"write a 12 MB payload",
+			fs.WriteFile("EFI\\IceMelt\\SYSTEM", payload, pattern(0x33), error));
+		check(
+			L"verify the payload",
+			fs.VerifyFile("EFI\\IceMelt\\SYSTEM", payload, pattern(0x33), error));
+
+		// 空闲空间必须真的减少（分配器有在记账）
+		const uint64_t freeAfter = fs.freeBytes();
+		check(L"free space decreased", freeAfter < kImageSize - 1024 * 1024);
+
+		// undo 日志：写一个文件 → 回放 → 该文件消失，而先前写的文件还在
+		{
+			UndoJournal journal;
+			fs.SetJournal(&journal);
+			const bool wrote = fs.WriteFile(
+				"EFI\\IceMelt\\BOOTMGW.OLD",
+				64 * 1024,
+				pattern(0x44),
+				error);
+			fs.SetJournal(nullptr);
+			check(L"write with the undo journal armed", wrote);
+			check(L"journal recorded metadata sectors", journal.Count() > 0);
+
+			const std::filesystem::path undo = TempFile(L"icemelt-fat-selftest.undo");
+			check(L"journal saved", journal.SaveTo(undo, /*diskNumber=*/0, error));
+			size_t restored = 0;
+			check(
+				L"journal replay",
+				UndoJournal::RestoreFrom(io, undo, restored, error));
+			check(L"replay restored every chunk", restored == journal.Count());
+			check(
+				L"after replay the new file is gone",
+				!fs.Exists("EFI\\IceMelt\\BOOTMGW.OLD", nullptr, nullptr, error));
+			check(
+				L"an unrelated earlier file survives the replay",
+				fs.Exists("EFI\\IceMelt\\SYSTEM", nullptr, nullptr, error));
+			RemoveFile(undo);
+		}
+
+		io.Close();
+		Print(FormatW(L"image kept for an independent check: %ls", image.c_str()));
+		Print(ok ? L"FAT SELFTEST PASS" : L"FAT SELFTEST FAIL");
+		return ok ? 0 : 1;
 	}
 } // namespace icemelt
