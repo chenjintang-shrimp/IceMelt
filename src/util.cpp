@@ -72,6 +72,22 @@ namespace icemelt
 		return ok && elevation.TokenIsElevated != 0;
 	}
 
+	bool IsWindowsPreinstallationEnvironment()
+	{
+		HKEY key = nullptr;
+		if (::RegOpenKeyExW(
+				HKEY_LOCAL_MACHINE,
+				L"SYSTEM\\CurrentControlSet\\Control\\MiniNT",
+				0,
+				KEY_QUERY_VALUE,
+				&key) == ERROR_SUCCESS)
+		{
+			::RegCloseKey(key);
+			return true;
+		}
+		return false;
+	}
+
 	bool EnablePrivilege(const wchar_t *name, std::wstring &error)
 	{
 		HANDLE token = nullptr;

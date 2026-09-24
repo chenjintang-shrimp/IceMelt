@@ -193,6 +193,20 @@ namespace icemelt
 			return r;
 		}
 
+		// payload 是"导出运行中系统的 HKLM\\SYSTEM"。在 WinRE/WinPE 里那个键是恢复环境自己的
+		// 注册表（X:\\Windows\\...），铺进 ESP 就等于把 WinRE 的 hive 装到目标机上 —— 机器直接
+		// 起不来。必须在任何导出动作之前拦住。
+		if (IsWindowsPreinstallationEnvironment())
+		{
+			log.push_back(
+				L"[x] running inside WinPE/WinRE: HKLM\\SYSTEM here is the recovery environment's");
+			log.push_back(
+				L"    own hive, not the target system's -- the payload would brick the target");
+			log.push_back(
+				L"    -> run --deploy-esp from the target Windows installation itself");
+			return r;
+		}
+
 		// ---- 1. 资产清点（挂载前就失败，不留半截部署）----
 		const fs::path src = exeDir / L"gunpowder";
 		struct Asset

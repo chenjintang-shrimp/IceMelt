@@ -21,6 +21,17 @@ namespace icemelt
 	// 进程是否以管理员令牌运行（加载内核驱动、写裸盘的硬前提）
 	bool IsProcessElevated();
 
+	// 是否运行在 WinPE / WinRE（判据：HKLM\SYSTEM\CurrentControlSet\Control\MiniNT 存在，
+	// 这是 Windows 安装环境自身的标记键）。
+	//
+	// 为什么这是个必须挡住的硬条件：本工具两处关键动作都**以"运行中的系统"为目标** ——
+	//   * --melt 导出 HKLM\SYSTEM 再写回"这台机器"的系统卷；
+	//   * --deploy-esp 导出 HKLM\SYSTEM 当 payload 铺进 ESP。
+	// 在 WinRE 里 HKLM\SYSTEM 是 **WinRE 自己的**注册表（X:\Windows\...），系统卷也不是
+	// 目标机的系统卷：那样导出的 hive 一旦写回去，目标机的账户/服务/驱动配置全变成 WinRE 的
+	// —— 机器直接起不来。所以这是"宁可拒绝，也不能猜"的一类前提。
+	bool IsWindowsPreinstallationEnvironment();
+
 	// 在当前进程令牌上启用一个特权（如 SE_BACKUP_NAME / SE_SHUTDOWN_NAME）。
 	// 失败时把 Win32 错误码写进 error 并返回 false。
 	bool EnablePrivilege(const wchar_t *name, std::wstring &error);

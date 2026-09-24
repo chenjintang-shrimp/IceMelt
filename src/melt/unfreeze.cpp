@@ -1356,6 +1356,22 @@ namespace icemelt
 			return result;
 		}
 
+		// WinRE/WinPE 里 HKLM\SYSTEM 是**安装环境自己的**注册表，系统卷也不是目标机的系统卷；
+		// 在这儿导出再写回，等于把 WinRE 的 hive 装到目标机上（机器直接起不来）。
+		// 这一条必须在任何导出动作之前，因为"导出错了对象"之后已经无法挽回。
+		if (IsWindowsPreinstallationEnvironment())
+		{
+			emit.warn(
+				Fail(
+					L"preflight",
+					L"running inside WinPE/WinRE: HKLM\\SYSTEM here is the recovery "
+					L"environment's own hive, not the target system's"));
+			emit.warn(
+				L"    -> run IceMelt from the target Windows installation itself "
+				L"(a VM snapshot is the rollback)");
+			return result;
+		}
+
 		// DSE（驱动签名强制）不看任何"查询"接口 —— 判据是装载驱动的返回码：未签名的
 		// WinDisk 只有 DSE 真被解开才装得上（577 = ERROR_INVALID_IMAGE_HASH = 还在拦）。
 		// 这比 NtQuerySystemInformation 的 CodeIntegrityOptions 更贴近事实：那一项只反映 CI
