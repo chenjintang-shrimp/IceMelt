@@ -56,6 +56,7 @@ namespace icemelt
 		// 值不存在时 present=false（不是错误）；类型不受支持或读失败时返回 false 并写 problem。
 		// 只申请 KEY_QUERY_VALUE —— 这个函数也服务于只读预演，不该要求写权限。
 		bool ReadFilterValue(
+			HKEY                       base,
 			const std::wstring &       subkey,
 			const wchar_t *            valueName,
 			std::vector<std::wstring> &items,
@@ -66,7 +67,7 @@ namespace icemelt
 			present  = false;
 			HKEY key = nullptr;
 			if (::RegOpenKeyExW(
-					HKEY_LOCAL_MACHINE,
+					base,
 					subkey.c_str(),
 					0,
 					KEY_QUERY_VALUE,
@@ -152,6 +153,7 @@ namespace icemelt
 		// 写回过滤器值。原类型是 REG_SZ 且只剩一项时按 REG_SZ 写回，其余情况用 REG_MULTI_SZ
 		// （REG_SZ 装不下多项）。
 		bool WriteFilterValue(
+			HKEY                             base,
 			const std::wstring &             subkey,
 			const wchar_t *                  valueName,
 			DWORD                            originalType,
@@ -160,7 +162,7 @@ namespace icemelt
 		{
 			HKEY key = nullptr;
 			if (::RegOpenKeyExW(
-					HKEY_LOCAL_MACHINE,
+					base,
 					subkey.c_str(),
 					0,
 					KEY_SET_VALUE,
@@ -214,13 +216,14 @@ namespace icemelt
 		}
 
 		bool DeleteValue(
+			HKEY                base,
 			const std::wstring &subkey,
 			const wchar_t *     valueName,
 			std::wstring &      error)
 		{
 			HKEY key = nullptr;
 			if (::RegOpenKeyExW(
-					HKEY_LOCAL_MACHINE,
+					base,
 					subkey.c_str(),
 					0,
 					KEY_SET_VALUE,
@@ -253,6 +256,30 @@ namespace icemelt
 		return FormatW(L"HKLM\\%ls", ServicePath(name).c_str());
 	}
 
+	// 离线摘除（reg/hive.cpp::StripTargetsInExportedHive）与 live 摘除共用同一份列表：
+	// 漏掉一个类的后果是 "服务键已删、引用还在" 的 0x7B。
+	const std::vector<std::wstring> &DeviceClassGuids()
+	{
+		static const std::vector<std::wstring> kGuids = []
+		{
+			std::vector<std::wstring> out;
+			for (const wchar_t *guid: kClasses) out.emplace_back(guid);
+			return out;
+		}();
+		return kGuids;
+	}
+
+	const std::vector<std::wstring> &FilterValueNames()
+	{
+		static const std::vector<std::wstring> kNames = []
+		{
+			std::vector<std::wstring> out;
+			for (const wchar_t *name: kValueNames) out.emplace_back(name);
+			return out;
+		}();
+		return kNames;
+	}
+
 	ProbeReport ProbeTargets(const std::vector<std::wstring> &names)
 	{
 		ProbeReport report;
@@ -266,6 +293,7 @@ namespace icemelt
 				probe.valueName = valueName;
 				std::wstring problem;
 				if (!ReadFilterValue(
+					HKEY_LOCAL_MACHINE,
 					path,
 					valueName,
 					probe.items,
@@ -305,6 +333,7 @@ namespace icemelt
 	}
 
 	EditReport StripFilterValueIn(
+		HKEY                             base,
 		const std::wstring &             classKeyPath,
 		const std::wstring &             classGuid,
 		const std::vector<std::wstring> &names)
@@ -317,6 +346,7 @@ namespace icemelt
 			probe.valueName = valueName;
 			std::wstring problem;
 			if (!ReadFilterValue(
+				base,
 				classKeyPath,
 				valueName,
 				probe.items,
@@ -343,13 +373,14 @@ namespace icemelt
 			{
 				// 整值删除只发生在过滤后为空时：本机实测这些类都保留着系统自身的类驱动
 				// （partmgr / kbdclass / mouclass），非空结果绝不会走到这里。
-				if (!DeleteValue(classKeyPath, valueName, error))
+				if (!DeleteValue(base, classKeyPath, valueName, error))
 				{
 					report.failures.push_back(error);
 					continue;
 				}
 			}
 			else if (!WriteFilterValue(
+				base,
 				classKeyPath,
 				valueName,
 				probe.valueType,
@@ -370,7 +401,11 @@ namespace icemelt
 		EditReport report;
 		for (const wchar_t *guid: kClasses)
 		{
-			const EditReport one = StripFilterValueIn(ClassPath(guid), guid, names);
+			const EditReport one = StripFilterValueIn(
+				HKEY_LOCAL_MACHINE,
+				ClassPath(guid),
+				guid,
+				names);
 			report.changedValues.insert(
 				report.changedValues.end(),
 				one.changedValues.begin(),

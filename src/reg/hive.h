@@ -37,6 +37,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
+
+#include "reg/reg_edit.h" // EditReport（离线摘除的报告类型）
 
 namespace icemelt
 {
@@ -123,4 +126,18 @@ namespace icemelt
 		const std::filesystem::path &hivePath,
 		const std::wstring &         serviceName,
 		std::wstring &               error);
+
+	// 从**导出的副本**里离线摘除名单：每个活动 ControlSet 下
+	//   - <ControlSet>\Services\<serviceNames[i]> 整键删除；
+	//   - <ControlSet>\Control\Class\{GUID}\UpperFilters|LowerFilters 里命中 filterNames 的项
+	//     （与 live 路径共用 reg_edit.cpp::StripFilterValueIn 的同一份语义）。
+	// 一次 RegLoadKey 完成全部修改再卸载 —— 卸载即把改动刷回 hive 文件。
+	// 这是 --deploy-esp 的生产者：pre-boot 脚本要换上去的 payload 就是"这台机器现场导出、
+	// 且已经摘干净"的 hive；运行中的注册表不动（机器是冻结的，改它没有意义）。
+	bool StripTargetsInExportedHive(
+		const std::filesystem::path &    hivePath,
+		const std::vector<std::wstring> &serviceNames,
+		const std::vector<std::wstring> &filterNames,
+		EditReport &                     report,
+		std::wstring &                   error);
 } // namespace icemelt

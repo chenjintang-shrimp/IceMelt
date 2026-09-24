@@ -12,6 +12,8 @@
 
 #pragma once
 
+#include <windows.h> // HKEY（摘除的 HKEY 根参数）
+
 #include <string>
 #include <vector>
 
@@ -55,13 +57,24 @@ namespace icemelt
 	ProbeReport ProbeTargets(const std::vector<std::wstring> &names);
 
 	// 摘除逻辑的核心：对**一个**设备类键下的 UpperFilters / LowerFilters 做处理。
-	// classKeyPath 是相对 HKEY_LOCAL_MACHINE 的路径，classGuid 只用于报告字符串。
-	// StripFilterEntries 用 kClasses 里的真实设备类调用它；--selftest-registry 用一个 scratch 键调用它，
-	// 这样写入路径（字符串列表重写 / 整值删除）能在不碰设备类键的前提下被完整验证。
+	// base 是 HKEY 根：live 用 HKEY_LOCAL_MACHINE（classKeyPath 形如
+	// SYSTEM\CurrentControlSet\Control\Class\{GUID}），离线 hive 用 RegLoadKey 出来的根
+	// （classKeyPath 形如 ControlSet001\Control\Class\{GUID}）—— 两条路径共用同一份摘除语义，
+	// 避免离线实现与 live 实现漂移。
+	// classGuid 只用于报告字符串。StripFilterEntries 用 kClasses 里的真实设备类调用它；
+	// --selftest-registry 用一个 scratch 键调用它，这样写入路径（字符串列表重写 / 整值删除）
+	// 能在不碰设备类键的前提下被完整验证。
 	EditReport StripFilterValueIn(
+		HKEY                             base,
 		const std::wstring &             classKeyPath,
 		const std::wstring &             classGuid,
 		const std::vector<std::wstring> &names);
+
+	// 冻结产品挂过滤器的固定设备类 GUID 列表；live 摘除与离线 hive 摘除共用这一份。
+	const std::vector<std::wstring> &DeviceClassGuids();
+
+	// 过滤器值名（UpperFilters / LowerFilters），同样供两条摘除路径共用。
+	const std::vector<std::wstring> &FilterValueNames();
 
 	// HKLM\SYSTEM\CurrentControlSet\Services\<name> 的完整路径（日志与确认清单用）
 	std::wstring ServiceKeyPath(const std::wstring &name);

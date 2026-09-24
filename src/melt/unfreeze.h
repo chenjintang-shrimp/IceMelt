@@ -33,6 +33,11 @@
 
 namespace icemelt
 {
+	// 装载 WinDisk 时注册的临时服务名。所有写出去/部署出去的 SYSTEM hive（melt 的写回副本、
+	// --deploy-esp 的 payload）都必须把它摘掉 —— 否则目标系统会永久留下一个 ImagePath
+	// 指向本机 exe 目录的服务。
+	inline constexpr const wchar_t *kLoaderServiceName = L"WinDisk";
+
 	// 「未签名的 WinDisk 能不能装载」这一次探测的完整结果。
 	//
 	// 判据只有一个 —— 装载返回码（见 win_disk.h::DriverLoad）：577 就是签名强制还在拦。

@@ -6,6 +6,7 @@
 #include <fstream>
 #include <vector>
 
+#include "reg/reg_edit.h"
 #include "util.h"
 
 namespace icemelt
@@ -297,15 +298,14 @@ namespace icemelt
 		// 离线加载导出副本时用的临时键名（只在函数内存在，异常路径也会卸载）
 		constexpr const wchar_t *kOfflineKeyName = L"ICEMELT_OFFLINE";
 
-		// 在**已加载**的离线 hive 里，按 Select\Current（兼顾 Default）遍历活动 ControlSet，
-		// 删掉 <ControlSet>\Services\<name>。返回是否删掉了至少一个。
-		bool DeleteServiceInControlSets(
-			HKEY                offlineRoot,
-			const std::wstring &serviceName,
-			bool &              deleted,
-			std::wstring &      error)
+		// 在**已加载**的离线 hive 里，按 Select\Current（兼顾 Default）得到活动 ControlSet 名。
+		// 服务键删除与过滤器摘除都要按同一份集合遍历 —— 各自算一次容易漂移。
+		bool ActiveControlSets(
+			HKEY                        offlineRoot,
+			std::vector<std::wstring> & sets,
+			std::wstring &              error)
 		{
-			std::vector<std::wstring> sets;
+			sets.clear();
 			for (const wchar_t *which: {L"Current", L"Default"})
 			{
 				DWORD value = 0;
@@ -336,35 +336,60 @@ namespace icemelt
 						L"the hive has no Select\\Current: cannot tell which ControlSet is active";
 				return false;
 			}
+			return true;
+		}
 
-			for (const auto &set: sets)
+		// 在已加载的离线 hive 里删掉 <ControlSet>\Services\<name>（每个活动 ControlSet 一份）。
+		// 不存在的键记入 absentKeys（正常情况），真删掉的记入 deletedKeys。
+		bool DeleteServicesInControlSets(
+			HKEY                             offlineRoot,
+			const std::vector<std::wstring> &sets,
+			const std::vector<std::wstring> &serviceNames,
+			EditReport &                     report,
+			std::wstring &                   error)
+		{
+			for (const auto &name: serviceNames)
 			{
-				const std::wstring path = FormatW(
-					L"%ls\\Services\\%ls",
-					set.c_str(),
-					serviceName.c_str());
-				const LSTATUS status = ::RegDeleteTreeW(offlineRoot, path.c_str());
-				if (status == ERROR_SUCCESS)
+				bool deleted = false;
+				for (const auto &set: sets)
 				{
-					deleted = true;
+					const std::wstring path = FormatW(
+						L"%ls\\Services\\%ls",
+						set.c_str(),
+						name.c_str());
+					const LSTATUS status = ::RegDeleteTreeW(offlineRoot, path.c_str());
+					if (status == ERROR_SUCCESS)
+					{
+						deleted = true;
+					}
+					else if (status != ERROR_FILE_NOT_FOUND && status != ERROR_PATH_NOT_FOUND)
+					{
+						error = FormatW(
+							L"RegDeleteTreeW(%ls) failed: %ld",
+							path.c_str(),
+							status);
+						return false;
+					}
 				}
-				else if (status != ERROR_FILE_NOT_FOUND && status != ERROR_PATH_NOT_FOUND)
+				if (deleted)
 				{
-					error = FormatW(
-						L"RegDeleteTreeW(%ls) failed: %ld",
-						path.c_str(),
-						status);
-					return false;
+					report.deletedKeys.push_back(name);
+				}
+				else
+				{
+					report.absentKeys.push_back(name);
 				}
 			}
 			return true;
 		}
 	} // namespace
 
-	bool RemoveServiceFromExportedHive(
-		const std::filesystem::path &hivePath,
-		const std::wstring &         serviceName,
-		std::wstring &               error)
+	bool StripTargetsInExportedHive(
+		const std::filesystem::path &    hivePath,
+		const std::vector<std::wstring> &serviceNames,
+		const std::vector<std::wstring> &filterNames,
+		EditReport &                     report,
+		std::wstring &                   error)
 	{
 		std::wstring privilegeError;
 		if (!EnablePrivilege(SE_BACKUP_NAME, privilegeError))
@@ -391,11 +416,10 @@ namespace icemelt
 			return false;
 		}
 
-		bool ok      = false;
-		bool deleted = false;
+		bool ok   = false;
+		HKEY root = nullptr;
 		do
 		{
-			HKEY root = nullptr;
 			if (::RegOpenKeyExW(
 					HKEY_LOCAL_MACHINE,
 					kOfflineKeyName,
@@ -405,11 +429,54 @@ namespace icemelt
 				ERROR_SUCCESS)
 			{
 				error = FormatW(L"cannot open the loaded hive %ls", kOfflineKeyName);
+				root = nullptr;
 				break;
 			}
-			ok = DeleteServiceInControlSets(root, serviceName, deleted, error);
-			::RegCloseKey(root);
+
+			// 服务键与过滤器都按同一份活动 ControlSet 集合遍历。
+			std::vector<std::wstring> sets;
+			if (!ActiveControlSets(root, sets, error)) break;
+
+			if (!serviceNames.empty() &&
+				!DeleteServicesInControlSets(root, sets, serviceNames, report, error))
+			{
+				break;
+			}
+
+			bool filtersOk = true;
+			for (const auto &set: sets)
+			{
+				for (const auto &guid: DeviceClassGuids())
+				{
+					const std::wstring path = FormatW(
+						L"%ls\\Control\\Class\\%ls",
+						set.c_str(),
+						guid.c_str());
+					const EditReport one = StripFilterValueIn(
+						root,
+						path,
+						guid,
+						filterNames);
+					report.changedValues.insert(
+						report.changedValues.end(),
+						one.changedValues.begin(),
+						one.changedValues.end());
+					report.failures.insert(
+						report.failures.end(),
+						one.failures.begin(),
+						one.failures.end());
+					if (!one.failures.empty()) filtersOk = false;
+				}
+			}
+			if (!filtersOk)
+			{
+				error = L"one or more filter values could not be rewritten";
+				break;
+			}
+
+			ok = true;
 		} while (false);
+		if (root) ::RegCloseKey(root);
 
 		// 无论成败都要卸载：留着会让 hive 处于半写状态，也会让下次 RegLoadKey 失败
 		const LSTATUS unload = ::RegUnLoadKeyW(HKEY_LOCAL_MACHINE, kOfflineKeyName);
@@ -421,7 +488,20 @@ namespace icemelt
 				unload);
 			return false;
 		}
-		(void) deleted;
 		return ok;
+	}
+
+	bool RemoveServiceFromExportedHive(
+		const std::filesystem::path &hivePath,
+		const std::wstring &         serviceName,
+		std::wstring &               error)
+	{
+		EditReport report;
+		return StripTargetsInExportedHive(
+			hivePath,
+			{serviceName},
+			{},
+			report,
+			error);
 	}
 } // namespace icemelt

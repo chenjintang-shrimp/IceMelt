@@ -19,7 +19,6 @@ namespace icemelt
 {
 	namespace
 	{
-		constexpr const wchar_t *kServiceName = L"WinDisk";
 		constexpr const wchar_t *kDefaultSysName = L"WinDisk_x64.sys";
 		constexpr const wchar_t *kSystemVolume = L"\\\\.\\C:";
 		// 卷内路径（ntfscp 的 dest 参数，相对卷根；与原作者 ReplaceFileNTFS 的构造方式一致）
@@ -1282,7 +1281,7 @@ namespace icemelt
 		}
 
 		std::wstring error;
-		outcome.result = LoadDriver(sysPath, kServiceName, error);
+		outcome.result = LoadDriver(sysPath, kLoaderServiceName, error);
 		if (outcome.result == DriverLoad::Loaded)
 		{
 			// WinDisk 已经在内核中运行，不能在这里卸载；RunMelt 会在所有 raw 操作完成后
@@ -1295,7 +1294,7 @@ namespace icemelt
 		// 建出来的服务键是安全的 —— 不删的话，每次提权探测都会在活动注册表里留一个。
 		const auto cleanup = [&]
 		{
-			icemelt::UnloadDriver(kServiceName);
+			icemelt::UnloadDriver(kLoaderServiceName);
 		};
 		if (outcome.result != DriverLoad::SignatureRejected)
 		{
@@ -1328,7 +1327,7 @@ namespace icemelt
 			}
 		}
 
-		outcome.result = LoadDriver(sysPath, kServiceName, error);
+		outcome.result = LoadDriver(sysPath, kLoaderServiceName, error);
 		if (outcome.result != DriverLoad::Loaded)
 		{
 			outcome.retryError = error;
@@ -1643,12 +1642,12 @@ namespace icemelt
 		else
 		{
 			std::wstring stripError;
-			if (RemoveServiceFromExportedHive(hivePath, kServiceName, stripError))
+			if (RemoveServiceFromExportedHive(hivePath, kLoaderServiceName, stripError))
 			{
 				emit.ok(
 					FormatW(
 						L"removed the transient service key '%ls' from the exported hive",
-						kServiceName));
+						kLoaderServiceName));
 			}
 			else
 			{
@@ -1702,7 +1701,7 @@ namespace icemelt
 			FormatW(
 				L"remove the loader's transient service key '%ls' from the exported hive before writing it "
 				L"back (otherwise the target keeps a service pointing at this machine's exe folder)",
-				kServiceName));
+				kLoaderServiceName));
 		result.pending.push_back(
 			FormatW(
 				L"copy %ls to %ls on the raw disk (the volume's real name for it is resolved first, "
@@ -2015,7 +2014,7 @@ namespace icemelt
 				emit.warn(L"preflight failed; refusing to write SYSTEM or reboot");
 				result.wroteDisk = false;
 				device.Close();
-				if (!UnloadDriver(kServiceName))
+				if (!UnloadDriver(kLoaderServiceName))
 				{
 					emit.warn(
 						L"could not remove the transient WinDisk service after preflight failure");
@@ -2209,7 +2208,7 @@ namespace icemelt
 		// 所有 raw I/O 已完成；现在才关闭设备并卸载 WinDisk。这样活动 SYSTEM 不会留下
 		// Services\\WinDisk，也不会在下次启动触发“Windows 要求已数字签名的驱动程序”提示。
 		device.Close();
-		if (UnloadDriver(kServiceName))
+		if (UnloadDriver(kLoaderServiceName))
 		{
 			emit.ok(L"unloaded WinDisk and removed its transient service entry");
 		}
@@ -2348,7 +2347,7 @@ namespace icemelt
 				L"preflight aborted: $LogFile restart page is v2.0 (cached metadata); "
 				"do a real shutdown and retry");
 			device.Close();
-			if (!UnloadDriver(kServiceName))
+			if (!UnloadDriver(kLoaderServiceName))
 				emit.warn(L"could not unload/remove WinDisk after the guard stop");
 			return result;
 		}
@@ -2467,7 +2466,7 @@ namespace icemelt
 
 		// ---- 收尾：卸载驱动
 		device.Close();
-		if (UnloadDriver(kServiceName))
+		if (UnloadDriver(kLoaderServiceName))
 		{
 			emit.ok(L"unloaded WinDisk and removed its transient service entry");
 		}

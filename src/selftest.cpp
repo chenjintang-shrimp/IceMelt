@@ -318,7 +318,7 @@ namespace icemelt
 		setValue(
 			L"UpperFilters",
 			{L"partmgr", L"IceMeltProbe", L"DEEPFRZ", L"OtherFilter"});
-		EditReport report = StripFilterValueIn(classPath, kFakeGuid, names);
+		EditReport report = StripFilterValueIn(HKEY_LOCAL_MACHINE, classPath, kFakeGuid, names);
 		std::vector<std::wstring> items;
 		const bool present = getValue(L"UpperFilters", items);
 		Print(FormatW(L"UpperFilters now: %zu item(s)", items.size()));
@@ -333,7 +333,7 @@ namespace icemelt
 
 		// 用例 2：列表里全是命中项 → 整值删除（而不是留下空数组）
 		setValue(L"LowerFilters", {L"IceMeltProbe", L"deEPfrZ"});
-		const EditReport emptyCase = StripFilterValueIn(classPath, kFakeGuid, names);
+		const EditReport emptyCase = StripFilterValueIn(HKEY_LOCAL_MACHINE, classPath, kFakeGuid, names);
 		std::vector<std::wstring> lower;
 		check(
 			L"all-matched value is deleted entirely",
@@ -352,7 +352,7 @@ namespace icemelt
 						reinterpret_cast<const BYTE *>(probe),
 						bytes) ==
 					ERROR_SUCCESS;
-			const EditReport szCase = StripFilterValueIn(classPath, kFakeGuid, names);
+			const EditReport szCase = StripFilterValueIn(HKEY_LOCAL_MACHINE, classPath, kFakeGuid, names);
 			DWORD            type   = 0;
 			DWORD            size   = 0;
 			const bool       gone   = ::RegQueryValueExW(
@@ -380,7 +380,7 @@ namespace icemelt
 				REG_SZ,
 				reinterpret_cast<const BYTE *>(value),
 				bytes);
-			const EditReport szKept = StripFilterValueIn(classPath, kFakeGuid, names);
+			const EditReport szKept = StripFilterValueIn(HKEY_LOCAL_MACHINE, classPath, kFakeGuid, names);
 			check(
 				L"REG_SZ without a match stays untouched",
 				szKept.changedValues.empty());
@@ -389,6 +389,7 @@ namespace icemelt
 		// 用例 3：列表里没有命中项 → 一个字节都不动
 		setValue(L"UpperFilters", {L"partmgr", L"OtherFilter"});
 		const EditReport untouched = StripFilterValueIn(
+			HKEY_LOCAL_MACHINE,
 			classPath,
 			kFakeGuid,
 			{L"SomethingElse"});
