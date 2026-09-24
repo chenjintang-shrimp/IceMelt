@@ -1192,6 +1192,13 @@ namespace icemelt
 			std::memcpy(p0, kEspGuid, 16);
 			WrU64(p0 + 0x20, kEspFirstLba);
 			WrU64(p0 + 0x28, kEspLastLba);
+			// 属性位（条目偏移 0x30 —— 在名字段 0x38 之前，不重叠；0x48 是 GPT 头的
+			// "分区条目 LBA"，与条目内的属性字段完全不同）带上 hidden(0x4) 与
+			// no-drive-letter(0x8000...)：DG"取消隐藏"之前的 ESP 就是这个形状。
+			// 解析器必须把它报出来 —— 卷锁走不走 GLOBALROOT 兜底、直写为什么被拒，
+			// 诊断全靠这两个位可见。
+			WrU64(p0 + 0x30, 0x8000000000000004ull);
+			// 名字字段：0x38..0x7F，36 个 UTF-16 码元定长（不与 0x30 属性位重叠）
 			const wchar_t *label = L"EFI system partition";
 			for (int i = 0; label[i] != 0 && i < 36; ++i)
 			{
@@ -1217,6 +1224,12 @@ namespace icemelt
 					L"its length is right (500 MB)",
 					found[0].lengthBytes == (kEspLastLba - kEspFirstLba + 1) * 512);
 			}
+
+			check(
+				L"hidden + no-drive-letter attributes are reported",
+				found.size() == 1 &&
+					found[0].description.find(L"hidden") != std::wstring::npos &&
+					found[0].description.find(L"no-drive-letter") != std::wstring::npos);
 			io.Close();
 		}
 

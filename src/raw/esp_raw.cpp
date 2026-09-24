@@ -118,6 +118,19 @@ namespace icemelt
 						L"disk %u GPT partition %u (EFI System Partition filesystem)",
 						diskNumber,
 						i + 1);
+					// GPT 属性位（条目偏移 0x30 —— 注意不是 0x48：那是 GPT **头**里
+					// "分区条目所在 LBA" 的字段；0x48 在条目里落在名字段中间，读它只会
+					// 读到名字的 UTF-16 字节）：hidden(0x4) / read-only(0x1000) /
+					// no-drive-letter(0x8000000000000000)。
+					// hidden 或 no-drive-letter 的 ESP 不进 Win32 卷列表 —— 卷锁只能靠
+					// GLOBALROOT 兜底枚举找；这两位是什么直接决定诊断方向，必须可见。
+					const uint64_t attrs = RdU64(&e[0x30]);
+					std::wstring   attrNotes;
+					if (attrs & 0x4) attrNotes += L" hidden";
+					if (attrs & 0x1000) attrNotes += L" read-only";
+					if (attrs & 0x8000000000000000ull) attrNotes += L" no-drive-letter";
+					if (!attrNotes.empty())
+						part.description += L" | GPT attributes:" + attrNotes;
 					// 名字（UTF-16LE，最多 36 个字符）—— 有就带上，便于人识别
 					std::wstring name;
 					for (int c = 0; c < 36; ++c)
