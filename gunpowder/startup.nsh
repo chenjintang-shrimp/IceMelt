@@ -75,23 +75,23 @@ if %lasterror% ne 0 then
 endif
 
 # --- 6. Restore the boot loaders, but only if this run replaced them ---
-# ESP mode: --deploy-esp backed \EFI\Microsoft\Boot\bootmgfw.efi (and \EFI\Boot\BOOTX64.EFI
-# when it existed) up into \EFI\IceMelt\, so put them back.
+# ESP mode (both the mountvol and the --raw path): the original bootmgfw.efi (and
+# \EFI\Boot\BOOTX64.EFI when it existed) were backed up into \EFI\IceMelt as *.OLD.
 # USB mode: nothing on any internal disk was replaced -- these files do not exist and the
 # block is skipped (the stick's own boot files were backed up to \EFI\IceMelt\backup\ by the
 # tool, and are deliberately NOT restored here: restoring them would overwrite the Shell
 # that is running from this very stick).
-if exist %EspFs%\EFI\IceMelt\bootmgfw-original.efi then
+if exist %EspFs%\EFI\IceMelt\BOOTMGW.OLD then
     attrib -r %EspFs%\EFI\Microsoft\Boot\bootmgfw.efi
-    cp %EspFs%\EFI\IceMelt\bootmgfw-original.efi %EspFs%\EFI\Microsoft\Boot\bootmgfw.efi
+    cp %EspFs%\EFI\IceMelt\BOOTMGW.OLD %EspFs%\EFI\Microsoft\Boot\bootmgfw.efi
     if %lasterror% ne 0 then
         echo IceMelt: WARNING: bootmgfw restore failed, shell will run again next boot
     endif
 endif
 
-if exist %EspFs%\EFI\IceMelt\bootx64-original.efi then
+if exist %EspFs%\EFI\IceMelt\BOOTX64.OLD then
     attrib -r %EspFs%\EFI\Boot\BOOTX64.EFI
-    cp %EspFs%\EFI\IceMelt\bootx64-original.efi %EspFs%\EFI\Boot\BOOTX64.EFI
+    cp %EspFs%\EFI\IceMelt\BOOTX64.OLD %EspFs%\EFI\Boot\BOOTX64.EFI
     if %lasterror% ne 0 then
         echo IceMelt: WARNING: BOOTX64.EFI restore failed
     endif

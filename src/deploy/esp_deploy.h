@@ -50,6 +50,18 @@ namespace icemelt
 	// 唯一的写入目标是 U 盘本身；内核侧的动作交给 U 盘引导起来的那次 startup.nsh。
 	//
 	// preferredDrive 形如 "E" / "E:"：留空时自动选择（可移动 FAT 卷必须恰好一个）。
+	// 同一条 ESP 链，但**不走文件系统**：用普通物理盘句柄（\\.\PhysicalDriveN）直接
+	// 读写 ESP 的 FAT 数据区。存在的理由：还原软件挂在卷/文件层时，mountvol 那条路上的
+	// 写入会被 COW 吞掉；而裸扇区写不经过卷栈（DfDiskLo 只影子 MBR/GPT，本实现不碰那几
+	// 个扇区）。代价是文件系统的事得自己干 —— 见 raw/fat.h 的最小 FAT 写入器。
+	//
+	// 安全网：写入前把所有会被修改的**元数据扇区**（FAT/FSInfo/目录条目）快照进一个
+	// undo 文件（%TEMP%\icemelt-esp-undo.bin），可用 --esp-undo 原样回放。
+	DeployResult DeployEspRaw(const std::filesystem::path &exeDir);
+
+	// 回放 undo 文件（把快照里的原始字节写回原磁盘）。
+	DeployResult RestoreEspUndo(const std::filesystem::path &undoFile);
+
 	DeployResult DeployUsb(
 		const std::filesystem::path &exeDir,
 		const std::wstring &         preferredDrive);

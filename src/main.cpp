@@ -478,6 +478,11 @@ namespace
 				"                           exercise the filter-stripping write path on a scratch key\n"
 				"  icemelt --selftest-raw   raw disk write/read-back check (loads a kernel driver,\n"
 				"                           writes the system volume: run in a VM only)\n"
+				"  icemelt --deploy-esp --raw --yes-i-know\n"
+				"                           same chain, but written straight to the ESP's sectors\n"
+				"                           via \\\\.\\PhysicalDriveN (no mountvol, no kernel driver)\n"
+				"  icemelt --esp-undo=<file>\n"
+				"                           replay an undo snapshot written by --deploy-esp --raw\n"
 				"  icemelt --selftest-fat [--image=<file>]\n"
 				"                           FAT writer self-test on a synthetic image in %TEMP%\n"
 				"                           (no admin, no real volume); with --image= it only reads\n"
@@ -502,6 +507,8 @@ int main(int argc, char **argv)
 	bool deployEsp        = false;
 	bool deployUsb        = false;
 	std::wstring driveArg; // --drive=E: (USB 载体显式指定时用)
+	bool         deployRaw = false; // --raw：--deploy-esp 走物理盘扇区而不是 mountvol
+	std::wstring undoFile;          // --esp-undo <file>：回放 undo 快照
 	bool yesIKnow         = false;
 
 	for (int i = 1; i < argc; ++i)
@@ -513,6 +520,9 @@ int main(int argc, char **argv)
 		else if (arg == "--preflight") preflight = true;
 		else if (arg == "--deploy-esp") deployEsp = true;
 		else if (arg == "--deploy-usb") deployUsb = true;
+		else if (arg == "--raw") deployRaw = true;
+		else if (arg.rfind("--esp-undo=", 0) == 0)
+			undoFile = icemelt::Widen(std::string(arg.substr(11)));
 		else if (arg.rfind("--drive=", 0) == 0)
 		{
 			driveArg = icemelt::Widen(std::string(arg.substr(8)));
@@ -585,6 +595,12 @@ int main(int argc, char **argv)
 					"copy \\EFI\\IceMelt\\BOOTMGW.OLD back over bootmgfw.efi, and\n"
 					"\\EFI\\IceMelt\\BOOTX64.OLD back over \\EFI\\Boot\\BOOTX64.EFI if present).\n"
 					"\n"
+					"With --raw the same chain is written through the plain physical-disk handle\n"
+					"(\\\\.\\PhysicalDriveN) instead of mountvol+files, so a volume-level restore\n"
+					"filter cannot swallow the writes; the ESP's FAT is handled by a built-in\n"
+					"minimal FAT writer, and every metadata sector it touches is snapshotted first\n"
+					"(replay with --esp-undo=<file>). Partition tables are never touched.\n"
+					"\n"
 					"PREREQUISITE: the firmware must load one of the two files this deploy replaces:\n"
 					"  a) the NVRAM boot entry (Boot####) -> \\EFI\\Microsoft\\Boot\\bootmgfw.efi (usual)\n"
 					"  b) the default fallback path \\EFI\\Boot\\BOOTX64.EFI (only when every Boot####\n"
@@ -601,7 +617,14 @@ int main(int argc, char **argv)
 					"Re-run with --deploy-esp --yes-i-know if that is what you want.\n";
 			return 2;
 		}
-		const icemelt::DeployResult r = icemelt::DeployEsp(exeDir);
+		const icemelt::DeployResult r = deployRaw ? icemelt::DeployEspRaw(exeDir)
+		                                         : icemelt::DeployEsp(exeDir);
+		for (const auto &line: r.log) Print(line);
+		return r.ok ? 0 : 1;
+	}
+	if (!undoFile.empty())
+	{
+		const icemelt::DeployResult r = icemelt::RestoreEspUndo(undoFile);
 		for (const auto &line: r.log) Print(line);
 		return r.ok ? 0 : 1;
 	}
