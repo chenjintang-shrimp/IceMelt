@@ -162,12 +162,57 @@ release 草稿。
 | `icemelt --dump`              | 自检报告：环境 + 构建期资产 + 名单的实测存在状态，只读，可用于 CI                    |
 | `icemelt --dry-run`           | 只读预演整条链路                                                                     |
 | `icemelt --preflight`         | melt 前的一次性根因扫描（logstate 守卫 + 目录层级探针），**只在带快照的 VM 里跑**    |
+| `icemelt --deploy-esp --yes-i-know` | 把 pre-boot melt 链铺进 ESP（mountvol → 拷贝 → 卸载，走普通文件路径）          |
 | `icemelt --melt --yes-i-know` | 非交互执行整条链路；破坏性、不可回滚                                                 |
 | `icemelt --selftest-hive`     | 校验 hive base block 偏移与校验和算法                                                |
 | `icemelt --selftest-registry` | 验证过滤器摘除的写入路径                                                             |
 | `icemelt --selftest-raw`      | 裸盘写入/读回判定：底层通路是硬断言，OS 通路只做分类（**只在虚拟机里跑**）           |
 
-`--selftest-raw`、`--melt`（以及图形前端的三个动作）需要管理员权限。无需担心数字签名：程序自己会搞定。
+`--selftest-raw`、`--melt`、`--deploy-esp`（以及图形前端的三个动作）需要管理员权限。无需担心数字签名：程序自己会搞定。
+
+### ESP 预启动链路（`--deploy-esp`）
+
+与 `--melt` 并列的第二条通路：不写裸盘，而是把"下一次启动由 UEFI Shell 完成 melt"所需的
+文件铺进 EFI 系统分区。适合被冻结的机器 —— ESP 不属于被冻结的卷，普通文件写入能留住；
+而 SYSTEM hive 的替换发生在 Windows 与过滤器驱动加载**之前**，绕开拦截。
+
+**做的四件事**（全部走普通文件路径，不装驱动、不碰裸盘）：
+
+1. **现场生产 payload**：导出本机 `HKLM\SYSTEM` → 离线摘掉名单里的服务键与设备类
+   `UpperFilters`/`LowerFilters` 项（与 live 摘除共用同一份语义）→ 置干净/修校验和/
+   可加载性校验；
+2. `mountvol X: /S` 挂出 ESP；
+3. 备份原始 `bootmgfw.efi`（只建一次）→ 用 UEFI Shell 覆盖它 → 放 `startup.nsh`、
+   `ntfs-3g.efi`、payload hive 到 `\EFI\IceMelt\`，逐个大小读回校验；
+4. `mountvol X: /D` 卸载（任何失败路径都保证卸载）。
+
+**ESP 布局**：
+
+```
+\EFI\Microsoft\Boot\bootmgfw.efi   <- shellx64.efi（改名替换；默认启动项指向它）
+\EFI\Microsoft\Boot\startup.nsh    <- 自动执行（Shell 规范 3.3.1：先找 shell 自身目录）
+\EFI\IceMelt\ntfs-3g.efi           <- NTFS 驱动（RW 版）
+\EFI\IceMelt\SYSTEM                <- 现场生产的 payload hive
+\EFI\IceMelt\bootmgfw-original.efi <- 原始 bootmgfw 备份
+```
+
+**startup.nsh 的流程**：定位 ESP 与 Windows 卷 → 备份原始 hive（只一次）→ 覆盖
+`config\SYSTEM`（失败即恢复）→ 恢复原始 `bootmgfw.efi` → 冷重启。下一轮启动就进 Windows，
+过滤器与冻结服务已不在 hive 里。
+
+**前提与回滚**：
+
+* **固件必须真的会去加载这个 ESP 上的 `\EFI\Microsoft\Boot\bootmgfw.efi`**。用一个启动项
+  检查（`bcdedit /enum` 或 EasyBCD）：如果它的**设备**是 Windows 分区、**启动文件**是
+  `\Windows\system32\winload.efi`，那台机器根本不经过 `bootmgfw.efi` —— 部署什么都不会发生。
+  先在 WinRE（疑难解答 → 命令提示符）里修引导：`bcdboot C:\Windows /s S: /f UEFI`
+  （`S:` = 挂好的 ESP），它会重建真正的 `bootmgfw.efi` 与一条"从 ESP 引导它"的条目，
+  然后重跑 `--deploy-esp`。
+* Secure Boot 必须关闭（UEFI Shell 未签名）。
+* 回滚 = 进 Shell 把 `\EFI\IceMelt\bootmgfw-original.efi` 拷回 `bootmgfw.efi`。
+
+输入资产在 `<exe>\gunpowder\`：`shellx64.efi`（pbatard/UEFI-Shell）、`ntfs-3g.efi`
+（pbatard/ntfs-3g，RW 版）、`startup.nsh`。
 
 ### 图形前端（icemelt-gui）
 
