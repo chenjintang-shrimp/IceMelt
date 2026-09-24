@@ -126,7 +126,8 @@ jobs:
           $out = 'build\windows\x64\release'
           $required = @(
             'icemelt.exe', 'icemelt-gui.exe', 'WinDisk_x64.sys', 'kdu.exe', 'drv64.dll', 'targets.txt',
-            'tools\ntfscp.exe', 'tools\ntfsfix.exe', 'tools\ntfs-3g-cli.exe', 'tools\mkntfs.exe'
+            'tools\ntfscp.exe', 'tools\ntfsfix.exe', 'tools\ntfs-3g-cli.exe', 'tools\mkntfs.exe',
+            'gunpowder\shellx64.efi', 'gunpowder\ntfs-3g.efi', 'gunpowder\startup.nsh'
           )
           $missing = @($required | Where-Object { -not (Test-Path (Join-Path $out $_)) })
           if ($missing.Count) { throw "bundle incomplete, missing: $($missing -join ', ')" }
@@ -146,6 +147,11 @@ jobs:
           if ($dump -notmatch 'state on this machine') { throw 'dump did not probe the target list' }
           # 退出码 = 自检是否全绿；runner 上必然有一条不绿（进程非提权），故只断言自检真的跑了
           if ($dump -notmatch 'CHECK FAILED|ALL SYSTEMS GO') { throw 'dump did not run the self-check' }
+
+          # --deploy-esp 没有显式 token 必须拒绝（退出码 2）。这一条在提权检查之前，
+          # 所以在非提权的 runner 上也能验；它保证"不会因为少了 --yes-i-know 就替人换 bootmgfw"。
+          & $exe --deploy-esp | Out-String | Write-Host
+          if ($LASTEXITCODE -ne 2) { throw "--deploy-esp without --yes-i-know must exit 2, got $LASTEXITCODE" }
 
       - name: Assert Win7 floor for both frontends
         shell: pwsh
@@ -211,7 +217,8 @@ jobs:
           # $(builddir) 展开没了），它会安安静静地少装文件 —— 这点不如原来那份脚本
           # （缺文件直接失败），所以在这里逐项点验，别让空壳包发出去。
           $runtime = @('WinDisk_x64.sys', 'kdu.exe', 'drv64.dll', 'targets.txt',
-                       'tools/ntfscp.exe', 'tools/ntfsfix.exe', 'tools/ntfs-3g-cli.exe', 'tools/mkntfs.exe')
+                       'tools/ntfscp.exe', 'tools/ntfsfix.exe', 'tools/ntfs-3g-cli.exe', 'tools/mkntfs.exe',
+                       'gunpowder/shellx64.efi', 'gunpowder/ntfs-3g.efi', 'gunpowder/startup.nsh')
           $expected = @{
             "IceMelt-v$want-cli.zip"        = @('icemelt.exe', 'preflight.bat', 'melt.bat') + $runtime
             "IceMelt-GUI-v$want-gui.zip"    = @('icemelt-gui.exe') + $runtime

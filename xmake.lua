@@ -218,6 +218,23 @@ end
         print("IceMelt: WARNING drv64.dll not found at " .. drv64 ..
               " -- kdu will not be able to load any provider")
     end
+
+    -- gunpowder：pre-boot melt 链的输入资产（shellx64.efi / ntfs-3g.efi / startup.nsh）。
+    -- --deploy-esp 在运行时从 <exeDir>\gunpowder 读它们，所以本地构建出来的输出目录
+    -- 也要自成一套可直接跑 --deploy-esp 的组合。
+    -- payload hive 不在这里：它由 --deploy-esp 现场从本机导出并离线摘净（不是静态文件）。
+    local gunpowder = {"shellx64.efi", "ntfs-3g.efi", "startup.nsh"}
+    local gpdir = path.join(outdir, "gunpowder")
+    for _, name in ipairs(gunpowder) do
+        local file = path.join(ROOT, "gunpowder", name)
+        if os.isfile(file) then
+            os.mkdir(gpdir)
+            os.cp(file, path.join(gpdir, name))
+        else
+            print("IceMelt: WARNING gunpowder asset not found at " .. file ..
+                  " (--deploy-esp will refuse to run)")
+        end
+    end
 end
 
 -- ============================================================================
@@ -233,6 +250,8 @@ local function install_runtime_assets()
         add_installfiles(RUNTIME_STAGE .. "/" .. name)
     end
     add_installfiles(RUNTIME_STAGE .. "/tools/*.exe", {prefixdir = "tools"})
+    -- gunpowder 资产同理由 after_build 落位到 RUNTIME_STAGE，再从那里进包
+    add_installfiles(RUNTIME_STAGE .. "/gunpowder/*", {prefixdir = "gunpowder"})
 end
 
 target("icemelt")
