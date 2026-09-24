@@ -18,7 +18,7 @@
 //   icemelt --selftest-hive 校验 hive base block 偏移与校验和算法
 //   icemelt --selftest-registry 在 scratch 键上验证过滤器摘除的写入路径
 //   icemelt --selftest-raw  裸盘写入/读回判定（会装载内核驱动、写系统卷，仅限虚拟机）
-//   icemelt --selftest-fat  FAT 写入器自检（合成镜像，不需要管理员、不碰真实卷）
+//   icemelt --selftest-fat  FAT 写路径自检（FatFs；合成镜像，不需要管理员、不碰真实卷）
 //
 // 文案刻意保持 ASCII —— Windows 控制台默认代码页多为 936(GBK)，非 ASCII 文案在部分
 // 终端会花屏；宽字符只用于 Win32 API 边界与 UTF-8 名单文件。着色规则见 util.h::CliPaint。

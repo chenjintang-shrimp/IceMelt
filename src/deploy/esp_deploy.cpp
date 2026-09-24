@@ -7,7 +7,8 @@
 
 #include "melt/unfreeze.h" // kLoaderServiceName
 #include "raw/esp_raw.h"
-#include "raw/fat.h"
+#include "raw/block_io.h"    // SectorIo / UndoJournal / PhysicalDriveSectorIo / 卷锁
+#include "raw/fat_volume.h"  // FatFsVolume（FatFs 封装）
 #include "raw/ntfs_tool.h" // RunTool
 #include "reg/hive.h"
 #include "reg/reg_edit.h"
@@ -681,7 +682,7 @@ namespace icemelt
 
 	namespace
 	{
-		// 宿主文件读取器：给 FAT 写入器提供内容源（分块，不把 40 MB payload 全读进内存）
+		// 宿主文件读取器：给 ESP 上的写入提供内容源（分块，不把 40 MB payload 全读进内存）
 		class HostFileReader
 		{
 		public:
@@ -743,14 +744,6 @@ namespace icemelt
 			HANDLE   handle_ = INVALID_HANDLE_VALUE;
 			uint64_t size_   = 0;
 		};
-
-		// 把 ESP 上的一个文件读进内存（备份用；引导器只有 1-2 MB）
-		bool ReadEspFile(FatFileSystem &fs, const std::string &path, std::vector<uint8_t> &out, bool &exists, std::wstring &error)
-		{
-			exists = fs.Exists(path, nullptr, nullptr, error);
-			if (!exists) return true;
-			return fs.ReadFile(path, out, error);
-		}
 	} // namespace
 
 	DeployResult DeployEspRaw(const std::filesystem::path &exeDir)
@@ -820,7 +813,7 @@ namespace icemelt
 				static_cast<unsigned long long>(esp.lengthBytes)));
 
 		log.push_back(
-			L"[*] backend: raw physical disk (\\\\.\\PhysicalDriveN) + the built-in FAT writer");
+			L"[*] backend: raw physical disk (\\\\.\\PhysicalDriveN) + FatFs (R0.15)");
 		// ---- 4. 打开物理盘 + 挂 FAT ----
 		PhysicalDriveSectorIo physical;
 		if (!physical.Open(esp.diskNumber, error))
@@ -846,7 +839,7 @@ namespace icemelt
 		if (volume == INVALID_HANDLE_VALUE)
 			log.push_back(L"[*] no mounted volume covers the ESP: nothing to lock");
 
-		FatFileSystem fs;
+		FatFsVolume fs;
 		if (!fs.Mount(physical, esp.offsetBytes, error))
 		{
 			log.push_back(FormatW(L"[x] cannot mount the ESP filesystem: %ls", error.c_str()));
@@ -882,16 +875,53 @@ namespace icemelt
 		const std::string kBakX64   = "EFI\\IceMelt\\BOOTX64.OLD";
 
 		// 目标文件是否存在（决定要不要备份/覆盖 BOOTX64）
-		uint64_t bootmgfwSize = 0;
-		uint64_t bootx64Size  = 0;
-		const bool hasBootmgfw = fs.Exists(kBootmgfw, &bootmgfwSize, nullptr, error);
-		error.clear();
-		const bool hasBootx64 = fs.Exists(kBootx64, &bootx64Size, nullptr, error);
-		error.clear();
-		const bool hasBackupMgr = fs.Exists(kBakMgr, nullptr, nullptr, error);
-		error.clear();
-		const bool hasBackupX64 = fs.Exists(kBakX64, nullptr, nullptr, error);
-		error.clear();
+		// 注意区分"不存在"与"查询失败"：查询失败时按不存在处理会让我们跳过备份直接覆盖
+		// 引导器 —— 所以失败必须中止，而不是继续。
+		struct Probe
+		{
+			bool     ok     = false;
+			bool     exists = false;
+			uint64_t size   = 0;
+		};
+		auto probe = [&fs, &error](const char *path, bool wantSize) -> Probe
+		{
+			Probe p;
+			p.exists = fs.Exists(path, wantSize ? &p.size : nullptr, nullptr, error);
+			p.ok     = error.empty();
+			return p;
+		};
+
+		const Probe bootmgfw = probe(kBootmgfw.c_str(), true);
+		if (!bootmgfw.ok)
+		{
+			log.push_back(FormatW(L"[x] cannot look up %hs on the ESP: %ls", kBootmgfw.c_str(), error.c_str()));
+			return r;
+		}
+		const Probe bootx64 = probe(kBootx64.c_str(), true);
+		if (!bootx64.ok)
+		{
+			log.push_back(FormatW(L"[x] cannot look up %hs on the ESP: %ls", kBootx64.c_str(), error.c_str()));
+			return r;
+		}
+		const Probe backupMgr = probe(kBakMgr.c_str(), false);
+		if (!backupMgr.ok)
+		{
+			log.push_back(FormatW(L"[x] cannot look up %hs on the ESP: %ls", kBakMgr.c_str(), error.c_str()));
+			return r;
+		}
+		const Probe backupX64 = probe(kBakX64.c_str(), false);
+		if (!backupX64.ok)
+		{
+			log.push_back(FormatW(L"[x] cannot look up %hs on the ESP: %ls", kBakX64.c_str(), error.c_str()));
+			return r;
+		}
+
+		const bool     hasBootmgfw  = bootmgfw.exists;
+		const bool     hasBootx64   = bootx64.exists;
+		const bool     hasBackupMgr = backupMgr.exists;
+		const bool     hasBackupX64 = backupX64.exists;
+		const uint64_t bootmgfwSize = bootmgfw.size;
+		const uint64_t bootx64Size  = bootx64.size;
 
 		const uint64_t needed = shell.size() * (hasBootx64 ? 2 : 1) + script.size() +
 				driver.size() + hive.size() +

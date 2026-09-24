@@ -283,6 +283,12 @@ target("icemelt")
     -- 因此 src 本身要在搜索路径上。
     add_includedirs("src", "third_party")
 
+    -- FAT 文件系统用 FatFs（R0.15 w/patch1，上游原文放在 third_party/FatFs）：
+    -- 之前手写的 FAT 写入器是"每个簇一次系统调用"，把磁盘打到 85% 还长时间没有反馈。
+    -- ff.c 用 C 编译器编（xmake 按扩展名走），我们的 diskio 在 src/raw/fat_volume.cpp。
+    add_files("third_party/FatFs/ff.c", "third_party/FatFs/ffunicode.c")
+    add_includedirs("third_party/FatFs")
+
     -- clang-cl 需要 /utf-8 才能正确解析源码中的 UTF-8 字面量
     if using_clang_cl() then
         add_cxflags("/utf-8", { force = true })
@@ -331,6 +337,10 @@ target("icemelt-gui")
 
     -- src/gui 同时进 rc.exe 的 /I：RT_MANIFEST 里的文件名按包含路径解析
     add_includedirs("src", "third_party", "src/gui")
+
+    -- 与 icemelt 同一份 raw/ 源码（含 fat_volume.cpp），所以同样需要 FatFs
+    add_files("third_party/FatFs/ff.c", "third_party/FatFs/ffunicode.c")
+    add_includedirs("third_party/FatFs")
 
     -- 与 icemelt 同一段落位逻辑：构建本目标即得到完整运行期组合
     after_build(stage_third_party_and_assets)

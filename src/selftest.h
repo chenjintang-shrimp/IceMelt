@@ -39,7 +39,7 @@ namespace icemelt
 
 	int RawSelfTest(const std::filesystem::path &exeDir);
 
-	// FAT 写入器自检。
+	// FAT 写路径自检（FatFs 封装 + 合成镜像）。
 	// imagePath 为空：在 %TEMP% 造一个合成 FAT32 镜像，跑写入/替换/回放/校验，并打印镜像路径
 	//   （路径是给外部独立实现交叉验证用的：pyfatfs 读我们写的镜像）；
 	// imagePath 非空：只读校验**外部工具造的**镜像（用于验证我们的 LFN 查找与读取 ——

@@ -166,7 +166,7 @@ release 草稿。
 | `icemelt --deploy-usb [--drive=E:] --yes-i-know` | 同一套链铺到 U 盘（可移动 FAT 卷），不碰内部引导，重启时从固件菜单选 U 盘 |
 | `icemelt --deploy-esp --raw --yes-i-know` | ESP 链改走**物理盘扇区**（`\\.\PhysicalDriveN`）：不用 mountvol、不装驱动 |
 | `icemelt --esp-undo=<file>` | 回放 `--raw` 写前落盘的 undo 快照（把 ESP 元数据恢复原样） |
-| `icemelt --selftest-fat [--image=<file>]` | FAT 写入器自检（合成镜像，无需管理员、不碰真实卷） |
+| `icemelt --selftest-fat [--image=<file>]` | FAT 写路径自检（FatFs，合成镜像，无需管理员、不碰真实卷） |
 | `icemelt --melt --yes-i-know` | 非交互执行整条链路；破坏性、不可回滚                                                 |
 | `icemelt --selftest-hive`     | 校验 hive base block 偏移与校验和算法                                                |
 | `icemelt --selftest-registry` | 验证过滤器摘除的写入路径                                                             |
@@ -185,7 +185,7 @@ release 草稿。
 | | `--deploy-esp` | `--deploy-esp --raw` | `--deploy-usb` |
 |---|---|---|---|
 | 载体 | 本机 EFI 系统分区（mountvol X: /S） | 同左，但写入走物理盘扇区 | 可移动 FAT12/16/32 卷（U 盘）；固定盘需 `--drive=E:` 显式指定 |
-| 写入方式 | 文件 API（经卷栈） | `\\.\PhysicalDriveN` + 内置最小 FAT 写入器 | 文件 API |
+| 写入方式 | 文件 API（经卷栈） | `\\.\PhysicalDriveN` + FatFs（R0.15，走 C 回调读写扇区） | 文件 API |
 | 被卷过滤器吞掉时 | 写入被 COW 层吸收，重启后消失 | 不经卷栈，还原软件看不到 | 不适用（U 盘不在保护范围内） |
 | Shell 落位 | 替换 `\EFI\Microsoft\Boot\bootmgfw.efi`（+ 存在时的 `\EFI\Boot\BOOTX64.EFI`） | `\EFI\BOOT\BOOTX64.EFI`（可移动介质默认路径），**不碰内部引导** |
 | 脚本落位 | `\EFI\Microsoft\Boot\startup.nsh` | `\EFI\BOOT\startup.nsh` |
@@ -202,13 +202,22 @@ release 草稿。
 
 * **不碰分区表**：分区表只被读取（用来定位 ESP），写入只落在 FAT 元数据（FAT 表 / FSInfo /
   目录条目）与文件数据簇上 —— DfDiskLo 的 sector 影子只覆盖 MBR/GPT 那几个扇区，别去踩它。
-* **写前快照**：所有将被修改的元数据扇区先读进 `%TEMP%\icemelt-esp-undo.bin`，写入过程中的
-  任何一步失败都可以 `--esp-undo=<file>` 原样回放（文件消失、FAT/目录恢复原状；数据簇里残留
-  我们的字节，对 FAT 语义无影响）。
-* **只动空闲簇**：分配前逐簇断言 FAT 表项为 0，不会覆盖任何现存文件的内容。
+* **FAT 由 FatFs 负责**：写路径用 ChaN 的 FatFs（R0.15 w/patch1，`third_party/FatFs` 是上游
+  原文，配置取舍在 `ffconf.h`），对接的是我们自己那层"以绝对字节偏移读写扇区"的 `SectorIo`。
+  早期版本是自研 FAT 写入器 —— 它是**每个簇一次系统调用**（FAT 表项逐条读、逐条写，空闲空间
+  再逐簇扫一遍），500 MB 的 ESP 上实测把磁盘打到 85% 且长时间没有任何输出；换成 FatFs 后按
+  扇区/簇批量下发，同一份活儿只有几百到几万次调用（`--selftest-fat` 用 I/O 计数把这条钉住）。
+* **写前快照覆盖得更宽**：FatFs 写数据的过程中就会更新 FAT，所以快照把**所有**被改写的扇区
+  （数据 + FAT + 目录 + FSInfo）都记进 `%TEMP%\icemelt-esp-undo.bin`，`--esp-undo=<file>` 回放
+  后文件消失、FAT/目录/FSInfo 恢复原状（数据簇里残留我们的字节，对 FAT 语义无影响）。
+* **脏位不会被我们弄脏**：写路径不碰 FAT[1] 的 clean-shutdown 位与 NT 的 dirty 位，写完的卷在
+  Windows 看来是干净的（不会因此触发 chkdsk 修 ESP）。
+* **FAT 写路径是被独立验证过的**：`--selftest-fat` 在合成镜像上跑格式化/建目录/写入/替换/日志
+  回放，并用 pyfatfs（独立实现）对同一张镜像逐文件做 SHA 比对（含 LFN 目录 `\EFI\Microsoft`
+  与 12 MB 大文件）。
 * **原引导器备份**：做成 `\EFI\IceMelt\BOOTMGW.OLD` / `BOOTX64.OLD`（8.3 安全名，两种部署
   路径共用同一套名字），由 `startup.nsh` 在写完 hive 后自动还原。
-* **FAT 写入器是被独立验证过的**：`--selftest-fat` 在合成镜像上跑写入/替换/日志回放，并用
+* **FAT 写路径是被独立验证过的**：`--selftest-fat` 在合成镜像上跑写入/替换/日志回放，并用
   pyfatfs（独立实现）双向交叉验证过（含 LFN 目录 `\EFI\Microsoft` 的解析与生成）。
 
 **U 盘模式的安全提醒**：那张盘最终会带着一份本机 SYSTEM hive（本地账户与机密都在里面），

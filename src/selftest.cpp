@@ -1,6 +1,7 @@
 #include "selftest.h"
 
-#include "raw/fat.h"
+#include "raw/block_io.h"
+#include "raw/fat_volume.h"
 #include "raw/esp_raw.h"
 
 #include <rpc.h> // UuidFromStringW：自检里用系统实现当 GUID 字节序的基准
@@ -820,12 +821,13 @@ namespace icemelt
 	// ---------------------------------------------------------------- FAT 自检
 	//
 	// 这一项存在的理由：ESP 上要写的是 FAT，而写路径是"裸扇区"（没有文件系统替我们兜底）。
-	// 一个错的 FAT 写入器会把 ESP 写坏 —— 那台机器就再也引导不进 Windows。所以：
+	// 一个错的 FAT 写路径会把 ESP 写坏 —— 那台机器就再也引导不进 Windows。所以：
 	//   * 全部动作在一个**合成镜像**上做（%TEMP% 的普通文件），不碰任何真实卷；
-	//   * 图像由本文件自己格式化（FormatFat32ForTest），因此自检不依赖管理员/驱动/真磁盘；
+	//   * 图像由 f_mkfs（FormatFat32ForTest）格式化，自检不依赖管理员/驱动/真磁盘；
 	//   * 交叉验证交给外部独立实现：打印镜像路径，用 pyfatfs 读它；
 	//   * 反向（我们的读 + LFN 查找）用 --image=<外部镜像> 校验 —— 真实 ESP 的
-	//     \EFI\Microsoft 是 LFN 名字，而我们只能新建 8.3，所以那一条必须靠外部造的镜像验。
+	//     \EFI\Microsoft 是 LFN 名字，这条必须靠外部造的镜像验；
+	//   * I/O 计数把"每个簇一次系统调用"这类退化钉死（曾经把磁盘打到 85%）。
 	int FatSelfTest(const std::filesystem::path &exeDir, const std::wstring &imagePath)
 	{
 		(void) exeDir;
@@ -860,7 +862,7 @@ namespace icemelt
 				Print(FormatW(L"FAIL open: %ls", error.c_str()));
 				return 1;
 			}
-			FatFileSystem fs;
+			FatFsVolume fs;
 			if (!fs.Mount(io, 0, error))
 			{
 				Print(FormatW(L"FAIL mount: %ls", error.c_str()));
@@ -924,7 +926,7 @@ namespace icemelt
 		// 外部实现拒绝对它判型 —— 那是自检镜像的问题，不是写入器的问题。
 		const uint64_t kImageSize = 64ull * 1024 * 1024;
 		const std::filesystem::path image = TempFile(L"icemelt-fat-selftest.img");
-		Print(FormatW(L"--- FAT writer self-test on a synthetic image ---"));
+		Print(L"--- FAT write path self-test on a synthetic image (FatFs R0.15) ---");
 		Print(FormatW(L"image: %ls (%llu MB)", image.c_str(), kImageSize / (1024 * 1024)));
 
 		FileSectorIo io;
@@ -940,7 +942,7 @@ namespace icemelt
 			io.Close();
 			return 1;
 		}
-		FatFileSystem fs;
+		FatFsVolume fs;
 		if (!fs.Mount(io, 0, error))
 		{
 			Print(FormatW(L"FAIL mount: %ls", error.c_str()));
@@ -997,12 +999,55 @@ namespace icemelt
 			L"the root does not contain a nested EFI directory",
 			!fs.Exists("EFI\\EFI", nullptr, nullptr, error));
 
+		// 性能回归：一次 12 MB 的写入 + 读回校验，diskio 层的调用次数必须**与簇数同阶**
+		// （FatFs 每次下发尽量多个连续扇区，但一批不会超过一个簇）。手写的那版在这里是
+		// 六位数：FAT 表项逐条读、逐条写（每簇 ×2 份 FAT ×读写）、freeBytes 再逐簇扫一遍 ——
+		// 现场表现就是磁盘 85% 且长时间没有任何输出。
+		// 判据取几何界：簇数 + 25% + 1000 的余量。它同时说明了"为什么这个数字是合理的"，
+		// 而不是拍一个常数（换簇大小/换文件大小都不会误报）。
+		EnableFatIoCounters(true);
+		ResetFatIoCounters();
 		check(
 			L"write a 12 MB payload",
 			fs.WriteFile("EFI\\IceMelt\\SYSTEM", payload, pattern(0x33), error));
 		check(
 			L"verify the payload",
 			fs.VerifyFile("EFI\\IceMelt\\SYSTEM", payload, pattern(0x33), error));
+		const FatIoStats payloadIo    = FatIoCounters();
+		EnableFatIoCounters(false);
+		const uint64_t   clustersUsed = payload / fs.clusterSize();
+		const uint64_t   ioBound      = clustersUsed + clustersUsed / 4 + 1000;
+		Print(FormatW(
+			L"    payload I/O: %llu disk writes / %llu disk reads for %llu clusters "
+			L"(%.0f bytes per call)",
+			static_cast<unsigned long long>(payloadIo.writes),
+			static_cast<unsigned long long>(payloadIo.reads),
+			static_cast<unsigned long long>(clustersUsed),
+			static_cast<double>(payload) /
+					static_cast<double>(payloadIo.writes + payloadIo.reads)));
+		check(
+			FormatW(
+				L"12 MB write+verify stays at ~1 disk call per cluster (<= %llu)",
+				static_cast<unsigned long long>(ioBound))
+				.c_str(),
+			payloadIo.writes <= ioBound && payloadIo.reads <= ioBound);
+
+		// 空闲空间统计也不能退化成逐簇扫描：一次 fresh 的 f_getfree 在 FAT 里扫，
+		// 但按扇区走（64 MB 镜像的 FAT 只有 512 KB）
+		{
+			EnableFatIoCounters(true);
+			ResetFatIoCounters();
+			const uint64_t freeNow = fs.freeBytes();
+			const FatIoStats freeIo = FatIoCounters();
+			EnableFatIoCounters(false);
+			Print(FormatW(
+				L"    free-space query: %llu disk reads, free=%llu bytes",
+				static_cast<unsigned long long>(freeIo.reads),
+				static_cast<unsigned long long>(freeNow)));
+			check(
+				L"free-space query scans the FAT in sectors (< 4000 reads)",
+				freeIo.reads < 4000);
+		}
 
 		// 空闲空间必须真的减少（分配器有在记账）
 		const uint64_t freeAfter = fs.freeBytes();

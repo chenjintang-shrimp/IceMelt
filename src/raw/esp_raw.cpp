@@ -5,7 +5,7 @@
 
 #include <cstring>
 
-#include "raw/fat.h"  // SectorIo
+#include "raw/block_io.h" // SectorIo
 #include "raw/win_disk.h" // QueryVolumeInfo / VolumeInfo
 #include "util.h"
 
