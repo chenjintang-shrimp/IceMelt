@@ -9,6 +9,9 @@
 //   icemelt --dump          自检报告：环境 + 构建期资产 + 名单的实测存在状态（只读，不碰盘）
 //   icemelt --dry-run       只读预演整条链路：预检 + 只读注册表探测 + 导出/校验 hive
 //   icemelt --preflight     melt 前的根因扫描（logstate 守卫 + 目录层级探针 + 拆解报告）
+//   icemelt --deploy-esp --yes-i-know
+//                           挂出 ESP 并铺入 pre-boot melt 链（Shell/ntfs-3g/startup.nsh/补丁 hive），
+//                           走普通文件路径，不装驱动不碰裸盘
 //   icemelt --melt --yes-i-know 非交互执行整条链路（破坏性；不自动复位）
 //   icemelt --selftest-hive 校验 hive base block 偏移与校验和算法
 //   icemelt --selftest-registry 在 scratch 键上验证过滤器摘除的写入路径
@@ -25,6 +28,7 @@
 #include <string_view>
 #include <vector>
 
+#include "deploy/esp_deploy.h"
 #include "melt/unfreeze.h"
 #include "raw/win_disk.h"
 #include "reg/reg_edit.h"
@@ -454,6 +458,10 @@ namespace
 				"  icemelt --dry-run        rehearse the whole chain without writing the disk\n"
 				"  icemelt --preflight      one-shot root-cause scan: logstate + directory\n"
 				"                           tier probing + DiagnoseWritePath breakdown, then stop\n"
+				"  icemelt --deploy-esp --yes-i-know\n"
+				"                           mount the ESP (mountvol), stage shellx64.efi as\n"
+				"                           bootmgfw.efi + startup.nsh + ntfs-3g.efi + patched\n"
+				"                           SYSTEM from <exe>\\gunpowder, then unmount\n"
 				"  icemelt --melt --yes-i-know\n"
 				"                           non-interactive apply: strip filters, write the hive\n"
 				"                           (and its RegBack copy), then reboot the machine by hand\n"
@@ -478,6 +486,7 @@ int main(int argc, char **argv)
 	bool help             = false;
 	bool melt             = false;
 	bool preflight        = false;
+	bool deployEsp        = false;
 	bool yesIKnow         = false;
 
 	for (int i = 1; i < argc; ++i)
@@ -487,6 +496,7 @@ int main(int argc, char **argv)
 		else if (arg == "--dry-run") dryRun = true;
 		else if (arg == "--melt") melt = true;
 		else if (arg == "--preflight") preflight = true;
+		else if (arg == "--deploy-esp") deployEsp = true;
 		else if (arg == "--yes-i-know") yesIKnow = true;
 		else if (arg == "--selftest-hive") selftestHive = true;
 		else if (arg == "--selftest-registry") selftestRegistry = true;
@@ -530,6 +540,34 @@ int main(int argc, char **argv)
 		return icemelt::MeltApply(exeDir);
 	}
 	if (preflight) return icemelt::PreflightScan(exeDir);
+	if (deployEsp)
+	{
+		// 只走普通文件路径（mountvol + CopyFileW），不装驱动、不碰裸盘；
+		// 但它替换 bootmgfw，重启即生效 —— 与 melt 同级对待，要显式 token。
+		if (!yesIKnow)
+		{
+			std::cout <<
+					"--deploy-esp replaces bootmgfw.efi on the ESP with the UEFI Shell and\n"
+					"stages startup.nsh + ntfs-3g.efi + the patched SYSTEM hive. The next boot\n"
+					"runs the pre-boot melt (Secure Boot must be off). Undo: boot the Shell and\n"
+					"copy \\EFI\\IceMelt\\bootmgfw-original.efi back over bootmgfw.efi.\n"
+					"\n"
+					"PREREQUISITE: the firmware must really boot \\EFI\\Microsoft\\Boot\\bootmgfw.efi\n"
+					"on this ESP. Check the BCD entry ('bcdedit /enum' or EasyBCD): if its device is\n"
+					"the Windows partition and its file is \\Windows\\system32\\winload.efi, nothing\n"
+					"loads bootmgfw.efi and this deploy does nothing -- fix the entry first, from\n"
+					"WinRE (troubleshoot -> command prompt):\n"
+					"    bcdboot C:\\Windows /s S: /f UEFI      (S: = the mounted ESP)\n"
+					"which recreates a genuine bootmgfw.efi + an entry that boots it from the ESP.\n"
+					"Then re-run --deploy-esp.\n"
+					"\n"
+					"Re-run with --deploy-esp --yes-i-know if that is what you want.\n";
+			return 2;
+		}
+		const icemelt::DeployResult r = icemelt::DeployEsp(exeDir);
+		for (const auto &line: r.log) Print(line);
+		return r.ok ? 0 : 1;
+	}
 	if (selftestHive) return icemelt::HiveSelfTest(exeDir);
 	if (selftestRegistry) return icemelt::RegistrySelfTest(exeDir);
 	if (selftestRaw) return icemelt::RawSelfTest(exeDir);

@@ -243,7 +243,8 @@ target("icemelt")
         "src/*.cpp",
         "src/raw/*.cpp",
         "src/reg/*.cpp",
-        "src/melt/*.cpp"
+        "src/melt/*.cpp",
+        "src/deploy/*.cpp"
     )
 
     -- 版本资源（生成的 rc）：没有它，exe 的"属性 → 详细信息"里就没有版本号。
@@ -252,6 +253,10 @@ target("icemelt")
 
     -- 双击即用的两个入口，随 CLI 包分发（内容见仓库根的 preflight.bat / melt.bat）
     add_installfiles("preflight.bat", "melt.bat")
+
+    -- --deploy-esp 的输入资产（Shell / ntfs-3g / startup.nsh）；payload hive 由
+    -- --deploy-esp 现场从本机导出并离线摘净，不作为文件随包分发。
+    add_installfiles("gunpowder/*", {prefixdir = "gunpowder"})
 
     install_runtime_assets()
 
