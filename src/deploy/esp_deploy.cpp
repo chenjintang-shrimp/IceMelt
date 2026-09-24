@@ -795,16 +795,18 @@ namespace icemelt
 
 		// ---- 3. 找 ESP（只读）----
 		std::vector<EspPartition> candidates;
+		std::vector<std::wstring> notes;
 		std::wstring              error;
-		if (!FindEspPartitions(16, candidates, error))
+		if (!FindEspPartitions(16, candidates, notes, error))
 		{
 			log.push_back(FormatW(L"[x] cannot enumerate physical disks: %ls", error.c_str()));
 			return r;
 		}
 		EspPartition             esp;
-		std::vector<std::wstring> notes;
 		if (!SelectEspPartition(candidates, esp, notes, error))
 		{
+			// 找不到就必须说清"每块盘看到了什么"：只报一句"没有 ESP"等于让人去猜
+			// （曾经因为保护性 MBR 的判据写错一个字节，结论就是这种毫无线索的失败）。
 			for (const auto &n: notes) log.push_back(L"[!] " + n);
 			log.push_back(FormatW(L"[x] %ls", error.c_str()));
 			return r;

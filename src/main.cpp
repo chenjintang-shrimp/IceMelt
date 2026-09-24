@@ -483,6 +483,9 @@ namespace
 				"                           via \\\\.\\PhysicalDriveN (no mountvol, no kernel driver)\n"
 				"  icemelt --esp-undo=<file>\n"
 				"                           replay an undo snapshot written by --deploy-esp --raw\n"
+				"  icemelt --selftest-partitions\n"
+				"                           GPT/MBR parsing self-test on synthetic images\n"
+				"                           (no admin, no real disk)\n"
 				"  icemelt --selftest-fat [--image=<file>]\n"
 				"                           FAT writer self-test on a synthetic image in %TEMP%\n"
 				"                           (no admin, no real volume); with --image= it only reads\n"
@@ -499,6 +502,7 @@ int main(int argc, char **argv)
 	bool selftestRegistry = false;
 	bool selftestRaw      = false;
 	bool selftestFat      = false;
+	bool selftestPart     = false;
 	std::wstring fatImage; // --image=<path> (给 --selftest-fat 校验外部造的镜像)
 	bool dump             = false;
 	bool help             = false;
@@ -541,6 +545,7 @@ int main(int argc, char **argv)
 		else if (arg == "--selftest-registry") selftestRegistry = true;
 		else if (arg == "--selftest-raw") selftestRaw = true;
 		else if (arg == "--selftest-fat") selftestFat = true;
+		else if (arg == "--selftest-partitions") selftestPart = true;
 		else if (arg.rfind("--image=", 0) == 0)
 			fatImage = icemelt::Widen(std::string(arg.substr(8)));
 		else if (arg == "--help" || arg == "-h") help = true;
@@ -653,6 +658,7 @@ int main(int argc, char **argv)
 	if (selftestRegistry) return icemelt::RegistrySelfTest(exeDir);
 	if (selftestRaw) return icemelt::RawSelfTest(exeDir);
 	if (selftestFat) return icemelt::FatSelfTest(exeDir, fatImage);
+	if (selftestPart) return icemelt::PartitionSelfTest(exeDir);
 	if (dryRun) return icemelt::MeltDryRun(exeDir.empty() ? root : exeDir);
 	if (dump) return DumpMode(root);
 

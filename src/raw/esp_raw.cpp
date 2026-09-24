@@ -5,7 +5,7 @@
 
 #include <cstring>
 
-#include "raw/fat.h"
+#include "raw/fat.h"  // SectorIo
 #include "raw/win_disk.h" // QueryVolumeInfo / VolumeInfo
 #include "util.h"
 
@@ -35,26 +35,41 @@ namespace icemelt
 			0x1F, 0xF8,             // F81F (LE)
 			0xD2, 0x11,             // 11D2 (LE)
 			0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B};
+	} // namespace
 
-		// 一个磁盘的分区表（只读解析）
-		bool ParsePartitions(
-			PhysicalDriveSectorIo &      io,
-			uint32_t                     diskNumber,
-			std::vector<EspPartition> &  out,
-			std::wstring &               error)
+	// 一个磁盘的分区表（只读解析）。放在匿名命名空间之外：--selftest-partitions 要能
+	// 拿合成镜像直接调它，把"保护性 MBR 判据写错字节"这类错误钉在自检里。
+	bool ParseEspPartitions(
+		SectorIo &                 io,
+		uint32_t                   diskNumber,
+		std::vector<EspPartition> &out,
+		bool &                     gptFound,
+		bool &                     mbrFound,
+		std::vector<std::wstring> &notes,
+		std::wstring &             error)
+	{
+		gptFound = false;
+		mbrFound = false;
+		uint8_t lba0[kSector] = {};
+		if (!io.Read(0, lba0, kSector))
 		{
-			uint8_t lba0[kSector] = {};
-			if (!io.Read(0, lba0, kSector))
+			error = FormatW(L"disk %u: cannot read LBA0", diskNumber);
+			return false;
+		}
+			// 保护性 MBR 的判据只看**类型字节 0xEE**，出现在 4 个条目中的任意一个。
+			// 曾经多查了一个 CHS 字节（写成 [1]==0x02，而起始 CHS 是 [1]=0x00 [2]=0x02
+			// [3]=0x00）—— 于是保护性 MBR 判不出来，掉进 MBR 分支找 0xEF，结论是
+			// "没有任何磁盘上有 ESP"（VMware NVMe 上实测踩到）。
+			bool protectiveMbr = false;
+			for (int i = 0; i < 4; ++i)
 			{
-				error = FormatW(L"disk %u: cannot read LBA0", diskNumber);
-				return false;
+				if (lba0[0x1BE + i * 16 + 4] == 0xEE) protectiveMbr = true;
 			}
-			const bool protectiveMbr = lba0[0x1BE + 4] == 0xEE && lba0[0x1BE] == 0x00 &&
-					lba0[0x1BE + 1] == 0x02;
 			const bool mbrSignature = lba0[510] == 0x55 && lba0[511] == 0xAA;
 
 			if (protectiveMbr)
 			{
+				gptFound = true;
 				uint8_t header[kSector] = {};
 				if (!io.Read(kSector, header, kSector))
 				{
@@ -81,6 +96,8 @@ namespace icemelt
 					error = FormatW(L"disk %u: cannot read the GPT partition array", diskNumber);
 					return false;
 				}
+				uint32_t usedEntries = 0;
+				uint32_t espCount    = 0;
 				for (uint32_t i = 0; i < entryCount; ++i)
 				{
 					const uint8_t *e = table.data() + static_cast<size_t>(i) * entrySize;
@@ -88,7 +105,9 @@ namespace icemelt
 					for (int b = 0; b < 16; ++b)
 						if (e[b] != 0) allZero = false;
 					if (allZero) continue;
+					++usedEntries;
 					if (std::memcmp(e, kEspTypeGuid, 16) != 0) continue;
+					++espCount;
 
 					EspPartition part;
 					part.diskNumber  = diskNumber;
@@ -111,6 +130,12 @@ namespace icemelt
 					if (!name.empty()) part.description += L" \"" + name + L"\"";
 					out.push_back(part);
 				}
+				notes.push_back(
+					FormatW(
+						L"disk %u: GPT, %u partition(s), %u ESP match(es)",
+						diskNumber,
+						usedEntries,
+						espCount));
 				return true;
 			}
 
@@ -120,6 +145,19 @@ namespace icemelt
 				return true;
 			}
 			// MBR：找类型 0xEF 的分区
+			mbrFound = true;
+			{
+				std::wstring types;
+				for (int i = 0; i < 4; ++i)
+				{
+					const uint8_t *e = lba0 + 0x1BE + i * 16;
+					if (e[4] == 0x00 && e[12] == 0 && e[13] == 0 && e[14] == 0 && e[15] == 0)
+						continue;
+					types += FormatW(L" 0x%02X", e[4]);
+				}
+				notes.push_back(
+					FormatW(L"disk %u: MBR, partition types:%ls", diskNumber, types.c_str()));
+			}
 			for (int i = 0; i < 4; ++i)
 			{
 				const uint8_t *e = lba0 + 0x1BE + i * 16;
@@ -136,15 +174,16 @@ namespace icemelt
 				out.push_back(part);
 			}
 			return true;
-		}
-	} // namespace
+	}
 
 	bool FindEspPartitions(
-		uint32_t                   maxDisk,
-		std::vector<EspPartition> &out,
-		std::wstring &             error)
+		uint32_t                    maxDisk,
+		std::vector<EspPartition> & out,
+		std::vector<std::wstring> & notes,
+		std::wstring &              error)
 	{
 		out.clear();
+		notes.clear();
 		for (uint32_t disk = 0; disk <= maxDisk; ++disk)
 		{
 			PhysicalDriveSectorIo io;
@@ -158,13 +197,27 @@ namespace icemelt
 				}
 				continue; // 不存在的盘号：正常
 			}
+			bool         gptFound  = false;
+			bool         mbrFound  = false;
 			std::wstring parseError;
-			if (!ParsePartitions(io, disk, out, parseError))
+			if (!ParseEspPartitions(
+					io,
+					disk,
+					out,
+					gptFound,
+					mbrFound,
+					notes,
+					parseError))
 			{
 				// 某一号盘读不了分区表（离线、被别的程序独占…）：记下来但继续找
+				notes.push_back(parseError);
 				if (disk == 0 && out.empty()) error = parseError;
+				io.Close();
 				continue;
 			}
+			if (!gptFound && !mbrFound)
+				notes.push_back(FormatW(L"disk %u: no partition table signature", disk));
+			io.Close();
 		}
 		return true;
 	}

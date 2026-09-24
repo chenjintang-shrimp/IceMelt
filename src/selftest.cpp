@@ -1,6 +1,7 @@
 #include "selftest.h"
 
 #include "raw/fat.h"
+#include "raw/esp_raw.h"
 
 #include <windows.h>
 
@@ -1037,6 +1038,185 @@ namespace icemelt
 		io.Close();
 		Print(FormatW(L"image kept for an independent check: %ls", image.c_str()));
 		Print(ok ? L"FAT SELFTEST PASS" : L"FAT SELFTEST FAIL");
+		return ok ? 0 : 1;
+	}
+
+	// ------------------------------------------------------- 分区表解析自检
+	//
+	// 保护性 MBR 的判据只看类型字节 0xEE。曾经的判据多查了一个 CHS 字节（写成 [1]==0x02，
+	// 而标准起始 CHS 是 [1]=0x00 [2]=0x02 [3]=0x00），结果在 VMware NVMe 上：
+	// 保护性 MBR 判不出来 → 掉进 MBR 分支找 0xEF → "没有任何磁盘上有 ESP"，且日志里没有
+	// 任何关于"到底看到了什么"的线索。下面三个用例把这条路径钉住。
+	int PartitionSelfTest(const std::filesystem::path &exeDir)
+	{
+		(void) exeDir;
+		bool ok = true;
+		const auto check = [&](const wchar_t *what, bool value)
+		{
+			Print(FormatW(L"%-56ls: %ls", what, value ? L"OK" : L"FAILED"));
+			if (!value) ok = false;
+		};
+		const auto WrU16 = [](uint8_t *p, uint16_t v)
+		{
+			p[0] = static_cast<uint8_t>(v & 0xFF);
+			p[1] = static_cast<uint8_t>(v >> 8);
+		};
+		const auto WrU32 = [](uint8_t *p, uint32_t v)
+		{
+			p[0] = static_cast<uint8_t>(v & 0xFF);
+			p[1] = static_cast<uint8_t>((v >> 8) & 0xFF);
+			p[2] = static_cast<uint8_t>((v >> 16) & 0xFF);
+			p[3] = static_cast<uint8_t>(v >> 24);
+		};
+		const auto WrU64 = [](uint8_t *p, uint64_t v)
+		{
+			for (int i = 0; i < 8; ++i) p[i] = static_cast<uint8_t>((v >> (8 * i)) & 0xFF);
+		};
+
+		const uint8_t kEspGuid[16] = {
+			0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,
+			0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B};
+		const uint8_t kDataGuid[16] = {
+			0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44,
+			0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7};
+
+		const uint64_t kEspFirstLba = 2048;
+		const uint64_t kEspLastLba  = kEspFirstLba + 500ull * 1024 * 1024 / 512 - 1;
+
+		const std::filesystem::path image = TempFile(L"icemelt-part-selftest.img");
+		Print(L"--- partition table parser self-test (synthetic images) ---");
+
+		// ---- 用例 1：保护性 MBR + GPT，含一个 ESP ----
+		{
+			FileSectorIo io;
+			std::wstring error;
+			if (!io.Open(image, /*create=*/true, 4ull * 1024 * 1024, error))
+			{
+				Print(FormatW(L"FAIL create image: %ls", error.c_str()));
+				return 1;
+			}
+			uint8_t mbr[512] = {};
+			uint8_t *e       = mbr + 0x1BE;
+			e[0]             = 0x00; // boot indicator
+			e[1]             = 0x00; // CHS head 0
+			e[2]             = 0x02; // CHS sector 2  ← 事故就出在这个字节的偏移上
+			e[3]             = 0x00; // CHS cylinder 0
+			e[4]             = 0xEE; // protective
+			e[5] = e[6] = e[7] = 0xFF;
+			WrU32(e + 8, 1);
+			WrU32(e + 12, 0xFFFFFFFFu);
+			mbr[510] = 0x55;
+			mbr[511] = 0xAA;
+			io.Write(0, mbr, sizeof(mbr));
+
+			uint8_t gpt[512] = {};
+			std::memcpy(gpt, "EFI PART", 8);
+			WrU32(gpt + 0x08, 0x00010000);
+			WrU32(gpt + 0x0C, 92);
+			WrU64(gpt + 0x18, 1);
+			WrU64(gpt + 0x20, 8191);
+			WrU64(gpt + 0x28, 34);
+			WrU64(gpt + 0x30, 8190);
+			WrU64(gpt + 0x48, 2);     // partition entry LBA
+			WrU32(gpt + 0x50, 128);   // entry count
+			WrU32(gpt + 0x54, 128);   // entry size
+			io.Write(512, gpt, sizeof(gpt));
+
+			uint8_t entries[128 * 128] = {};
+			uint8_t *p0 = entries;
+			std::memcpy(p0, kEspGuid, 16);
+			WrU64(p0 + 0x20, kEspFirstLba);
+			WrU64(p0 + 0x28, kEspLastLba);
+			const wchar_t *label = L"EFI system partition";
+			for (int i = 0; label[i] != 0 && i < 36; ++i)
+			{
+				p0[0x38 + i * 2]     = static_cast<uint8_t>(label[i] & 0xFF);
+				p0[0x38 + i * 2 + 1] = static_cast<uint8_t>(label[i] >> 8);
+			}
+			io.Write(2 * 512, entries, sizeof(entries));
+
+			std::vector<EspPartition>   found;
+			std::vector<std::wstring>   notes;
+			bool                        gptFound = false;
+			bool                        mbrFound = false;
+			const bool parsed = ParseEspPartitions(
+				io, 0, found, gptFound, mbrFound, notes, error);
+			check(L"protective MBR is recognised as GPT", parsed && gptFound && !mbrFound);
+			check(L"the ESP partition is found", found.size() == 1);
+			if (found.size() == 1)
+			{
+				check(
+					L"its offset is right (LBA 2048)",
+					found[0].offsetBytes == kEspFirstLba * 512);
+				check(
+					L"its length is right (500 MB)",
+					found[0].lengthBytes == (kEspLastLba - kEspFirstLba + 1) * 512);
+			}
+			io.Close();
+		}
+
+		// ---- 用例 2：GPT 里有分区但没有 ESP 类型 ----
+		{
+			FileSectorIo io;
+			std::wstring error;
+			if (io.Open(image, /*create=*/false, 0, error))
+			{
+				uint8_t entries[128 * 128] = {};
+				std::memcpy(entries, kDataGuid, 16);
+				WrU64(entries + 0x20, 2048);
+				WrU64(entries + 0x28, 4095);
+				io.Write(2 * 512, entries, sizeof(entries));
+
+				std::vector<EspPartition> found;
+				std::vector<std::wstring> notes;
+				bool                      gptFound = false;
+				bool                      mbrFound = false;
+				const bool parsed = ParseEspPartitions(
+					io, 0, found, gptFound, mbrFound, notes, error);
+				check(L"a GPT without an ESP yields no candidate", parsed && found.empty());
+				check(L"but it is still reported as GPT in the notes", gptFound);
+				io.Close();
+			}
+			else
+			{
+				check(L"reopen for case 2", false);
+			}
+		}
+
+		// ---- 用例 3：纯 MBR 盘，类型 0xEF ----
+		{
+			FileSectorIo io;
+			std::wstring error;
+			if (io.Open(image, /*create=*/true, 1024 * 1024, error))
+			{
+				uint8_t mbr[512] = {};
+				uint8_t *e       = mbr + 0x1BE;
+				e[0]             = 0x80;
+				e[4]             = 0xEF;
+				WrU32(e + 8, 2048);
+				WrU32(e + 12, 100000);
+				mbr[510] = 0x55;
+				mbr[511] = 0xAA;
+				io.Write(0, mbr, sizeof(mbr));
+
+				std::vector<EspPartition> found;
+				std::vector<std::wstring> notes;
+				bool                      gptFound = false;
+				bool                      mbrFound = false;
+				const bool parsed = ParseEspPartitions(
+					io, 0, found, gptFound, mbrFound, notes, error);
+				check(L"an MBR ESP (type 0xEF) is found", parsed && found.size() == 1);
+				check(L"and it is reported as MBR, not GPT", mbrFound && !gptFound);
+				io.Close();
+			}
+			else
+			{
+				check(L"reopen for case 3", false);
+			}
+		}
+
+		RemoveFile(image);
+		Print(ok ? L"PARTITION SELFTEST PASS" : L"PARTITION SELFTEST FAIL");
 		return ok ? 0 : 1;
 	}
 } // namespace icemelt

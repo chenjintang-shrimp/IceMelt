@@ -31,12 +31,27 @@ namespace icemelt
 		std::wstring description; // "GPT partition 1 (EFI System Partition)" 之类，用于日志
 	};
 
-	// 扫描 0..maxDisk 号物理盘，列出其中的 EFI 系统分区（只读）。
+	class SectorIo;
+
+	// 解析**一个**磁盘（扇区设备）的分区表，列出其中的 EFI 系统分区（只读）。
+	// gptFound/mbrFound 回填"这块盘到底有没有分区表"，notes 回填人可读的摘要
+	// （找不到 ESP 时用它说明"看到了什么"，而不是只报一句没有）。
+	bool ParseEspPartitions(
+		SectorIo &                 io,
+		uint32_t                   diskNumber,
+		std::vector<EspPartition> &out,
+		bool &                     gptFound,
+		bool &                     mbrFound,
+		std::vector<std::wstring> &notes,
+		std::wstring &             error);
+
+	// 扫描 0..maxDisk 号物理盘，列出其中的 EFI 系统分区（只读）与每块盘的摘要（notes）。
 	// 需要管理员令牌：打开物理盘做读操作也要提权。
 	bool FindEspPartitions(
-		uint32_t                   maxDisk,
-		std::vector<EspPartition> &out,
-		std::wstring &             error);
+		uint32_t                    maxDisk,
+		std::vector<EspPartition> & out,
+		std::vector<std::wstring> & notes,
+		std::wstring &              error);
 
 	// 挑一个 ESP：若宿主的系统卷所在磁盘上恰好有一个 ESP，就用它；否则必须恰好只有一个
 	// 候选，多了就得由调用方指定（避免"替你挑一块盘写引导"）。

@@ -46,5 +46,11 @@ namespace icemelt
 	//   真实 ESP 上的 \EFI\Microsoft 就是 LFN 名字，而我们自己只能新建 8.3）。
 	int FatSelfTest(const std::filesystem::path &exeDir, const std::wstring &imagePath);
 
+	// 分区表解析自检：在合成镜像上造保护性 MBR + GPT（含一个 ESP）与 MBR（类型 0xEF），
+	// 断言解析结果。存在的理由是一次真实事故 —— 保护性 MBR 的判据写错了 CHS 字节，
+	// 于是 VMware 上的 ESP 被报成"任何磁盘都没有 ESP"，而失败信息里没有任何线索。
+	// 这一项不需要管理员、不碰真盘。
+	int PartitionSelfTest(const std::filesystem::path &exeDir);
+
 	int MeltDryRun(const std::filesystem::path &exeDir);
 } // namespace icemelt
