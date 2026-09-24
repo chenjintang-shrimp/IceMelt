@@ -12,6 +12,8 @@
 //   icemelt --deploy-esp --yes-i-know
 //                           挂出 ESP 并铺入 pre-boot melt 链（Shell/ntfs-3g/startup.nsh/补丁 hive），
 //                           走普通文件路径，不装驱动不碰裸盘
+//   icemelt --deploy-usb [--drive=E:] --yes-i-know
+//                           同一套链铺到 U 盘（可移动 FAT 卷），不碰内部引导；重启时从固件菜单选 U 盘
 //   icemelt --melt --yes-i-know 非交互执行整条链路（破坏性；不自动复位）
 //   icemelt --selftest-hive 校验 hive base block 偏移与校验和算法
 //   icemelt --selftest-registry 在 scratch 键上验证过滤器摘除的写入路径
@@ -462,6 +464,10 @@ namespace
 				"                           mount the ESP (mountvol), stage shellx64.efi as\n"
 				"                           bootmgfw.efi + startup.nsh + ntfs-3g.efi + patched\n"
 				"                           SYSTEM from <exe>\\gunpowder, then unmount\n"
+				"  icemelt --deploy-usb [--drive=E:] --yes-i-know\n"
+				"                           stage the same chain onto a USB stick (removable\n"
+				"                           FAT12/16/32 volume) instead of the internal ESP;\n"
+				"                           nothing on internal disks is touched\n"
 				"  icemelt --melt --yes-i-know\n"
 				"                           non-interactive apply: strip filters, write the hive\n"
 				"                           (and its RegBack copy), then reboot the machine by hand\n"
@@ -487,6 +493,8 @@ int main(int argc, char **argv)
 	bool melt             = false;
 	bool preflight        = false;
 	bool deployEsp        = false;
+	bool deployUsb        = false;
+	std::wstring driveArg; // --drive=E: (USB 载体显式指定时用)
 	bool yesIKnow         = false;
 
 	for (int i = 1; i < argc; ++i)
@@ -497,6 +505,20 @@ int main(int argc, char **argv)
 		else if (arg == "--melt") melt = true;
 		else if (arg == "--preflight") preflight = true;
 		else if (arg == "--deploy-esp") deployEsp = true;
+		else if (arg == "--deploy-usb") deployUsb = true;
+		else if (arg.rfind("--drive=", 0) == 0)
+		{
+			driveArg = icemelt::Widen(std::string(arg.substr(8)));
+			// 只接受 "E" 或 "E:"：把 "QQ" 这种拼错的东西放进后续逻辑只会误导人
+			const bool ok = driveArg.size() == 1 ||
+					(driveArg.size() == 2 && driveArg[1] == L':');
+			if (!ok)
+			{
+				std::cout << "expected --drive=<letter> or --drive=<letter>:\n";
+				return 2;
+			}
+			driveArg.resize(1);
+		}
 		else if (arg == "--yes-i-know") yesIKnow = true;
 		else if (arg == "--selftest-hive") selftestHive = true;
 		else if (arg == "--selftest-registry") selftestRegistry = true;
@@ -570,6 +592,27 @@ int main(int argc, char **argv)
 			return 2;
 		}
 		const icemelt::DeployResult r = icemelt::DeployEsp(exeDir);
+		for (const auto &line: r.log) Print(line);
+		return r.ok ? 0 : 1;
+	}
+	if (deployUsb)
+	{
+		// 比 ESP 模式温和得多（不动内部引导），但 U 盘会被写成一个携带本机 SYSTEM hive
+		// （含本地账户与机密）的引导盘 —— 这件事必须点明，所以要显式 token。
+		if (!yesIKnow)
+		{
+			std::cout <<
+					"--deploy-usb writes the pre-boot chain to a USB stick: it becomes bootable as\n"
+					"\\EFI\\BOOT\\BOOTX64.EFI (UEFI shell) + \\EFI\\BOOT\\startup.nsh, carries the\n"
+					"patched SYSTEM hive, and reboots the target into Windows after writing it.\n"
+					"Nothing on any internal disk is touched by this command. The stick's own boot\n"
+					"files are backed up to \\EFI\\IceMelt\\backup\\ before being replaced.\n"
+					"NOTE: the stick ends up holding a copy of this machine's SYSTEM hive (local\n"
+					"accounts and secrets included) -- keep it safe.\n"
+					"Re-run with --deploy-usb --yes-i-know if that is what you want.\n";
+			return 2;
+		}
+		const icemelt::DeployResult r = icemelt::DeployUsb(exeDir, driveArg);
 		for (const auto &line: r.log) Print(line);
 		return r.ok ? 0 : 1;
 	}

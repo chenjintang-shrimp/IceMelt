@@ -163,28 +163,55 @@ release 草稿。
 | `icemelt --dry-run`           | 只读预演整条链路                                                                     |
 | `icemelt --preflight`         | melt 前的一次性根因扫描（logstate 守卫 + 目录层级探针），**只在带快照的 VM 里跑**    |
 | `icemelt --deploy-esp --yes-i-know` | 把 pre-boot melt 链铺进 ESP（mountvol → 拷贝 → 卸载，走普通文件路径）          |
+| `icemelt --deploy-usb [--drive=E:] --yes-i-know` | 同一套链铺到 U 盘（可移动 FAT 卷），不碰内部引导，重启时从固件菜单选 U 盘 |
 | `icemelt --melt --yes-i-know` | 非交互执行整条链路；破坏性、不可回滚                                                 |
 | `icemelt --selftest-hive`     | 校验 hive base block 偏移与校验和算法                                                |
 | `icemelt --selftest-registry` | 验证过滤器摘除的写入路径                                                             |
 | `icemelt --selftest-raw`      | 裸盘写入/读回判定：底层通路是硬断言，OS 通路只做分类（**只在虚拟机里跑**）           |
 
-`--selftest-raw`、`--melt`、`--deploy-esp`（以及图形前端的三个动作）需要管理员权限。无需担心数字签名：程序自己会搞定。
+`--selftest-raw`、`--melt`、`--deploy-esp`、`--deploy-usb`（以及图形前端的三个动作）需要管理员权限。无需担心数字签名：程序自己会搞定。
 
-### ESP 预启动链路（`--deploy-esp`）
+### ESP 预启动链路（`--deploy-esp` / `--deploy-usb`）
 
 与 `--melt` 并列的第二条通路：不写裸盘，而是把"下一次启动由 UEFI Shell 完成 melt"所需的
-文件铺进 EFI 系统分区。适合被冻结的机器 —— ESP 不属于被冻结的卷，普通文件写入能留住；
+文件铺到一个 FAT 载体上。适合被冻结的机器 —— ESP/ U 盘都不属于被冻结的卷，普通文件写入能留住；
 而 SYSTEM hive 的替换发生在 Windows 与过滤器驱动加载**之前**，绕开拦截。
 
-**做的四件事**（全部走普通文件路径，不装驱动、不碰裸盘）：
+两种载体，同一套 pre-boot 链：
+
+| | `--deploy-esp` | `--deploy-usb` |
+|---|---|---|
+| 载体 | 本机 EFI 系统分区（mountvol X: /S） | 可移动 FAT12/16/32 卷（U 盘）；固定盘需 `--drive=E:` 显式指定 |
+| Shell 落位 | 替换 `\EFI\Microsoft\Boot\bootmgfw.efi`（+ 存在时的 `\EFI\Boot\BOOTX64.EFI`） | `\EFI\BOOT\BOOTX64.EFI`（可移动介质默认路径），**不碰内部引导** |
+| 脚本落位 | `\EFI\Microsoft\Boot\startup.nsh` | `\EFI\BOOT\startup.nsh` |
+| 原有引导 | 备份到 `\EFI\IceMelt\bootmgfw-original.efi` / `bootx64-original.efi`，脚本运行后自动还原 | 备份到 `\EFI\IceMelt\backup\*.orig`（不自动还原：还原会盖掉正在运行的 Shell） |
+| 重启后 | 直接进 Windows | 脚本提示**拔掉 U 盘**（等 15 秒），否则固件可能再次从 U 盘引导 |
+| 前提 | 固件条目走被替换的文件之一（`bcdedit /enum firmware` 可查） | 固件菜单能选 U 盘（BBS/F12），Secure Boot 关闭 |
+
+**共同的第 1 步是现场生产 payload**：导出本机 `HKLM\SYSTEM` → 离线摘掉名单里的服务键与设备类
+`UpperFilters`/`LowerFilters` 项（与 live 摘除共用同一语义）→ 置干净/修校验和/可加载性校验。
+因为 payload 来自**运行中系统**的注册表，这两条命令都拒绝在 WinPE/WinRE 里执行（那里的
+`HKLM\SYSTEM` 是恢复环境自己的 hive，盖回去就起不来了）。
+
+**U 盘模式的安全提醒**：那张盘最终会带着一份本机 SYSTEM hive（本地账户与机密都在里面），
+用完自行处置。
+
+**startup.nsh 的流程**（两种载体一致）：定位载体与 Windows 卷 → 备份原始 hive（只一次）→
+覆盖 `config\SYSTEM`（失败即恢复）→ ESP 模式还原引导器 → 重启。下一轮启动就进 Windows，
+过滤器与冻结服务已不在 hive 里。
+
+
+
+**两条命令都做的四件事**（全部走普通文件路径，不装驱动、不碰裸盘）：
 
 1. **现场生产 payload**：导出本机 `HKLM\SYSTEM` → 离线摘掉名单里的服务键与设备类
    `UpperFilters`/`LowerFilters` 项（与 live 摘除共用同一份语义）→ 置干净/修校验和/
    可加载性校验；
-2. `mountvol X: /S` 挂出 ESP；
-3. 备份原始 `bootmgfw.efi`（只建一次）→ 用 UEFI Shell 覆盖它 → 放 `startup.nsh`、
-   `ntfs-3g.efi`、payload hive 到 `\EFI\IceMelt\`，逐个大小读回校验；
-4. `mountvol X: /D` 卸载（任何失败路径都保证卸载）。
+2. 选定载体（ESP 走 `mountvol X: /S`；U 盘走卷枚举，可移动 FAT 卷必须恰好一个或显式
+   `--drive=`）并校验它是可写的 FAT 介质；
+3. 备份载体上被覆盖的原有引导文件（只建一次）→ 用 UEFI Shell 覆盖 → 放 `startup.nsh`、
+   `ntfs-3g.efi`、payload hive，逐个大小读回校验；
+4. ESP 模式 `mountvol X: /D` 卸载（任何失败路径都保证卸载）。
 
 **ESP 布局**：
 
@@ -197,10 +224,6 @@ release 草稿。
 \EFI\IceMelt\bootmgfw-original.efi <- 原始 bootmgfw 备份
 \EFI\IceMelt\bootx64-original.efi  <- 原始 BOOTX64.EFI 备份（仅当它存在）
 ```
-
-**startup.nsh 的流程**：定位 ESP 与 Windows 卷 → 备份原始 hive（只一次）→ 覆盖
-`config\SYSTEM`（失败即恢复）→ 恢复原始 `bootmgfw.efi` → 冷重启。下一轮启动就进 Windows，
-过滤器与冻结服务已不在 hive 里。
 
 **前提与回滚**：
 

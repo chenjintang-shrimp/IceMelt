@@ -38,4 +38,19 @@ namespace icemelt
 	// 把 <exeDir>\gunpowder 下的资产部署到本机 ESP。
 	// 需要管理员令牌（mountvol /S 与写 ESP 的硬前提）；缺资产时挂载前即失败。
 	DeployResult DeployEsp(const std::filesystem::path &exeDir);
+	// 把同一套 pre-boot 链铺到 U 盘（可移动 FAT12/16/32 卷），目标布局与 ESP 不同：
+	//   \EFI\BOOT\BOOTX64.EFI     <- shellx64.efi（UEFI 规范的可移动介质默认路径）
+	//   \EFI\BOOT\startup.nsh     <- 自动执行脚本（Shell 规范 3.3.1：shell 自身目录优先）
+	//   \EFI\IceMelt\ntfs-3g.efi  <- NTFS 驱动
+	//   \EFI\IceMelt\SYSTEM       <- 现场生产的 payload hive
+	//   \EFI\IceMelt\boot-source-usb  <- 标记：脚本据此打印"拔掉 U 盘"的提示
+	//   \EFI\IceMelt\backup\      <- 被本工具覆盖掉的 U 盘原有引导文件（只在覆盖时备份）
+	//
+	// 与 ESP 模式的差别：**不碰目标机内部的任何引导文件**（不动 ESP 的 bootmgfw/BOOTX64），
+	// 唯一的写入目标是 U 盘本身；内核侧的动作交给 U 盘引导起来的那次 startup.nsh。
+	//
+	// preferredDrive 形如 "E" / "E:"：留空时自动选择（可移动 FAT 卷必须恰好一个）。
+	DeployResult DeployUsb(
+		const std::filesystem::path &exeDir,
+		const std::wstring &         preferredDrive);
 } // namespace icemelt

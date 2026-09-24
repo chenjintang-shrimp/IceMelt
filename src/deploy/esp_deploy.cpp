@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <cwctype>
 #include <vector>
 
 #include "melt/unfreeze.h" // kLoaderServiceName
@@ -179,6 +180,105 @@ namespace icemelt
 					static_cast<unsigned long long>(block.fileSize)));
 			return hive;
 		}
+
+	// 一个可作为载体的 FAT 卷（FAT12/16 报 "FAT"，FAT32 报 "FAT32"）
+	struct FatVolume
+	{
+		wchar_t      letter = 0;
+		std::wstring label;
+		std::wstring fsName;
+		bool         removable = false;
+	};
+
+	// 枚举 FAT12/16/32 卷。removableOnly=false 时也返回固定盘（显式 --drive= 指定时才用，
+	// 因为"替用户挑一个固定盘写引导"不是能自动做的决定）。
+	std::vector<FatVolume> FindFatVolumes(bool removableOnly)
+	{
+		std::vector<FatVolume> out;
+		const DWORD            mask = ::GetLogicalDrives();
+		for (wchar_t c = L'A'; c <= L'Z'; ++c)
+		{
+			if ((mask & (1u << (c - L'A'))) == 0) continue;
+			const std::wstring root = FormatW(L"%lc:\\", c);
+
+			const UINT type = ::GetDriveTypeW(root.c_str());
+			// 跳过光驱/网络盘/未就绪：它们要么只读，要么根本不是"可写的 FAT 载体"
+			if (type != DRIVE_REMOVABLE && type != DRIVE_FIXED) continue;
+
+			wchar_t label[MAX_PATH]  = {};
+			wchar_t fsName[MAX_PATH] = {};
+			DWORD   serial = 0, maxComp = 0, flags = 0;
+			if (!::GetVolumeInformationW(
+					root.c_str(),
+					label,
+					MAX_PATH,
+					&serial,
+					&maxComp,
+					&flags,
+					fsName,
+					MAX_PATH))
+				continue; // 无文件系统（RAW）或未就绪
+			if ((flags & FILE_READ_ONLY_VOLUME) != 0) continue;
+
+			const std::wstring fs = fsName;
+			if (fs != L"FAT" && fs != L"FAT32") continue; // FAT12/16 统一报 "FAT"
+
+			FatVolume v;
+			v.letter    = c;
+			v.label     = label;
+			v.fsName    = fs;
+			v.removable = (type == DRIVE_REMOVABLE);
+			if (removableOnly && !v.removable) continue;
+			out.push_back(v);
+		}
+		return out;
+	}
+
+	// 覆盖前把 U 盘上原有的同名文件挪进备份目录；已经有备份就不动（重复部署不会用我们的
+	// shell 覆盖掉真正的原始引导）。
+	bool BackupOnce(
+		const std::filesystem::path &src,
+		const std::filesystem::path &backup,
+		std::vector<std::wstring> &   log)
+	{
+		if (PathExists(backup)) return true;
+		if (!PathIsRegularFile(src)) return true; // 原本没有这个文件：没有要备份的东西
+		if (!::CopyFileW(src.c_str(), backup.c_str(), TRUE))
+		{
+			log.push_back(
+				FormatW(
+					L"[x] backup failed: %ls -> %ls (error %lu)",
+					src.c_str(),
+					backup.c_str(),
+					::GetLastError()));
+			return false;
+		}
+		log.push_back(FormatW(L"[+] backed up %ls", src.c_str()));
+		return true;
+	}
+
+	// 0 字节标记文件：startup.nsh 靠它区分"从 U 盘引导"（要提示拔盘）与"从 ESP 引导"。
+	bool WriteMarker(const std::filesystem::path &path, std::wstring &error)
+	{
+		HANDLE h = ::CreateFileW(
+			path.c_str(),
+			GENERIC_WRITE,
+			0,
+			nullptr,
+			CREATE_ALWAYS,
+			FILE_ATTRIBUTE_NORMAL,
+			nullptr);
+		if (h == INVALID_HANDLE_VALUE)
+		{
+			error = FormatW(
+				L"CreateFileW(%ls) failed: %lu",
+				path.c_str(),
+				::GetLastError());
+			return false;
+		}
+		::CloseHandle(h);
+		return true;
+	}
 	} // namespace
 
 	DeployResult DeployEsp(const std::filesystem::path &exeDir)
@@ -383,6 +483,193 @@ namespace icemelt
 			L"[!]   b) the default fallback \\EFI\\Boot\\BOOTX64.EFI (only when every Boot#### fails)");
 		log.push_back(
 			L"[!] show the firmware entries with: bcdedit /enum firmware");
+		r.ok = true;
+		return r;
+	}
+
+	DeployResult DeployUsb(
+		const std::filesystem::path &exeDir,
+		const std::wstring &         preferredDrive)
+	{
+		DeployResult r;
+		auto &       log = r.log;
+
+		if (!IsProcessElevated())
+		{
+			log.push_back(L"[x] NOT elevated: writing to a raw volume needs an admin token");
+			log.push_back(L"    -> relaunch from an elevated prompt (Run as administrator)");
+			return r;
+		}
+		// payload 是"导出运行中系统的 HKLM\\SYSTEM"。在 WinRE/WinPE 里那是恢复环境自己的
+		// 注册表，铺上 U 盘再盖到目标机 = 起不来。见 util.h 的同一段说明。
+		if (IsWindowsPreinstallationEnvironment())
+		{
+			log.push_back(
+				L"[x] running inside WinPE/WinRE: HKLM\\SYSTEM here is the recovery environment's");
+			log.push_back(
+				L"    own hive, not the target system's -- the payload would brick the target");
+			log.push_back(
+				L"    -> run --deploy-usb from the target Windows installation itself");
+			return r;
+		}
+
+		// ---- 1. 资产清点 ----
+		const fs::path src = exeDir / L"gunpowder";
+		static constexpr const wchar_t *kAssets[] = {
+			L"shellx64.efi", L"ntfs-3g.efi", L"startup.nsh"};
+		bool missing = false;
+		for (const wchar_t *name: kAssets)
+		{
+			if (!PathIsRegularFile(src / name))
+			{
+				log.push_back(FormatW(L"[x] missing asset: gunpowder\\%ls", name));
+				missing = true;
+			}
+		}
+		if (missing)
+		{
+			log.push_back(L"    -> place the files under <exe>\\gunpowder and rerun");
+			return r;
+		}
+
+		// ---- 2. 挑卷 ----
+		// 显式指定：允许固定盘（有的 U 盘/读卡器枚举成 fixed），但要求必须是 FAT 且可写。
+		// 不指定：只认可移动 FAT 卷，且必须恰好一个 —— "替你挑一个固定盘写引导"不是能自动
+		// 做的决定。
+		FatVolume target;
+		if (!preferredDrive.empty())
+		{
+			const wchar_t letter = static_cast<wchar_t>(::towupper(preferredDrive[0]));
+			bool found = false;
+			for (const auto &v: FindFatVolumes(/*removableOnly=*/false))
+			{
+				if (v.letter != letter) continue;
+				target = v;
+				found  = true;
+			}
+			if (!found)
+			{
+				log.push_back(
+					FormatW(
+						L"[x] %lc: is not a writable FAT12/16/32 volume (or it is not mounted)",
+						letter));
+				return r;
+			}
+			if (!target.removable)
+			{
+				log.push_back(
+					FormatW(
+						L"[!] %lc: is a FIXED disk (not removable) -- continuing because it was "
+						L"named explicitly",
+						letter));
+			}
+		}
+		else
+		{
+			const auto volumes = FindFatVolumes(/*removableOnly=*/true);
+			if (volumes.empty())
+			{
+				log.push_back(
+					L"[x] no removable FAT12/16/32 volume found: plug in one USB stick and rerun");
+				log.push_back(
+					L"    -> a stick enumerating as a fixed disk must be named: --drive=E:");
+				return r;
+			}
+			if (volumes.size() > 1)
+			{
+				log.push_back(
+					L"[x] more than one removable FAT volume -- name the one you mean:");
+				for (const auto &v: volumes)
+					log.push_back(
+						FormatW(L"      %lc:  %ls", v.letter, v.label.c_str()));
+				log.push_back(L"    -> rerun with --drive=<letter>:");
+				return r;
+			}
+			target = volumes.front();
+		}
+
+		log.push_back(
+			FormatW(
+				L"[*] target volume: %lc:  %ls (%ls%s)",
+				target.letter,
+				target.label.c_str(),
+				target.fsName.c_str(),
+				target.removable ? L", removable" : L", fixed"));
+		log.push_back(
+			L"[!] the stick will carry a copy of this machine's SYSTEM hive (local accounts and "
+			L"secrets included) -- keep it safe, and re-run --deploy-usb after use");
+
+		// ---- 3. 现场生产 payload（只读导出 + 离线编辑副本）----
+		const std::filesystem::path payload = ProducePayload(exeDir, log);
+		if (payload.empty()) return r;
+
+		// ---- 4. 布局：U 盘走可移动介质默认路径，与 ESP 模式不同 ----
+		const fs::path root      = FormatW(L"%lc:\\", target.letter);
+		const fs::path bootDir   = root / L"EFI" / L"BOOT";
+		const fs::path iceDir    = root / L"EFI" / L"IceMelt";
+		const fs::path backupDir = iceDir / L"backup";
+
+		for (const auto &dir: {bootDir, iceDir, backupDir})
+		{
+			if (!PathIsDirectory(dir) && !::CreateDirectoryW(dir.c_str(), nullptr) &&
+				::GetLastError() != ERROR_ALREADY_EXISTS)
+			{
+				log.push_back(
+					FormatW(
+						L"[x] cannot create %ls (error %lu)",
+						dir.c_str(),
+						::GetLastError()));
+				return r;
+			}
+		}
+
+		// ---- 5. 覆盖前先备份 U 盘原有的引导文件 ----
+		// 放在独立子目录：startup.nsh 只从 \EFI\IceMelt\ 顶层认 bootmgfw-original.efi /
+		// bootx64-original.efi（那两个是 ESP 模式专用的恢复源），U 盘这儿的备份不该被它
+		// 当成"要恢复回去的引导器"而覆盖掉我们自己的 shell。
+		if (!BackupOnce(bootDir / L"BOOTX64.EFI", backupDir / L"BOOTX64.EFI.orig", log) ||
+			!BackupOnce(bootDir / L"startup.nsh", backupDir / L"startup.nsh.orig", log))
+		{
+			return r;
+		}
+
+		// ---- 6. 铺文件 ----
+		bool copied = true;
+		copied &= CopyOne(src / L"shellx64.efi", bootDir / L"BOOTX64.EFI", log);
+		copied &= CopyOne(src / L"startup.nsh", bootDir / L"startup.nsh", log);
+		copied &= CopyOne(src / L"ntfs-3g.efi", iceDir / L"ntfs-3g.efi", log);
+		copied &= CopyOne(payload, iceDir / L"SYSTEM", log);
+
+		std::wstring markerError;
+		if (!WriteMarker(iceDir / L"boot-source-usb", markerError))
+		{
+			log.push_back(
+				FormatW(L"[x] cannot write the USB marker: %ls", markerError.c_str()));
+			copied = false;
+		}
+		if (!copied)
+		{
+			log.push_back(
+				FormatW(
+					L"[x] deploy incomplete; the payload hive is kept at %ls for inspection",
+					payload.c_str()));
+			return r;
+		}
+		RemoveFile(payload);
+
+		log.push_back(FormatW(L"[+] deploy complete on %lc:", target.letter));
+		log.push_back(
+			L"[*] next step, on the target machine: reboot into the firmware boot menu (BBS/F12),");
+		log.push_back(
+			L"    pick the USB device, and let startup.nsh run. Secure Boot must be OFF.");
+		log.push_back(
+			L"[*] startup.nsh writes the payload to the internal Windows volume and then reboots;");
+		log.push_back(
+			L"    unplug the stick when it says so (it waits 15 s) so the machine boots the disk");
+		log.push_back(
+			L"    -- otherwise the firmware may boot the stick again and just repeats the run");
+		log.push_back(
+			L"[*] nothing on any internal disk was modified by this command");
 		r.ok = true;
 		return r;
 	}

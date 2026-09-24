@@ -74,17 +74,19 @@ if %lasterror% ne 0 then
     exit /b 1
 endif
 
-# --- 6. Restore the real boot loaders so next boot goes straight into Windows ---
-# Two locations, because the firmware has two routes: the NVRAM Boot#### entry (usually
-# \EFI\Microsoft\Boot\bootmgfw.efi) and the default fallback \EFI\Boot\BOOTX64.EFI.
+# --- 6. Restore the boot loaders, but only if this run replaced them ---
+# ESP mode: --deploy-esp backed \EFI\Microsoft\Boot\bootmgfw.efi (and \EFI\Boot\BOOTX64.EFI
+# when it existed) up into \EFI\IceMelt\, so put them back.
+# USB mode: nothing on any internal disk was replaced -- these files do not exist and the
+# block is skipped (the stick's own boot files were backed up to \EFI\IceMelt\backup\ by the
+# tool, and are deliberately NOT restored here: restoring them would overwrite the Shell
+# that is running from this very stick).
 if exist %EspFs%\EFI\IceMelt\bootmgfw-original.efi then
     attrib -r %EspFs%\EFI\Microsoft\Boot\bootmgfw.efi
     cp %EspFs%\EFI\IceMelt\bootmgfw-original.efi %EspFs%\EFI\Microsoft\Boot\bootmgfw.efi
     if %lasterror% ne 0 then
         echo IceMelt: WARNING: bootmgfw restore failed, shell will run again next boot
     endif
-else
-    echo IceMelt: WARNING: bootmgfw-original.efi missing, keeping shell as bootmgfw
 endif
 
 if exist %EspFs%\EFI\IceMelt\bootx64-original.efi then
@@ -95,6 +97,13 @@ if exist %EspFs%\EFI\IceMelt\bootx64-original.efi then
     endif
 endif
 
-echo IceMelt: done, rebooting
-stall 5000000
+# --- 7. Reboot ---
+if exist %EspFs%\EFI\IceMelt\boot-source-usb then
+    echo IceMelt: done. UNPLUG THE USB STICK NOW - the machine reboots in 15 seconds
+    echo IceMelt: (otherwise the firmware may boot the stick again and repeat this run)
+    stall 15000000
+else
+    echo IceMelt: done, rebooting
+    stall 5000000
+endif
 reset -c
