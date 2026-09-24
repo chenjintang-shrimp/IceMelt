@@ -342,6 +342,9 @@ namespace icemelt
 		if (payload.empty()) return r;
 
 		// ---- 2. 挂出 ESP ----
+		log.push_back(
+			L"[*] backend: mountvol + file API (pass --raw to write through "
+			L"\\\\.\\PhysicalDriveN instead)");
 		const wchar_t letter = FreeDriveLetter();
 		if (letter == 0)
 		{
@@ -814,6 +817,8 @@ namespace icemelt
 				static_cast<unsigned long long>(esp.offsetBytes),
 				static_cast<unsigned long long>(esp.lengthBytes)));
 
+		log.push_back(
+			L"[*] backend: raw physical disk (\\\\.\\PhysicalDriveN) + the built-in FAT writer");
 		// ---- 4. 打开物理盘 + 挂 FAT ----
 		PhysicalDriveSectorIo physical;
 		if (!physical.Open(esp.diskNumber, error))
