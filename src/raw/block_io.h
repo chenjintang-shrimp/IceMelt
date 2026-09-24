@@ -157,11 +157,15 @@ namespace icemelt
 	//
 	// volumePath 输出被锁的卷设备名（没找到时清空）—— 调用方把它打进日志，
 	// 免得"锁没锁上"只能靠猜。
+	// note 输出枚举诊断（看到几个卷、几个打不开、错误码分别是什么）。
+	// "没找到覆盖卷"和"根本看不到卷"是两回事 —— 分不清时就会像上一轮那样打出一句
+	// 误导性的"没有要锁的卷"，随后第一次写盘被内核以 5 拒掉。
 	bool LockCoveringVolume(
 		uint32_t      diskNumber,
 		uint64_t      diskOffset,
 		uint64_t      length,
 		HANDLE &      volumeHandle,
 		std::wstring &volumePath,
+		std::wstring &note,
 		std::wstring &error);
 } // namespace icemelt

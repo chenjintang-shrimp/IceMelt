@@ -10,6 +10,80 @@ namespace icemelt
 {
 	namespace
 	{
+		// 隐藏分区的卷设备不在 Win32 卷列表里（FindFirstVolumeW 枚举不到），但它有
+		// NT 设备对象：\\?\GLOBALROOT\Device\HarddiskVolumeN。用它按 extents 找出
+		// "覆盖目标范围的卷"——这正是裸写被拒(5)时唯一没被查过的地方。
+		//
+		// 命中时返回句柄（GENERIC_READ 打开，FSCTL_LOCK_VOLUME 只需要读句柄）；
+		// 没有任何 HarddiskVolumeN 覆盖目标范围时返回 INVALID_HANDLE_VALUE。
+		HANDLE OpenCoveringHarddiskVolume(
+			uint32_t      diskNumber,
+			uint64_t      diskOffset,
+			uint64_t      length,
+			std::wstring &openedPath,
+			std::wstring &note)
+		{
+			for (uint32_t n = 0; n < 64; ++n)
+			{
+				const std::wstring path =
+						FormatW(L"\\\\?\\GLOBALROOT\\Device\\HarddiskVolume%u", n);
+				HANDLE h = ::CreateFileW(
+					path.c_str(),
+					GENERIC_READ,
+					FILE_SHARE_READ | FILE_SHARE_WRITE,
+					nullptr,
+					OPEN_EXISTING,
+					FILE_ATTRIBUTE_NORMAL,
+					nullptr);
+				if (h == INVALID_HANDLE_VALUE)
+				{
+					const DWORD err = ::GetLastError();
+					// 设备不存在 = 编号扫过头了；err=5（能开却拒绝）值得记下来 ——
+					// 它可能正是覆盖 ESP 的那个卷（过滤器挡了打开）。
+					if (err != ERROR_FILE_NOT_FOUND && err != ERROR_PATH_NOT_FOUND &&
+						err != ERROR_NO_SUCH_DEVICE && err != ERROR_BAD_UNIT)
+						note += FormatW(L"HarddiskVolume%u: open %lu; ", n, err);
+					continue;
+				}
+				std::vector<uint8_t> buf(1024);
+				DWORD                bytes = 0;
+				const BOOL ok = ::DeviceIoControl(
+					h,
+					IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+					nullptr,
+					0,
+					buf.data(),
+					static_cast<DWORD>(buf.size()),
+					&bytes,
+					nullptr);
+				bool covers = false;
+				if (ok && bytes >= sizeof(DWORD))
+				{
+					const auto *extents =
+							reinterpret_cast<const VOLUME_DISK_EXTENTS *>(buf.data());
+					for (DWORD i = 0; i < extents->NumberOfDiskExtents && !covers; ++i)
+					{
+						const auto &e = extents->Extents[i];
+						if (e.DiskNumber != diskNumber) continue;
+						const uint64_t start = e.StartingOffset.QuadPart;
+						const uint64_t len   = e.ExtentLength.QuadPart;
+						if (diskOffset >= start && diskOffset + length <= start + len)
+							covers = true;
+					}
+				}
+				if (covers)
+				{
+					openedPath = path;
+					return h;
+				}
+				::CloseHandle(h);
+			}
+			return INVALID_HANDLE_VALUE;
+		}
+	} // namespace
+
+	namespace
+	{
 		constexpr uint32_t kSector = 512; // 本实现只接受 512 字节扇区（ESP 恒为 512）
 
 		// 抓当前线程的 Win32 错误并格式化成可读文本。
@@ -475,10 +549,14 @@ namespace icemelt
 		uint64_t      length,
 		HANDLE &      volumeHandle,
 		std::wstring &volumePath,
+		std::wstring &note,
 		std::wstring &error)
 	{
 		volumeHandle = INVALID_HANDLE_VALUE;
 		volumePath.clear();
+		note.clear();
+		uint32_t seen = 0, unopenable = 0;
+		DWORD    firstOpenErr = 0;
 		wchar_t name[MAX_PATH] = {};
 		HANDLE  find = ::FindFirstVolumeW(name, MAX_PATH);
 		if (find == INVALID_HANDLE_VALUE)
@@ -502,7 +580,22 @@ namespace icemelt
 				OPEN_EXISTING,
 				FILE_ATTRIBUTE_NORMAL,
 				nullptr);
-			if (h == INVALID_HANDLE_VALUE) continue;
+			++seen;
+			if (h == INVALID_HANDLE_VALUE)
+			{
+				// 打不开的卷**不能静默跳过**：err=5 的那一个完全可能正是覆盖 ESP 的卷
+				// （过滤器拒绝打开、或它没有挂载点）。把它连同错误码记进诊断，
+				// 否则就会出现"日志说没有卷可锁 → 写盘被拒 → 一句莫名的失败"这种假阴性。
+				const DWORD openErr = ::GetLastError();
+				++unopenable;
+				if (firstOpenErr == 0) firstOpenErr = openErr;
+				if (unopenable <= 3) // 前几个就够定位了，别刷屏
+					note += FormatW(
+						L"cannot open %ls: %lu; ",
+						path.c_str(),
+						openErr);
+				continue;
+			}
 
 			std::vector<uint8_t> buf(1024);
 			DWORD                bytes = 0;
@@ -538,13 +631,36 @@ namespace icemelt
 
 		if (!found)
 		{
-			// ESP 通常没有挂载点，也就可能查不到卷设备：那就没什么要锁的，裸写本来就允许
+			// Win32 卷列表查不到 ≠ 没有卷：隐藏分区（GPT 属性里不带 GPT_BASIC_DATA_ATTRIBUTE_
+			// NO_DRIVE_LETER / read-only 之类）的卷设备不在 FindFirstVolumeW 的结果里，但它
+			// 有 NT 设备对象。这正好是我们上一轮踩的坑：日志说"没有要锁的卷"，随后第一次
+			// 写盘就被内核以 5 拒掉 —— 覆盖目标范围的卷明明存在、挂着 FAT、却没被锁。
+			// GLOBALROOT 按 extents 逐个探 HarddiskVolumeN，把漏掉的那个卷找出来。
+			HANDLE gv = OpenCoveringHarddiskVolume(
+					diskNumber, diskOffset, length, volumePath, note);
+			if (gv != INVALID_HANDLE_VALUE)
+			{
+				volumeHandle = gv;
+				found        = true;
+			}
+		}
+		if (!found)
+		{
+			// 确实没有任何卷覆盖目标范围：那就没什么要锁的，裸写本来就允许。
+			// 枚举摘要追加在逐卷诊断后面 —— "7 个卷里 5 个打不开(5)"指向过滤器/安全
+			// 描述符挡了枚举，"一个卷都没有"才是真空，两者的处理完全不同。
+			note += FormatW(
+				L"| volume enumeration: %u listed, %u could not be opened (first error %lu)",
+				seen,
+				unopenable,
+				firstOpenErr);
 			volumeHandle = INVALID_HANDLE_VALUE;
 			return true;
 		}
-		volumePath = std::wstring(name);
-		if (!volumePath.empty() && volumePath.back() == L'\\') volumePath.pop_back();
-
+		if (volumePath.rfind(L"\\\\?\\Volume{", 0) == 0 && !volumePath.empty() &&
+			volumePath.back() == L'\\')
+			volumePath.pop_back();
+		note = FormatW(L"volume enumeration: %u listed, %u could not be opened", seen, unopenable);
 		// 锁定：卷上有打开的文件时 FSCTL_LOCK_VOLUME 返回 ERROR_ACCESS_DENIED /
 		// ERROR_SHARING_VIOLATION，等一会儿再试（杀毒/索引服务常在一瞬间持有句柄）。
 		DWORD bytes  = 0;

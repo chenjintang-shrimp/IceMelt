@@ -45,6 +45,8 @@ namespace icemelt
 			}
 		};
 
+
+
 		// 找一个空闲盘符：从 Z 往 D 倒着挑，避开常见的 C/D 与网络盘聚集区。
 		wchar_t FreeDriveLetter()
 		{
@@ -823,11 +825,14 @@ namespace icemelt
 		// 在挂载中的卷上必然失败），成功后 FSCTL_DISMOUNT_VOLUME 让文件系统让开。
 		HANDLE       volume = INVALID_HANDLE_VALUE;
 		std::wstring volumePath;
+		std::wstring lockNote;
 		std::wstring lockError;
 		if (!LockCoveringVolume(
-				esp.diskNumber, esp.offsetBytes, esp.lengthBytes, volume, volumePath, lockError))
+				esp.diskNumber, esp.offsetBytes, esp.lengthBytes, volume, volumePath,
+				lockNote, lockError))
 		{
 			log.push_back(FormatW(L"[x] cannot lock the ESP volume: %ls", lockError.c_str()));
+			if (!lockNote.empty()) log.push_back(L"    " + lockNote);
 			return r;
 		}
 		struct VolumeGuard
@@ -838,17 +843,41 @@ namespace icemelt
 				if (h != INVALID_HANDLE_VALUE) ::CloseHandle(h);
 			}
 		} guard{volume};
+		if (!lockNote.empty()) log.push_back(L"[*] " + lockNote);
 		if (volume != INVALID_HANDLE_VALUE)
 			log.push_back(
 				FormatW(L"[*] volume %ls locked and dismounted", volumePath.c_str()));
 		else
-			log.push_back(L"[*] no mounted volume covers the ESP: nothing to lock");
+			log.push_back(L"[*] no volume covers the ESP on this disk: nothing to lock");
 
 		PhysicalDriveSectorIo physical;
 		if (!physical.Open(esp.diskNumber, error))
 		{
 			log.push_back(FormatW(L"[x] %ls", error.c_str()));
 			return r;
+		}
+		// 写探针：把 ESP 的第 1 扇区（保留区里、属于卷的扇区）原样写回。
+		// 直写放不放行只有真写一次才知道；与其铺了 12 MB 之后死在 f_mkdir，
+		// 不如在这里就得到答案（内容不变，失败也无副作用 —— 未写先校验）。
+		{
+			std::vector<uint8_t> probe(512);
+			if (!physical.Read(esp.offsetBytes, probe.data(), 512))
+			{
+				log.push_back(FormatW(L"[x] cannot read the ESP boot sector: %ls", physical.failure().c_str()));
+				return r;
+			}
+			if (!physical.Write(esp.offsetBytes, probe.data(), 512))
+			{
+				log.push_back(
+					FormatW(
+						L"[x] this Windows refuses raw writes to the ESP "
+						L"(probe failed: %ls)",
+						physical.failure().c_str()));
+				log.push_back(
+					L"    -> the covering volume is mounted and not locked; check the lock line above");
+				return r;
+			}
+			log.push_back(L"[+] raw write probe accepted (a covering sector was rewritten in place)");
 		}
 
 		FatFsVolume fs;
