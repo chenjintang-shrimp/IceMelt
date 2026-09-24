@@ -3,6 +3,8 @@
 #include "raw/fat.h"
 #include "raw/esp_raw.h"
 
+#include <rpc.h> // UuidFromStringW：自检里用系统实现当 GUID 字节序的基准
+
 #include <windows.h>
 
 #include <cstdio>
@@ -1073,9 +1075,27 @@ namespace icemelt
 			for (int i = 0; i < 8; ++i) p[i] = static_cast<uint8_t>((v >> (8 * i)) & 0xFF);
 		};
 
-		const uint8_t kEspGuid[16] = {
-			0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,
-			0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B};
+		// ESP 类型 GUID 的字节**不能由我自己写死**：如果我在解析器里把字节序写错，自检用同一份
+		// 常量造镜像就会"两边同错、测试全绿"，而真盘上永远找不到 ESP。这里改由 Windows 自己的
+		// GUID 解析器（rpcrt4!UuidFromStringW）把规范里的字符串转成字节 —— 基准来自系统实现，
+		// 不再是我这份代码。规则：Data1/Data2/Data3 小端，Data4 按字节序。
+		uint8_t kEspGuid[16] = {};
+		{
+			UUID uuid{};
+			const wchar_t *text = L"C12A7328-F81F-11D2-BA4B-00A0C93EC93B";
+			if (::UuidFromStringW(
+					reinterpret_cast<RPC_WSTR>(const_cast<wchar_t *>(text)),
+					&uuid) != RPC_S_OK)
+			{
+				Print(L"FAIL UuidFromStringW could not parse the canonical ESP GUID");
+				return 1;
+			}
+			std::memcpy(kEspGuid, &uuid, 16);
+			check(
+				L"the ESP GUID from the spec is 28 73 2A C1 ... (mixed-endian)",
+				kEspGuid[0] == 0x28 && kEspGuid[1] == 0x73 && kEspGuid[2] == 0x2A &&
+				kEspGuid[3] == 0xC1 && kEspGuid[15] == 0x3B);
+		}
 		const uint8_t kDataGuid[16] = {
 			0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44,
 			0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7};
