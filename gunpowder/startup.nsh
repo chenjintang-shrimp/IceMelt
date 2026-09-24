@@ -74,7 +74,9 @@ if %lasterror% ne 0 then
     exit /b 1
 endif
 
-# --- 6. Restore the real bootmgfw so next boot goes straight into Windows ---
+# --- 6. Restore the real boot loaders so next boot goes straight into Windows ---
+# Two locations, because the firmware has two routes: the NVRAM Boot#### entry (usually
+# \EFI\Microsoft\Boot\bootmgfw.efi) and the default fallback \EFI\Boot\BOOTX64.EFI.
 if exist %EspFs%\EFI\IceMelt\bootmgfw-original.efi then
     attrib -r %EspFs%\EFI\Microsoft\Boot\bootmgfw.efi
     cp %EspFs%\EFI\IceMelt\bootmgfw-original.efi %EspFs%\EFI\Microsoft\Boot\bootmgfw.efi
@@ -83,6 +85,14 @@ if exist %EspFs%\EFI\IceMelt\bootmgfw-original.efi then
     endif
 else
     echo IceMelt: WARNING: bootmgfw-original.efi missing, keeping shell as bootmgfw
+endif
+
+if exist %EspFs%\EFI\IceMelt\bootx64-original.efi then
+    attrib -r %EspFs%\EFI\Boot\BOOTX64.EFI
+    cp %EspFs%\EFI\IceMelt\bootx64-original.efi %EspFs%\EFI\Boot\BOOTX64.EFI
+    if %lasterror% ne 0 then
+        echo IceMelt: WARNING: BOOTX64.EFI restore failed
+    endif
 endif
 
 echo IceMelt: done, rebooting

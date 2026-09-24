@@ -267,8 +267,14 @@ namespace icemelt
 			return r;
 		}
 
-		// ---- 3. 原始 bootmgfw 备份：只建一次（重复部署时 bootmgfw 已经是我们的 shell，
+		// ---- 3. 原始引导器备份：只建一次（重复部署时那两个文件已经是我们的 shell，
 		// 没有守卫会把 shell 当成"原始文件"备份，真正的 Windows 引导器就丢了）----
+		//
+		// 两个位置都要覆盖，因为它们对应固件的两条不同路径：
+		//   \EFI\Microsoft\Boot\bootmgfw.efi —— NVRAM 的 Boot#### 条目通常指向它（首选路径）
+		//   \EFI\Boot\BOOTX64.EFI           —— 所有 Boot#### 都失败/不存在时的默认文件路径
+		//                                      （UEFI 规范的可移动介质默认路径；Windows 也会在
+		//                                      这里放一份 bootmgfw 的副本）
 		const fs::path espBootmgfw = bootDir / L"bootmgfw.efi";
 		const fs::path backup      = iceDir / L"bootmgfw-original.efi";
 		if (!PathExists(backup))
@@ -296,9 +302,40 @@ namespace icemelt
 			log.push_back(L"[*] bootmgfw backup already present, kept as-is");
 		}
 
+		const fs::path espBootx64  = esp / L"EFI" / L"Boot" / L"BOOTX64.EFI";
+		const fs::path backupX64   = iceDir / L"bootx64-original.efi";
+		bool           coverFallback = false;
+		if (PathExists(backupX64))
+		{
+			coverFallback = true;
+			log.push_back(L"[*] bootx64 backup already present, kept as-is");
+		}
+		else if (PathIsRegularFile(espBootx64))
+		{
+			if (!::CopyFileW(espBootx64.c_str(), backupX64.c_str(), TRUE))
+			{
+				log.push_back(
+					FormatW(
+						L"[x] \\EFI\\Boot\\BOOTX64.EFI backup failed (error %lu)",
+						::GetLastError()));
+				return r;
+			}
+			coverFallback = true;
+			log.push_back(L"[+] \\EFI\\Boot\\BOOTX64.EFI backed up to \\EFI\\IceMelt");
+		}
+		else
+		{
+			// 不凭空创建它：那会把固件的"无引导项"回退路径改成指向我们的 shell，而这条
+			// 路径本来就是"连 Windows 都起不来"时才走。只如实说明覆盖范围。
+			log.push_back(
+				L"[!] no \\EFI\\Boot\\BOOTX64.EFI on this ESP: only the NVRAM Boot#### route is "
+				L"covered");
+		}
+
 		// ---- 4. 铺文件 ----
 		bool copied = true;
 		copied &= CopyOne(src / L"shellx64.efi", espBootmgfw, log);
+		if (coverFallback) copied &= CopyOne(src / L"shellx64.efi", espBootx64, log);
 		copied &= CopyOne(src / L"startup.nsh", bootDir / L"startup.nsh", log);
 		copied &= CopyOne(src / L"ntfs-3g.efi", iceDir / L"ntfs-3g.efi", log);
 		copied &= CopyOne(payload, iceDir / L"SYSTEM", log);
@@ -318,18 +355,20 @@ namespace icemelt
 		log.push_back(
 			L"[+] deploy complete: next boot runs startup.nsh (Secure Boot must be OFF)");
 		log.push_back(
-			L"[*] startup.nsh restores the original bootmgfw after writing the hive");
-		// 部署成功不等于会生效：这一步只保证 ESP 上的文件就位，能不能被加载取决于 BCD。
-		// 设备指向 Windows 分区、启动文件是 \Windows\system32\winload.efi 的条目压根不经过
-		// bootmgfw.efi —— 那种机器必须先修引导（WinRE 里 bcdboot），否则重启后什么都没发生。
+			L"[*] startup.nsh restores the original boot loaders after writing the hive");
+		// 部署成功不等于会生效：这一步只保证 ESP 上的文件就位。固件不读 BCD（BCD 是
+		// bootmgfw 加载后自己读的），它按 NVRAM 的 BootOrder 逐条启动 —— Windows 的条目
+		// 通常指向 \EFI\Microsoft\Boot\bootmgfw.efi；只有在所有条目都失败/不存在时，才会
+		// 走默认文件路径 \EFI\Boot\BOOTX64.EFI（UEFI 规范的可移动介质默认路径）。
+		// 我们替换的正是这两个文件，覆盖两条路径；剩下的前提是这两条路里至少有一条会被走到。
 		log.push_back(
-			L"[!] prerequisite: the firmware must actually boot \\EFI\\Microsoft\\Boot\\bootmgfw.efi");
+			L"[!] prerequisite: the firmware must load one of the two files we replaced:");
 		log.push_back(
-			L"[!] from this ESP. If the BCD entry boots \\Windows\\system32\\winload.efi on the");
+			L"[!]   a) NVRAM Boot#### -> \\EFI\\Microsoft\\Boot\\bootmgfw.efi (the usual route)");
 		log.push_back(
-			L"[!] Windows partition instead, this deploy never runs -- repair the entry in WinRE");
+			L"[!]   b) the default fallback \\EFI\\Boot\\BOOTX64.EFI (only when every Boot#### fails)");
 		log.push_back(
-			L"[!] (bcdboot C:\\Windows /s S: /f UEFI, S: = the ESP) and re-run --deploy-esp");
+			L"[!] show the firmware entries with: bcdedit /enum firmware");
 		r.ok = true;
 		return r;
 	}

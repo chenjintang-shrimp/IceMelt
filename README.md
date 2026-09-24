@@ -189,11 +189,13 @@ release 草稿。
 **ESP 布局**：
 
 ```
-\EFI\Microsoft\Boot\bootmgfw.efi   <- shellx64.efi（改名替换；默认启动项指向它）
+\EFI\Microsoft\Boot\bootmgfw.efi   <- shellx64.efi（改名替换；NVRAM Boot#### 通常指向它）
+\EFI\Boot\BOOTX64.EFI              <- 存在时一并替换（所有 Boot#### 失败时的默认回退路径）
 \EFI\Microsoft\Boot\startup.nsh    <- 自动执行（Shell 规范 3.3.1：先找 shell 自身目录）
 \EFI\IceMelt\ntfs-3g.efi           <- NTFS 驱动（RW 版）
 \EFI\IceMelt\SYSTEM                <- 现场生产的 payload hive
 \EFI\IceMelt\bootmgfw-original.efi <- 原始 bootmgfw 备份
+\EFI\IceMelt\bootx64-original.efi  <- 原始 BOOTX64.EFI 备份（仅当它存在）
 ```
 
 **startup.nsh 的流程**：定位 ESP 与 Windows 卷 → 备份原始 hive（只一次）→ 覆盖
@@ -202,14 +204,18 @@ release 草稿。
 
 **前提与回滚**：
 
-* **固件必须真的会去加载这个 ESP 上的 `\EFI\Microsoft\Boot\bootmgfw.efi`**。用一个启动项
-  检查（`bcdedit /enum` 或 EasyBCD）：如果它的**设备**是 Windows 分区、**启动文件**是
-  `\Windows\system32\winload.efi`，那台机器根本不经过 `bootmgfw.efi` —— 部署什么都不会发生。
-  先在 WinRE（疑难解答 → 命令提示符）里修引导：`bcdboot C:\Windows /s S: /f UEFI`
-  （`S:` = 挂好的 ESP），它会重建真正的 `bootmgfw.efi` 与一条"从 ESP 引导它"的条目，
-  然后重跑 `--deploy-esp`。
+* **固件必须真的会去加载上面那两个被替换的文件之一**。固件**不读 BCD** —— 它按 NVRAM 的
+  `BootOrder` 逐条启动，Windows 的 `Boot####` 条目通常指向
+  `\EFI\Microsoft\Boot\bootmgfw.efi`；只有在所有条目都失败或不存在时，才会去走默认文件路径
+  `\EFI\Boot\BOOTX64.EFI`（UEFI 规范的可移动介质默认路径，EDK2 里实现为
+  `PlatformRecovery####` 默认项，仅在 `BootOptions` 全部失败后尝试）。查固件条目用：
+  `bcdedit /enum firmware`。若没有任何条目指向这两个文件，先在 WinRE（疑难解答 → 命令提示符）
+  修引导：`bcdboot C:\Windows /s S: /f UEFI`（`S:` = 挂好的 ESP），然后重跑 `--deploy-esp`。
+  （BCD 里的 `winload.efi` 条目是 OS loader 对象，由 bootmgfw 读取 —— 那是正常结构，
+  与固件引导哪个文件无关。）
 * Secure Boot 必须关闭（UEFI Shell 未签名）。
-* 回滚 = 进 Shell 把 `\EFI\IceMelt\bootmgfw-original.efi` 拷回 `bootmgfw.efi`。
+* 回滚 = 进 Shell 把 `\EFI\IceMelt\bootmgfw-original.efi` 拷回 `bootmgfw.efi`（有
+  `bootx64-original.efi` 的话一并拷回 `\EFI\Boot\BOOTX64.EFI`）。
 
 输入资产在 `<exe>\gunpowder\`：`shellx64.efi`（pbatard/UEFI-Shell）、`ntfs-3g.efi`
 （pbatard/ntfs-3g，RW 版）、`startup.nsh`。
