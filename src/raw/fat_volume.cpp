@@ -31,10 +31,11 @@ namespace icemelt
 		// 所以注册表只能放在文件作用域（单线程 CLI，不需要锁）。
 		struct DriveCtx
 		{
-			SectorIo *   io          = nullptr;
-			uint64_t     base        = 0;
-			uint64_t     sectorCount = 0; // 只有 f_mkfs 用得到
-			UndoJournal *journal     = nullptr;
+			SectorIo *    io          = nullptr;
+			uint64_t      base        = 0;
+			uint64_t      sectorCount = 0; // 只有 f_mkfs 用得到
+			UndoJournal * journal     = nullptr;
+			std::wstring  ioFailure; // 最近一次失败的 SectorIo 原因（含 Win32 码），诊断用
 		};
 
 		DriveCtx g_drives[kMaxDrives];
@@ -101,6 +102,15 @@ namespace icemelt
 		{
 			return static_cast<uint16_t>(p[0] | (p[1] << 8));
 		}
+
+		// FatFs 错误码 → 可读文本。FR_DISK_ERR 会把 diskio 层记下的原因附上 ——
+		// 光说 "disk error" 等于没说（裸写被内核拒绝时唯一能说清"为什么"的就是它）。
+		std::wstring FatFsErrorWithIo(FRESULT res, const std::wstring &ioFailure)
+		{
+			std::wstring text = FatFsErrorText(res);
+			if (res == FR_DISK_ERR && !ioFailure.empty()) text += L": " + ioFailure;
+			return text;
+		}
 	} // namespace
 
 	// diskio 回调在文件末尾（必须在 namespace icemelt 之外 —— 它们要的是 C 链接）
@@ -147,7 +157,7 @@ namespace icemelt
 		if (res != FR_OK)
 		{
 			ReleaseDrive(pdrv);
-			error = FormatW(L"f_mount: %ls", FatFsErrorText(res));
+			error = FormatW(L"f_mount: %ls", FatFsErrorWithIo(res, lastIoFailure()).c_str());
 			return false;
 		}
 
@@ -275,13 +285,13 @@ namespace icemelt
 			}
 			if (st != FR_NO_FILE && st != FR_NO_PATH)
 			{
-				error = FormatW(L"f_stat %hs: %ls", prefix.c_str(), FatFsErrorText(st));
+				error = FormatW(L"f_stat %hs: %ls", prefix.c_str(), FatFsErrorWithIo(st, lastIoFailure()).c_str());
 				return false;
 			}
 			const FRESULT mk = f_mkdir(wpath.c_str());
 			if (mk != FR_OK && mk != FR_EXIST)
 			{
-				error = FormatW(L"f_mkdir %hs: %ls", prefix.c_str(), FatFsErrorText(mk));
+				error = FormatW(L"f_mkdir %hs: %ls", prefix.c_str(), FatFsErrorWithIo(mk, lastIoFailure()).c_str());
 				return false;
 			}
 		}
@@ -303,7 +313,7 @@ namespace icemelt
 		if (res == FR_NO_FILE || res == FR_NO_PATH) return false;
 		if (res != FR_OK)
 		{
-			error = FormatW(L"f_stat %hs: %ls", path.c_str(), FatFsErrorText(res));
+			error = FormatW(L"f_stat %hs: %ls", path.c_str(), FatFsErrorWithIo(res, lastIoFailure()).c_str());
 			return false;
 		}
 		if (sizeOut != nullptr) *sizeOut = static_cast<uint64_t>(fno.fsize);
@@ -329,7 +339,7 @@ namespace icemelt
 		const FRESULT openRes = f_open(&fil, wpath.c_str(), FA_WRITE | FA_CREATE_ALWAYS);
 		if (openRes != FR_OK)
 		{
-			error = FormatW(L"f_open %hs (write): %ls", path.c_str(), FatFsErrorText(openRes));
+			error = FormatW(L"f_open %hs (write): %ls", path.c_str(), FatFsErrorWithIo(openRes, lastIoFailure()).c_str());
 			return false;
 		}
 
@@ -356,7 +366,7 @@ namespace icemelt
 					L"f_write %hs at offset %llu: %ls (%u of %zu bytes)",
 					path.c_str(),
 					static_cast<unsigned long long>(offset),
-					FatFsErrorText(res),
+					FatFsErrorWithIo(res, lastIoFailure()).c_str(),
 					written,
 					want);
 				return false;
@@ -368,7 +378,7 @@ namespace icemelt
 		const FRESULT closeRes = f_close(&fil);
 		if (closeRes != FR_OK)
 		{
-			error = FormatW(L"f_close %hs: %ls", path.c_str(), FatFsErrorText(closeRes));
+			error = FormatW(L"f_close %hs: %ls", path.c_str(), FatFsErrorWithIo(closeRes, lastIoFailure()).c_str());
 			return false;
 		}
 		freeValid_ = false;
@@ -384,7 +394,7 @@ namespace icemelt
 		const FRESULT openRes = f_open(&fil, wpath.c_str(), FA_READ);
 		if (openRes != FR_OK)
 		{
-			error = FormatW(L"f_open %hs (read): %ls", path.c_str(), FatFsErrorText(openRes));
+			error = FormatW(L"f_open %hs (read): %ls", path.c_str(), FatFsErrorWithIo(openRes, lastIoFailure()).c_str());
 			return false;
 		}
 		const uint64_t size = static_cast<uint64_t>(f_size(&fil));
@@ -402,7 +412,7 @@ namespace icemelt
 					L"f_read %hs at offset %llu: %ls (%u of %zu bytes)",
 					path.c_str(),
 					static_cast<unsigned long long>(offset),
-					FatFsErrorText(res),
+					FatFsErrorWithIo(res, lastIoFailure()).c_str(),
 					got,
 					want);
 				return false;
@@ -412,7 +422,7 @@ namespace icemelt
 		const FRESULT closeRes = f_close(&fil);
 		if (closeRes != FR_OK)
 		{
-			error = FormatW(L"f_close %hs: %ls", path.c_str(), FatFsErrorText(closeRes));
+			error = FormatW(L"f_close %hs: %ls", path.c_str(), FatFsErrorWithIo(closeRes, lastIoFailure()).c_str());
 			return false;
 		}
 		return true;
@@ -431,7 +441,7 @@ namespace icemelt
 		const FRESULT openRes = f_open(&fil, wpath.c_str(), FA_READ);
 		if (openRes != FR_OK)
 		{
-			error = FormatW(L"f_open %hs (verify): %ls", path.c_str(), FatFsErrorText(openRes));
+			error = FormatW(L"f_open %hs (verify): %ls", path.c_str(), FatFsErrorWithIo(openRes, lastIoFailure()).c_str());
 			return false;
 		}
 		const uint64_t onDisk = static_cast<uint64_t>(f_size(&fil));
@@ -460,7 +470,7 @@ namespace icemelt
 					L"f_read %hs at offset %llu: %ls (%u of %zu bytes)",
 					path.c_str(),
 					static_cast<unsigned long long>(offset),
-					FatFsErrorText(res),
+					FatFsErrorWithIo(res, lastIoFailure()).c_str(),
 					read,
 					n);
 				return false;
@@ -486,7 +496,7 @@ namespace icemelt
 		const FRESULT closeRes = f_close(&fil);
 		if (closeRes != FR_OK)
 		{
-			error = FormatW(L"f_close %hs: %ls", path.c_str(), FatFsErrorText(closeRes));
+			error = FormatW(L"f_close %hs: %ls", path.c_str(), FatFsErrorWithIo(closeRes, lastIoFailure()).c_str());
 			return false;
 		}
 		return true;
@@ -497,6 +507,12 @@ namespace icemelt
 		journal_ = journal;
 		if (pdrv_ >= 0 && pdrv_ < static_cast<int>(kMaxDrives))
 			g_drives[pdrv_].journal = journal;
+	}
+
+	std::wstring FatFsVolume::lastIoFailure() const
+	{
+		if (pdrv_ < 0 || pdrv_ >= static_cast<int>(kMaxDrives)) return {};
+		return g_drives[pdrv_].ioFailure;
 	}
 
 	// ---------------------------------------------------------------- I/O 计数
@@ -550,10 +566,11 @@ namespace icemelt
 		opt.au_size = static_cast<DWORD>(sectorsPerCluster) * kSector; // 簇大小（字节）；0 = 自动
 		BYTE          work[FF_MAX_SS] = {};
 		const FRESULT res = f_mkfs(DrivePath(pdrv).c_str(), &opt, work, sizeof(work));
+		const std::wstring ioFailure = g_drives[pdrv].ioFailure; // ReleaseDrive 会清掉
 		ReleaseDrive(pdrv);
 		if (res != FR_OK)
 		{
-			error = FormatW(L"f_mkfs: %ls", FatFsErrorText(res));
+			error = FormatW(L"f_mkfs: %ls", FatFsErrorWithIo(res, ioFailure).c_str());
 			return false;
 		}
 		return true;
@@ -593,8 +610,9 @@ DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count)
 	const icemelt::DriveCtx &d = icemelt::g_drives[pdrv];
 	if (count == 0) return RES_OK;
 	const uint64_t offset = d.base + static_cast<uint64_t>(sector) * icemelt::kSector;
-	return d.io->Read(offset, buff, static_cast<size_t>(count) * icemelt::kSector) ? RES_OK
-	                                                                              : RES_ERROR;
+	if (d.io->Read(offset, buff, static_cast<size_t>(count) * icemelt::kSector)) return RES_OK;
+	icemelt::g_drives[pdrv].ioFailure = d.io->failure();
+	return RES_ERROR;
 }
 
 DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count)
@@ -612,10 +630,17 @@ DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count)
 	// 快照必须在**写之前**做；取不到原内容就宁可让这次写失败（调用方会中止部署）
 	if (d.journal != nullptr)
 	{
-		std::wstring ignored;
-		if (!d.journal->Capture(*d.io, offset, len, ignored)) return RES_ERROR;
+		std::wstring snapshotError;
+		if (!d.journal->Capture(*d.io, offset, len, snapshotError))
+		{
+			icemelt::g_drives[pdrv].ioFailure =
+					L"undo snapshot: " + (snapshotError.empty() ? d.io->failure() : snapshotError);
+			return RES_ERROR;
+		}
 	}
-	return d.io->Write(offset, buff, len) ? RES_OK : RES_ERROR;
+	if (d.io->Write(offset, buff, len)) return RES_OK;
+	icemelt::g_drives[pdrv].ioFailure = d.io->failure();
+	return RES_ERROR;
 }
 
 DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff)

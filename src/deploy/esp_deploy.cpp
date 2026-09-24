@@ -814,16 +814,18 @@ namespace icemelt
 
 		log.push_back(
 			L"[*] backend: raw physical disk (\\\\.\\PhysicalDriveN) + FatFs (R0.15)");
-		// ---- 4. 打开物理盘 + 挂 FAT ----
-		PhysicalDriveSectorIo physical;
-		if (!physical.Open(esp.diskNumber, error))
-		{
-			log.push_back(FormatW(L"[x] %ls", error.c_str()));
-			return r;
-		}
-		HANDLE volume = INVALID_HANDLE_VALUE;
+
+		// ---- 4. 先锁住覆盖 ESP 的那个卷，再打开物理盘 ----
+		//
+		// 顺序不能反：Windows 对"已挂载且未锁定"的卷覆盖的扇区一律拒绝直写
+		// （ERROR_ACCESS_DENIED），而"ESP 有没有卷设备、锁没锁上"都是要靠日志说清的事实 ——
+		// 否则失败只表现为一次莫名的写盘错误。锁定用只读卷句柄（带写权限的 CreateFile
+		// 在挂载中的卷上必然失败），成功后 FSCTL_DISMOUNT_VOLUME 让文件系统让开。
+		HANDLE       volume = INVALID_HANDLE_VALUE;
+		std::wstring volumePath;
 		std::wstring lockError;
-		if (!LockCoveringVolume(esp.diskNumber, esp.offsetBytes, esp.lengthBytes, volume, lockError))
+		if (!LockCoveringVolume(
+				esp.diskNumber, esp.offsetBytes, esp.lengthBytes, volume, volumePath, lockError))
 		{
 			log.push_back(FormatW(L"[x] cannot lock the ESP volume: %ls", lockError.c_str()));
 			return r;
@@ -836,8 +838,18 @@ namespace icemelt
 				if (h != INVALID_HANDLE_VALUE) ::CloseHandle(h);
 			}
 		} guard{volume};
-		if (volume == INVALID_HANDLE_VALUE)
+		if (volume != INVALID_HANDLE_VALUE)
+			log.push_back(
+				FormatW(L"[*] volume %ls locked and dismounted", volumePath.c_str()));
+		else
 			log.push_back(L"[*] no mounted volume covers the ESP: nothing to lock");
+
+		PhysicalDriveSectorIo physical;
+		if (!physical.Open(esp.diskNumber, error))
+		{
+			log.push_back(FormatW(L"[x] %ls", error.c_str()));
+			return r;
+		}
 
 		FatFsVolume fs;
 		if (!fs.Mount(physical, esp.offsetBytes, error))

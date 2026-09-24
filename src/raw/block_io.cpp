@@ -12,6 +12,17 @@ namespace icemelt
 	{
 		constexpr uint32_t kSector = 512; // 本实现只接受 512 字节扇区（ESP 恒为 512）
 
+		// 抓当前线程的 Win32 错误并格式化成可读文本。
+		// 调用点必须**紧挨**失败的 API —— GetLastError 会被任何一次后续调用覆盖。
+		std::wstring Win32Failure(const wchar_t *what)
+		{
+			const DWORD err = ::GetLastError();
+			return FormatW(L"%ls failed: %lu%s", what, err,
+			               err == ERROR_ACCESS_DENIED
+					               ? L" (access denied: the covering volume is mounted and not locked?)"
+					               : L"");
+		}
+
 		uint32_t RdU32(const uint8_t *p)
 		{
 			return static_cast<uint32_t>(p[0] | (p[1] << 8) | (p[2] << 16) |
@@ -253,24 +264,48 @@ namespace icemelt
 
 	bool FileSectorIo::Read(uint64_t offset, void *dst, size_t len)
 	{
-		if (handle_ == INVALID_HANDLE_VALUE) return false;
+		if (handle_ == INVALID_HANDLE_VALUE)
+		{
+			failure_ = L"the image file is not open";
+			return false;
+		}
 		LARGE_INTEGER li{};
 		li.QuadPart = static_cast<LONGLONG>(offset);
-		if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN)) return false;
+		if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN))
+		{
+			failure_ = Win32Failure(L"SetFilePointerEx");
+			return false;
+		}
 		DWORD read = 0;
-		return ::ReadFile(handle_, dst, static_cast<DWORD>(len), &read, nullptr) &&
-				read == len;
+		if (!::ReadFile(handle_, dst, static_cast<DWORD>(len), &read, nullptr) || read != len)
+		{
+			failure_ = Win32Failure(L"ReadFile");
+			return false;
+		}
+		return true;
 	}
 
 	bool FileSectorIo::Write(uint64_t offset, const void *src, size_t len)
 	{
-		if (handle_ == INVALID_HANDLE_VALUE) return false;
+		if (handle_ == INVALID_HANDLE_VALUE)
+		{
+			failure_ = L"the image file is not open";
+			return false;
+		}
 		LARGE_INTEGER li{};
 		li.QuadPart = static_cast<LONGLONG>(offset);
-		if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN)) return false;
+		if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN))
+		{
+			failure_ = Win32Failure(L"SetFilePointerEx");
+			return false;
+		}
 		DWORD written = 0;
-		return ::WriteFile(handle_, src, static_cast<DWORD>(len), &written, nullptr) &&
-				written == len;
+		if (!::WriteFile(handle_, src, static_cast<DWORD>(len), &written, nullptr) || written != len)
+		{
+			failure_ = Win32Failure(L"WriteFile");
+			return false;
+		}
+		return true;
 	}
 
 	// ------------------------------------------------------ PhysicalDriveSectorIo
@@ -320,17 +355,34 @@ namespace icemelt
 		return (offset % kSector) == 0 && (len % kSector) == 0;
 	}
 
+	void PhysicalDriveSectorIo::note(const wchar_t *what)
+	{
+		failure_ = Win32Failure(what);
+	}
+
 	bool PhysicalDriveSectorIo::Read(uint64_t offset, void *dst, size_t len)
 	{
-		if (handle_ == INVALID_HANDLE_VALUE || len == 0) return false;
+		if (handle_ == INVALID_HANDLE_VALUE || len == 0)
+		{
+			failure_ = L"the physical drive is not open";
+			return false;
+		}
 		if (aligned(offset, len))
 		{
 			LARGE_INTEGER li{};
 			li.QuadPart = static_cast<LONGLONG>(offset);
-			if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN)) return false;
+			if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN))
+			{
+				note(L"SetFilePointerEx");
+				return false;
+			}
 			DWORD read = 0;
-			return ::ReadFile(handle_, dst, static_cast<DWORD>(len), &read, nullptr) &&
-					read == len;
+			if (!::ReadFile(handle_, dst, static_cast<DWORD>(len), &read, nullptr) || read != len)
+			{
+				note(L"ReadFile");
+				return false;
+			}
+			return true;
 		}
 		// 非对齐：读-改-写覆盖到的整扇区
 		const uint64_t first = (offset / kSector) * kSector;
@@ -339,26 +391,46 @@ namespace icemelt
 		std::vector<uint8_t> buf(total);
 		LARGE_INTEGER li{};
 		li.QuadPart = static_cast<LONGLONG>(first);
-		if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN)) return false;
+		if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN))
+		{
+			note(L"SetFilePointerEx");
+			return false;
+		}
 		DWORD read = 0;
 		if (!::ReadFile(handle_, buf.data(), static_cast<DWORD>(total), &read, nullptr) ||
 			read != total)
+		{
+			note(L"ReadFile");
 			return false;
+		}
 		std::memcpy(dst, buf.data() + (offset - first), len);
 		return true;
 	}
 
 	bool PhysicalDriveSectorIo::Write(uint64_t offset, const void *src, size_t len)
 	{
-		if (handle_ == INVALID_HANDLE_VALUE || len == 0) return false;
+		if (handle_ == INVALID_HANDLE_VALUE || len == 0)
+		{
+			failure_ = L"the physical drive is not open";
+			return false;
+		}
 		if (aligned(offset, len))
 		{
 			LARGE_INTEGER li{};
 			li.QuadPart = static_cast<LONGLONG>(offset);
-			if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN)) return false;
+			if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN))
+			{
+				note(L"SetFilePointerEx");
+				return false;
+			}
 			DWORD written = 0;
-			return ::WriteFile(handle_, src, static_cast<DWORD>(len), &written, nullptr) &&
-					written == len;
+			if (!::WriteFile(handle_, src, static_cast<DWORD>(len), &written, nullptr) ||
+				written != len)
+			{
+				note(L"WriteFile");
+				return false;
+			}
+			return true;
 		}
 		const uint64_t first = (offset / kSector) * kSector;
 		const uint64_t last  = (offset + len - 1) / kSector * kSector;
@@ -366,17 +438,33 @@ namespace icemelt
 		std::vector<uint8_t> buf(total);
 		LARGE_INTEGER li{};
 		li.QuadPart = static_cast<LONGLONG>(first);
-		if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN)) return false;
+		if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN))
+		{
+			note(L"SetFilePointerEx");
+			return false;
+		}
 		DWORD read = 0;
 		if (!::ReadFile(handle_, buf.data(), static_cast<DWORD>(total), &read, nullptr) ||
 			read != total)
+		{
+			note(L"ReadFile (read-modify-write)");
 			return false;
+		}
 		std::memcpy(buf.data() + (offset - first), src, len);
 		li.QuadPart = static_cast<LONGLONG>(first);
-		if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN)) return false;
+		if (!::SetFilePointerEx(handle_, li, nullptr, FILE_BEGIN))
+		{
+			note(L"SetFilePointerEx");
+			return false;
+		}
 		DWORD written = 0;
-		return ::WriteFile(handle_, buf.data(), static_cast<DWORD>(total), &written, nullptr) &&
-				written == total;
+		if (!::WriteFile(handle_, buf.data(), static_cast<DWORD>(total), &written, nullptr) ||
+			written != total)
+		{
+			note(L"WriteFile (read-modify-write)");
+			return false;
+		}
+		return true;
 	}
 
 	// ------------------------------------------------------------ 卷锁/卸载
@@ -386,9 +474,11 @@ namespace icemelt
 		uint64_t      diskOffset,
 		uint64_t      length,
 		HANDLE &      volumeHandle,
+		std::wstring &volumePath,
 		std::wstring &error)
 	{
 		volumeHandle = INVALID_HANDLE_VALUE;
+		volumePath.clear();
 		wchar_t name[MAX_PATH] = {};
 		HANDLE  find = ::FindFirstVolumeW(name, MAX_PATH);
 		if (find == INVALID_HANDLE_VALUE)
@@ -401,9 +491,12 @@ namespace icemelt
 		{
 			std::wstring path(name);
 			if (!path.empty() && path.back() == L'\\') path.pop_back();
+			// **只读**打开：卷的文件系统被 Windows 挂着时，带 GENERIC_WRITE 的 CreateFile
+			// 必然 ERROR_ACCESS_DENIED —— 那样就永远找不到"要锁的卷"，接下来裸写被内核
+			// 拒绝，表现为一次没有任何线索的写盘失败（实测踩过）。锁/卸载只需要读句柄。
 			HANDLE h = ::CreateFileW(
 				path.c_str(),
-				GENERIC_READ | GENERIC_WRITE,
+				GENERIC_READ,
 				FILE_SHARE_READ | FILE_SHARE_WRITE,
 				nullptr,
 				OPEN_EXISTING,
@@ -449,25 +542,51 @@ namespace icemelt
 			volumeHandle = INVALID_HANDLE_VALUE;
 			return true;
 		}
+		volumePath = std::wstring(name);
+		if (!volumePath.empty() && volumePath.back() == L'\\') volumePath.pop_back();
 
-		DWORD bytes = 0;
-		if (::DeviceIoControl(volumeHandle, FSCTL_LOCK_VOLUME, nullptr, 0, nullptr, 0, &bytes, nullptr))
+		// 锁定：卷上有打开的文件时 FSCTL_LOCK_VOLUME 返回 ERROR_ACCESS_DENIED /
+		// ERROR_SHARING_VIOLATION，等一会儿再试（杀毒/索引服务常在一瞬间持有句柄）。
+		DWORD bytes  = 0;
+		DWORD lockErr = ERROR_SUCCESS;
+		bool  locked  = false;
+		for (int attempt = 0; attempt < 20 && !locked; ++attempt)
 		{
-			::DeviceIoControl(volumeHandle, FSCTL_DISMOUNT_VOLUME, nullptr, 0, nullptr, 0, &bytes, nullptr);
-		}
-		else
-		{
-			const DWORD err = ::GetLastError();
-			// 158(ERROR_NOT_LOCKED) / 1(ERROR_INVALID_FUNCTION)：没有已挂载的文件系统在管它
-			if (err != ERROR_NOT_LOCKED && err != ERROR_INVALID_FUNCTION &&
-				err != ERROR_ACCESS_DENIED)
+			if (::DeviceIoControl(
+					volumeHandle, FSCTL_LOCK_VOLUME, nullptr, 0, nullptr, 0, &bytes, nullptr))
 			{
-				error = FormatW(L"FSCTL_LOCK_VOLUME failed: %lu", err);
-				::CloseHandle(volumeHandle);
-				volumeHandle = INVALID_HANDLE_VALUE;
-				return false;
+				locked = true;
+				break;
 			}
+			lockErr = ::GetLastError();
+			if (lockErr != ERROR_ACCESS_DENIED && lockErr != ERROR_SHARING_VIOLATION) break;
+			::Sleep(100);
 		}
-		return true;
+
+		if (locked)
+		{
+			// 卸载：文件系统一旦离开，Windows 就允许对物理盘上属于这个卷的扇区直写。
+			// 卸载失败不算错 —— 锁本身已经够了（本工具写的是物理盘句柄，不是卷句柄）。
+			::DeviceIoControl(
+				volumeHandle, FSCTL_DISMOUNT_VOLUME, nullptr, 0, nullptr, 0, &bytes, nullptr);
+			return true;
+		}
+
+		// 锁不上就没有必要往下走：卷还在被文件系统管着时，裸写必然被拒（ERROR_ACCESS_DENIED），
+		// 与其让调用方收到一句莫名的写盘失败，不如在这里说清原因。
+		if (lockErr == ERROR_INVALID_FUNCTION || lockErr == ERROR_NOT_SUPPORTED)
+		{
+			// 没有文件系统在管这个卷：没有可锁的东西，裸写本来就允许
+			return true;
+		}
+		error = FormatW(
+			L"cannot lock %ls: %lu (close anything holding the volume — Explorer window, "
+			L"antivirus scan — and retry)",
+			volumePath.c_str(),
+			lockErr);
+		::CloseHandle(volumeHandle);
+		volumeHandle = INVALID_HANDLE_VALUE;
+		volumePath.clear();
+		return false;
 	}
 } // namespace icemelt

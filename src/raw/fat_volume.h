@@ -90,6 +90,9 @@ namespace icemelt
 		// FatFs 在写数据的过程中就会更新 FAT，所以快照必须覆盖它改过的每个扇区。
 		void SetJournal(UndoJournal *journal);
 
+		// 最近一次失败的底层原因（Win32 码在内）；诊断用
+		std::wstring lastIoFailure() const;
+
 	private:
 		bool  ensureDirectory(const std::string &dirUtf8, std::wstring &error);
 		bool  makePath(const std::string &pathUtf8, std::wstring &out, std::wstring &error);

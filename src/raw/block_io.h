@@ -37,6 +37,14 @@ namespace icemelt
 		virtual bool Read(uint64_t offset, void *dst, size_t len) = 0;
 
 		virtual bool Write(uint64_t offset, const void *src, size_t len) = 0;
+
+		// 最近一次失败的可读原因（含 Win32 错误码）。默认空，实现者应尽量填 ——
+		// 裸写被内核拒绝时，这是唯一能说清"为什么"的东西：Windows 对**已挂载且未锁定**
+		// 的卷覆盖的扇区直接返回 ERROR_ACCESS_DENIED(5)，表现形式就是一次失败的写盘。
+		virtual std::wstring failure() const
+		{
+			return {};
+		}
 	};
 
 	// 写前快照。按扇区（512 字节粒度，对齐）记录原内容，每个扇区只记一次；回放即可把
@@ -87,10 +95,16 @@ namespace icemelt
 
 		void Close();
 
+		std::wstring failure() const override
+		{
+			return failure_;
+		}
+
 		~FileSectorIo() override;
 
 	private:
-		HANDLE handle_ = INVALID_HANDLE_VALUE;
+		HANDLE       handle_ = INVALID_HANDLE_VALUE;
+		std::wstring failure_;
 	};
 
 	// 普通物理盘句柄（\\.\PhysicalDriveN）：不装任何驱动，走 Windows 自己的 disk.sys 栈。
@@ -116,20 +130,38 @@ namespace icemelt
 			return handle_ != INVALID_HANDLE_VALUE;
 		}
 
+		std::wstring failure() const override
+		{
+			return failure_;
+		}
+
 	private:
 		// 非 512 对齐的请求走"读-改-写"，与 WinDisk 的语义保持一致
 		bool aligned(uint64_t offset, size_t len) const;
 
-		HANDLE handle_ = INVALID_HANDLE_VALUE;
+		// 立刻抓 GetLastError（调用点必须紧挨失败的 API）
+		void note(const wchar_t *what);
+
+		HANDLE       handle_ = INVALID_HANDLE_VALUE;
+		std::wstring failure_;
 	};
 
 	// 把覆盖 [diskOffset, diskOffset+length) 的那个卷打开并锁/卸载，让裸写物理盘成为唯一
 	// 写入者（返回的句柄必须在写完后 CloseHandle）。找不到这样的卷（ESP 常见：没有挂载点）
 	// 时返回 true + INVALID_HANDLE_VALUE —— 那不是错误。
+	//
+	// 打开方式必须是**只读**：卷的 FAT 被 Windows 挂着时，带写权限的 CreateFile 直接
+	// ERROR_ACCESS_DENIED(5)，于是"找不到要锁的卷" → 裸写被内核拒 → 表现为一次莫名的写盘
+	// 失败（实测就是这个坑）。锁定用 FSCTL_LOCK_VOLUME，成功后 FSCTL_DISMOUNT_VOLUME：
+	// 卷一旦锁定/卸载，Windows 就允许对**物理盘**上属于它的扇区做直写。
+	//
+	// volumePath 输出被锁的卷设备名（没找到时清空）—— 调用方把它打进日志，
+	// 免得"锁没锁上"只能靠猜。
 	bool LockCoveringVolume(
 		uint32_t      diskNumber,
 		uint64_t      diskOffset,
 		uint64_t      length,
 		HANDLE &      volumeHandle,
+		std::wstring &volumePath,
 		std::wstring &error);
 } // namespace icemelt
