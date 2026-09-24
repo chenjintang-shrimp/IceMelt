@@ -696,8 +696,11 @@ namespace icemelt
 			return true;
 		}
 		error = FormatW(
-			L"cannot lock %ls: %lu (close anything holding the volume — Explorer window, "
-			L"antivirus scan — and retry)",
+			L"cannot lock %ls: %lu — a process holds the volume open, or a volume/fs "
+			L"filter vetoes the lock (frozen DeepFreeze must do so: a lock+dismount "
+			L"would bypass its COW). Run \"icemelt --probe-holders\" (as admin) to "
+			L"name the holder; an empty list means the veto, so thaw or deploy via "
+			L"the driver backend instead",
 			volumePath.c_str(),
 			lockErr);
 		::CloseHandle(volumeHandle);

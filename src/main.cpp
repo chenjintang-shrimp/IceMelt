@@ -33,6 +33,8 @@
 
 #include "deploy/esp_deploy.h"
 #include "melt/unfreeze.h"
+#include "raw/esp_raw.h"
+#include "raw/holder_probe.h"
 #include "raw/win_disk.h"
 #include "reg/reg_edit.h"
 #include "reg/targets.h"
@@ -486,6 +488,9 @@ namespace
 				"  icemelt --selftest-partitions\n"
 				"                           GPT/MBR parsing self-test on synthetic images\n"
 				"                           (no admin, no real disk)\n"
+				"  icemelt --probe-holders[=HarddiskVolumeN]\n"
+				"                           list the processes holding the ESP's volume open\n"
+				"                           (diagnoses a failed FSCTL_LOCK_VOLUME; read-only)\n"
 				"  icemelt --selftest-fat [--image=<file>]\n"
 				"                           FAT writer self-test on a synthetic image in %TEMP%\n"
 				"                           (no admin, no real volume); with --image= it only reads\n"
@@ -513,7 +518,9 @@ int main(int argc, char **argv)
 	std::wstring driveArg; // --drive=E: (USB 载体显式指定时用)
 	bool         deployRaw = false; // --raw：--deploy-esp 走物理盘扇区而不是 mountvol
 	std::wstring undoFile;          // --esp-undo <file>：回放 undo 快照
-	bool yesIKnow         = false;
+	bool yesIKnow = false;
+	int  probeHolders = -1;      // -1 未请求；0 = 自动推导；带 = 值时进 probeName
+	std::wstring probeName;
 
 	for (int i = 1; i < argc; ++i)
 	{
@@ -541,6 +548,12 @@ int main(int argc, char **argv)
 			driveArg.resize(1);
 		}
 		else if (arg == "--yes-i-know") yesIKnow = true;
+		else if (arg == "--probe-holders") probeHolders = 0;
+		else if (arg.rfind("--probe-holders=", 0) == 0)
+		{
+			probeHolders = 0;
+			probeName    = icemelt::Widen(std::string(arg.substr(16)));
+		}
 		else if (arg == "--selftest-hive") selftestHive = true;
 		else if (arg == "--selftest-registry") selftestRegistry = true;
 		else if (arg == "--selftest-raw") selftestRaw = true;
@@ -659,6 +672,87 @@ int main(int argc, char **argv)
 	if (selftestRaw) return icemelt::RawSelfTest(exeDir);
 	if (selftestFat) return icemelt::FatSelfTest(exeDir, fatImage);
 	if (selftestPart) return icemelt::PartitionSelfTest(exeDir);
+	if (probeHolders >= 0)
+	{
+		// --probe-holders（可带 =HarddiskVolumeN 显式指定）：当裸盘直写前的
+		// FSCTL_LOCK_VOLUME 报 5 时，枚举全系统句柄表，列出是谁还握着这个卷。
+		// 一个都列不出来 = 不是任何进程握文件，而是卷/文件系统过滤器在否决锁
+		// （冻结态的 DeepFreeze 的 DFFilter 就该这么干：锁+卸载会绕过它的 COW）。
+		// 纯读操作（NT 句柄表 + DuplicateHandle），不碰盘，故不要 --yes-i-know；
+		// 枚举物理盘需要管理员令牌（自动推导模式才用得到）。
+		std::wstring name = probeName;
+		if (name.empty())
+		{
+			std::vector<icemelt::EspPartition> found;
+			std::vector<std::wstring>          notes;
+			std::wstring                       error;
+			Print(L"[*] locating the ESP and its covering volume device...");
+			if (!icemelt::FindEspPartitions(16, found, notes, error))
+			{
+				Print(icemelt::CliPaint(L"[x] " + error));
+				return 1;
+			}
+			icemelt::EspPartition chosen;
+			if (!icemelt::SelectEspPartition(found, chosen, notes, error))
+			{
+				Print(icemelt::CliPaint(L"[x] " + error));
+				return 1;
+			}
+			Print(icemelt::CliPaint(L"[*] ESP: " + chosen.description));
+			if (!icemelt::FindCoveringVolumeName(
+					chosen.diskNumber,
+					chosen.offsetBytes,
+					chosen.lengthBytes,
+					name,
+					error))
+			{
+				Print(icemelt::CliPaint(L"[x] " + error));
+				return 1;
+			}
+			if (!error.empty()) Print(icemelt::CliPaint(L"    " + error));
+			if (name.empty())
+			{
+				Print(L"[*] no volume device covers the ESP: nothing to be held, "
+				      L"and a direct disk write must be allowed");
+				return 0;
+			}
+		}
+		Print(icemelt::CliPaint(
+			icemelt::FormatW(
+				L"[*] listing processes holding \\Device\\%ls ...", name.c_str())));
+		std::vector<icemelt::VolumeHolder> holders;
+		std::wstring                       note;
+		std::wstring                       error;
+		if (!icemelt::ListVolumeHolders(name, holders, note, error))
+		{
+			Print(icemelt::CliPaint(L"[x] " + error));
+			return 1;
+		}
+		if (holders.empty())
+		{
+			Print(L"[*] no process holds an open handle on this volume");
+			Print(L"    => the lock denial is vetoed by a filter driver instead");
+			Print(L"       (frozen DeepFreeze blocks lock/dismount by design: a lock");
+			Print(L"       would bypass its COW. Thaw to deploy, or use the driver");
+			Print(L"       backend which writes below the volume stack).");
+		}
+		else
+		{
+			for (const auto &h: holders)
+			{
+				Print(icemelt::CliPaint(icemelt::FormatW(
+					L"[!] pid %5lu %-40ls %ls  (handles=%lu, access=0x%lx)",
+					static_cast<unsigned long>(h.pid),
+					h.processName.empty() ? L"(protected)" : h.processName.c_str(),
+					h.objectPath.c_str(),
+					static_cast<unsigned long>(h.handles),
+					static_cast<unsigned long>(h.access))));
+			}
+			Print(L"    => close/kill the holder(s) and retry the deploy");
+		}
+		Print(icemelt::CliPaint(L"    " + note));
+		return 0;
+	}
 	if (dryRun) return icemelt::MeltDryRun(exeDir.empty() ? root : exeDir);
 	if (dump) return DumpMode(root);
 
