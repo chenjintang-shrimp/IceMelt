@@ -164,6 +164,9 @@ release 草稿。
 | `icemelt --preflight`         | melt 前的一次性根因扫描（logstate 守卫 + 目录层级探针），**只在带快照的 VM 里跑**    |
 | `icemelt --deploy-esp --yes-i-know` | 把 pre-boot melt 链铺进 ESP（mountvol → 拷贝 → 卸载，走普通文件路径）          |
 | `icemelt --deploy-usb [--drive=E:] --yes-i-know` | 同一套链铺到 U 盘（可移动 FAT 卷），不碰内部引导，重启时从固件菜单选 U 盘 |
+| `icemelt --deploy-esp --raw --yes-i-know` | ESP 链改走**物理盘扇区**（`\\.\PhysicalDriveN`）：不用 mountvol、不装驱动 |
+| `icemelt --esp-undo=<file>` | 回放 `--raw` 写前落盘的 undo 快照（把 ESP 元数据恢复原样） |
+| `icemelt --selftest-fat [--image=<file>]` | FAT 写入器自检（合成镜像，无需管理员、不碰真实卷） |
 | `icemelt --melt --yes-i-know` | 非交互执行整条链路；破坏性、不可回滚                                                 |
 | `icemelt --selftest-hive`     | 校验 hive base block 偏移与校验和算法                                                |
 | `icemelt --selftest-registry` | 验证过滤器摘除的写入路径                                                             |
@@ -179,9 +182,11 @@ release 草稿。
 
 两种载体，同一套 pre-boot 链：
 
-| | `--deploy-esp` | `--deploy-usb` |
-|---|---|---|
-| 载体 | 本机 EFI 系统分区（mountvol X: /S） | 可移动 FAT12/16/32 卷（U 盘）；固定盘需 `--drive=E:` 显式指定 |
+| | `--deploy-esp` | `--deploy-esp --raw` | `--deploy-usb` |
+|---|---|---|---|
+| 载体 | 本机 EFI 系统分区（mountvol X: /S） | 同左，但写入走物理盘扇区 | 可移动 FAT12/16/32 卷（U 盘）；固定盘需 `--drive=E:` 显式指定 |
+| 写入方式 | 文件 API（经卷栈） | `\\.\PhysicalDriveN` + 内置最小 FAT 写入器 | 文件 API |
+| 被卷过滤器吞掉时 | 写入被 COW 层吸收，重启后消失 | 不经卷栈，还原软件看不到 | 不适用（U 盘不在保护范围内） |
 | Shell 落位 | 替换 `\EFI\Microsoft\Boot\bootmgfw.efi`（+ 存在时的 `\EFI\Boot\BOOTX64.EFI`） | `\EFI\BOOT\BOOTX64.EFI`（可移动介质默认路径），**不碰内部引导** |
 | 脚本落位 | `\EFI\Microsoft\Boot\startup.nsh` | `\EFI\BOOT\startup.nsh` |
 | 原有引导 | 备份到 `\EFI\IceMelt\bootmgfw-original.efi` / `bootx64-original.efi`，脚本运行后自动还原 | 备份到 `\EFI\IceMelt\backup\*.orig`（不自动还原：还原会盖掉正在运行的 Shell） |
@@ -192,6 +197,19 @@ release 草稿。
 `UpperFilters`/`LowerFilters` 项（与 live 摘除共用同一语义）→ 置干净/修校验和/可加载性校验。
 因为 payload 来自**运行中系统**的注册表，这两条命令都拒绝在 WinPE/WinRE 里执行（那里的
 `HKLM\SYSTEM` 是恢复环境自己的 hive，盖回去就起不来了）。
+
+**`--raw` 模式的边界与安全网**：
+
+* **不碰分区表**：分区表只被读取（用来定位 ESP），写入只落在 FAT 元数据（FAT 表 / FSInfo /
+  目录条目）与文件数据簇上 —— DfDiskLo 的 sector 影子只覆盖 MBR/GPT 那几个扇区，别去踩它。
+* **写前快照**：所有将被修改的元数据扇区先读进 `%TEMP%\icemelt-esp-undo.bin`，写入过程中的
+  任何一步失败都可以 `--esp-undo=<file>` 原样回放（文件消失、FAT/目录恢复原状；数据簇里残留
+  我们的字节，对 FAT 语义无影响）。
+* **只动空闲簇**：分配前逐簇断言 FAT 表项为 0，不会覆盖任何现存文件的内容。
+* **原引导器备份**：做成 `\EFI\IceMelt\BOOTMGW.OLD` / `BOOTX64.OLD`（8.3 安全名，两种部署
+  路径共用同一套名字），由 `startup.nsh` 在写完 hive 后自动还原。
+* **FAT 写入器是被独立验证过的**：`--selftest-fat` 在合成镜像上跑写入/替换/日志回放，并用
+  pyfatfs（独立实现）双向交叉验证过（含 LFN 目录 `\EFI\Microsoft` 的解析与生成）。
 
 **U 盘模式的安全提醒**：那张盘最终会带着一份本机 SYSTEM hive（本地账户与机密都在里面），
 用完自行处置。
