@@ -355,7 +355,7 @@ target("icemelt-gui")
         -- 路径因此进不来），子系统版本同时钉 6.01
         add_defines("_WIN32_WINNT=0x0601", "WINVER=0x0601")
         add_syslinks("advapi32", "shell32", "user32", "gdi32", "rpcrt4",
-                     "d3d9", "imm32", "dwmapi")
+                     "d3d9", "imm32", "dwmapi", "version")
         add_ldflags("/subsystem:windows,6.01")
     end
 

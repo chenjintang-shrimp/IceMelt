@@ -17,6 +17,8 @@
 
 #include <windows.h>
 #include <d3d9.h>
+// WIN32_LEAN_AND_MEAN 把 winver.h 挡在外面；顶栏显示的版本直接读 exe 自身的版本资源
+#include <winver.h>
 
 #include <imgui.h>
 #include <imgui_impl_dx9.h>
@@ -24,6 +26,7 @@
 
 #include <condition_variable>
 #include <cfloat>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <filesystem>
@@ -114,8 +117,11 @@ namespace
 	{
 		HWND  hwnd     = nullptr;
 		float dpiScale = 1.0f;
+		ImFont *fontMono = nullptr;
+		ImFont *fontTitle = nullptr;
 
 		bool                     elevated = false;
+		std::string              version; // 取自 exe 版本资源，见 VersionString()
 		std::string              osVersion;
 		std::string              exeDirUtf8;
 		std::vector<AssetRow>    assets;
@@ -216,6 +222,44 @@ namespace
 			if (!ubr.empty()) version += "." + icemelt::Narrow(ubr);
 		}
 		return version.empty() ? "unknown" : version;
+	}
+
+	// 本程序的版本号：取自 exe 自己的版本资源，不另设常量。xmake.lua 的 app_version 是
+	// 唯一版本源（CI 在 configure 阶段用 tag 覆盖），它生成 version-gui.rc 编进 exe，
+	// 所以读资源永远不会和发布包名脱节。走 VS_FIXEDFILEINFO 而不是 StringFileInfo：
+	// 固定块与 Translation 无关，不依赖 040904b0 语言块是否存在。
+	std::string VersionString()
+	{
+		wchar_t path[MAX_PATH] = {};
+		if (::GetModuleFileNameW(nullptr, path, MAX_PATH) == 0) return {};
+
+		DWORD       ignored = 0;
+		const DWORD size    = ::GetFileVersionInfoSizeW(path, &ignored);
+		if (size == 0) return {};
+
+		std::vector<unsigned char> buf(size);
+		if (!::GetFileVersionInfoW(path, 0, size, buf.data())) return {};
+
+		VS_FIXEDFILEINFO *info = nullptr;
+		UINT              len  = 0;
+		if (!::VerQueryValueW(
+			buf.data(),
+			L"\\",
+			reinterpret_cast<void **>(&info),
+			&len) ||
+			info == nullptr || len < sizeof(VS_FIXEDFILEINFO))
+			return {};
+		if (info->dwSignature != 0xFEEF04BD) return {};
+
+		char out[64] = {};
+		std::snprintf(
+			out,
+			sizeof(out),
+			"v%u.%u.%u",
+			HIWORD(info->dwProductVersionMS),
+			LOWORD(info->dwProductVersionMS),
+			HIWORD(info->dwProductVersionLS));
+		return out;
 	}
 
 	void RefreshAssets(App &app, const fs::path &exeDir)
@@ -365,13 +409,18 @@ namespace
 				app.lines.begin() + 1000);
 	}
 
-	// 与 util.h 的 CliPaint 同一分层：出错必高亮，其余保持冷色（Catppuccin Mocha）
+	// 日志终端行着色：语法高亮，清晰易读，不刺眼
 	ImU32 LineColor(const std::string &s)
 	{
-		const bool fail = s.rfind("[x]", 0) == 0 || s.find("FAIL") != std::string::npos;
-		if (fail) return IM_COL32(243, 139, 168, 255);                   // Mocha red
-		if (s.rfind("[!]", 0) == 0) return IM_COL32(249, 226, 175, 255); // Mocha yellow
-		return IM_COL32(205, 214, 244, 255);                             // Mocha text
+		if (s.rfind("[x]", 0) == 0 || s.find("FAIL") != std::string::npos || s.find("error") != std::string::npos)
+			return IM_COL32(248, 113, 113, 255); // DangerRed
+		if (s.rfind("[!]", 0) == 0 || s.find("WARN") != std::string::npos)
+			return IM_COL32(251, 191, 36, 255);  // WarningAmber
+		if (s.rfind("[+]", 0) == 0 || s.find("PASS") != std::string::npos || s.find("OK") != std::string::npos)
+			return IM_COL32(52, 211, 153, 255);  // SuccessGreen
+		if (s.rfind("[*]", 0) == 0)
+			return IM_COL32(56, 189, 248, 255);  // AccentCyan
+		return IM_COL32(220, 225, 235, 255);     // Standard text
 	}
 
 	// ---- 任务启停 ---------------------------------------------------------------
@@ -509,107 +558,172 @@ namespace
 		};
 	}
 
-	namespace mocha
+	// 现代工程暗色调色板（精致干练、深炭黑冷灰底色、避免蓝紫渐变）：
+	// 主基调：深炭黑底 + 冷灰面板 + 纯白/浅灰文字 + 森林绿/琥珀黄/珊瑚红状态指示 + 冰青微点缀
+	namespace palette
 	{
-		constexpr unsigned Crust     = 0x11111B, Mantle   = 0x181825, Base     = 0x1E1E2E;
-		constexpr unsigned Surface0  = 0x313244, Surface1 = 0x45475A, Surface2 = 0x585B70;
-		constexpr unsigned Overlay0  = 0x6C7086, Overlay2 = 0x9399B2;
-		constexpr unsigned Text      = 0xCDD6F4, Subtext0 = 0xA6ADC8;
-		constexpr unsigned Lavender  = 0xB4BEFE, Blue     = 0x89B4FA;
-		constexpr unsigned Sky       = 0x89DCEB, Teal     = 0x94E2D5;
-		constexpr unsigned Green     = 0xA6E3A1, Yellow   = 0xF9E2AF, Peach = 0xFAB387;
-		constexpr unsigned Red       = 0xF38BA8, Maroon   = 0xEBA0AC, Mauve = 0xCBA6F7;
-		constexpr unsigned Rosewater = 0xF5E0DC;
-	} // namespace mocha
+		// 背景与分层（深冷炭灰系，层次分明且纯净）
+		constexpr unsigned BgDeep       = 0x101216; // 窗口深底
+		constexpr unsigned BgSurface    = 0x161920; // 卡片与面板底色
+		constexpr unsigned BgCard       = 0x1B1F27; // 凸起卡片底色
+		constexpr unsigned BgHeader     = 0x202530; // 顶栏与表头底色
+		constexpr unsigned BgInput      = 0x13151B; // 输入框 / 表格底色
+		constexpr unsigned BgHover      = 0x282E3C; // 悬停态底色
+		constexpr unsigned BgActive     = 0x323A4B; // 激活态底色
 
-	void ApplyCatppuccinMocha(float dpiScale)
+		// 边框与分割线（低反差柔和线条）
+		constexpr unsigned BorderSubtle = 0x242935; // 弱边框
+		constexpr unsigned BorderLight  = 0x333A4B; // 较显眼控件边框
+		constexpr unsigned BorderFocus  = 0x4D5870; // 聚焦或高亮线
+
+		// 文字层级
+		constexpr unsigned TextMain     = 0xF0F2F5; // 主要文本：纯白略微偏暖，清晰不刺眼
+		constexpr unsigned TextMuted    = 0x9DA5B4; // 次级文本：柔和冷灰
+		constexpr unsigned TextDark     = 0x606877; // 辅助文本/注释
+
+		// 语义功能色（纯净柔和，不刺目，杜绝蓝紫渐变高饱和度）
+		constexpr unsigned AccentCyan   = 0x38BDF8; // 冰青冷点缀色（清爽极客感）
+		constexpr unsigned SuccessGreen = 0x34D399; // 成功/就绪状态绿
+		constexpr unsigned WarningAmber = 0xFBBF24; // 警告/提示琥珀黄
+		constexpr unsigned DangerRed    = 0xF87171; // 危险/失败珊瑚红
+		constexpr unsigned NeutralPill  = 0x1F242E; // 胶囊底色
+	} // namespace palette
+
+	void ApplyModernDarkTheme(float dpiScale)
 	{
 		ImGui::StyleColorsDark();
 		ImGuiStyle &s = ImGui::GetStyle();
 
-		// —— 触摸尺度基准 ——
-		s.WindowPadding     = ImVec2(16, 14);
-		s.FramePadding      = ImVec2(18, 13); // 控件命中盒高度 ≈ 字号 + 26
-		s.ItemSpacing       = ImVec2(12, 10);
-		s.ItemInnerSpacing  = ImVec2(10, 8);
-		s.CellPadding       = ImVec2(12, 10);
-		s.TouchExtraPadding = ImVec2(8, 8); // 相邻控件的额外防误触间隔
-		s.ScrollbarSize     = 24;
-		s.GrabMinSize       = 24;
-		s.WindowRounding    = 8;
-		s.ChildRounding     = 8;
-		s.FrameRounding     = 8;
-		s.PopupRounding     = 8;
-		s.ScrollbarRounding = 8;
-		s.GrabRounding      = 8;
-		s.TabRounding       = 6;
+		// 精致干练的桌面尺寸基准：告别臃肿的 44px 工控触摸尺度
+		s.WindowPadding     = ImVec2(16.0f, 16.0f);
+		s.FramePadding      = ImVec2(10.0f, 6.0f);  // 标准桌面高度 ≈ 字号 + 12px
+		s.ItemSpacing       = ImVec2(10.0f, 8.0f);
+		s.ItemInnerSpacing  = ImVec2(8.0f, 6.0f);
+		s.CellPadding       = ImVec2(8.0f, 5.0f);
+		s.TouchExtraPadding = ImVec2(0.0f, 0.0f);   // 消除多余的防误触边距
+		s.ScrollbarSize     = 10.0f;
+		s.GrabMinSize       = 10.0f;
 
-		// —— Mocha 调色 ——
+		// 统一现代微圆角（4px ~ 6px）
+		s.WindowRounding    = 0.0f; // 顶层全屏无标题窗口不倒角
+		s.ChildRounding     = 6.0f;
+		s.FrameRounding     = 4.0f;
+		s.PopupRounding     = 6.0f;
+		s.ScrollbarRounding = 5.0f;
+		s.GrabRounding      = 4.0f;
+		s.TabRounding       = 4.0f;
+
+		// 边框粗细与渲染
+		s.WindowBorderSize  = 0.0f;
+		s.ChildBorderSize   = 1.0f;
+		s.FrameBorderSize   = 1.0f;
+		s.PopupBorderSize   = 1.0f;
+
+		// 色彩映射
 		ImVec4 *c                             = s.Colors;
-		c[ImGuiCol_Text]                      = Rgb(mocha::Text);
-		c[ImGuiCol_TextDisabled]              = Rgb(mocha::Overlay0);
-		c[ImGuiCol_WindowBg]                  = Rgb(mocha::Base);
-		c[ImGuiCol_ChildBg]                   = Rgb(mocha::Base);
-		c[ImGuiCol_PopupBg]                   = Rgb(mocha::Mantle);
-		c[ImGuiCol_Border]                    = Rgb(mocha::Surface0);
+		c[ImGuiCol_Text]                      = Rgb(palette::TextMain);
+		c[ImGuiCol_TextDisabled]              = Rgb(palette::TextDark);
+		c[ImGuiCol_WindowBg]                  = Rgb(palette::BgDeep);
+		c[ImGuiCol_ChildBg]                   = Rgb(palette::BgSurface);
+		c[ImGuiCol_PopupBg]                   = Rgb(palette::BgCard);
+		c[ImGuiCol_Border]                    = Rgb(palette::BorderSubtle);
 		c[ImGuiCol_BorderShadow]              = ImVec4(0, 0, 0, 0);
-		c[ImGuiCol_FrameBg]                   = Rgb(mocha::Surface0);
-		c[ImGuiCol_FrameBgHovered]            = Rgb(mocha::Surface1);
-		c[ImGuiCol_FrameBgActive]             = Rgb(mocha::Surface2);
-		c[ImGuiCol_TitleBg]                   = Rgb(mocha::Mantle);
-		c[ImGuiCol_TitleBgActive]             = Rgb(mocha::Surface0);
-		c[ImGuiCol_TitleBgCollapsed]          = Rgb(mocha::Mantle);
-		c[ImGuiCol_MenuBarBg]                 = Rgb(mocha::Mantle);
-		c[ImGuiCol_ScrollbarBg]               = Rgb(mocha::Crust);
-		c[ImGuiCol_ScrollbarGrab]             = Rgb(mocha::Surface2);
-		c[ImGuiCol_ScrollbarGrabHovered]      = Rgb(mocha::Overlay0);
-		c[ImGuiCol_ScrollbarGrabActive]       = Rgb(mocha::Overlay2);
-		c[ImGuiCol_CheckMark]                 = Rgb(mocha::Crust);
-		// 1.92 新增：勾选态复选框底色（不设就继承 StyleColorsDark 的亮蓝）
-		c[ImGuiCol_CheckboxSelectedBg]        = Rgb(mocha::Blue);
-		c[ImGuiCol_SliderGrab]                = Rgb(mocha::Lavender);
-		c[ImGuiCol_SliderGrabActive]          = Rgb(mocha::Rosewater);
-		c[ImGuiCol_Button]                    = Rgb(mocha::Surface1);
-		c[ImGuiCol_ButtonHovered]             = Rgb(mocha::Surface2);
-		c[ImGuiCol_ButtonActive]              = Rgb(mocha::Surface0);
-		c[ImGuiCol_Header]                    = Rgb(mocha::Surface0);
-		c[ImGuiCol_HeaderHovered]             = Rgb(mocha::Surface1);
-		c[ImGuiCol_HeaderActive]              = Rgb(mocha::Surface2);
-		c[ImGuiCol_Separator]                 = Rgb(mocha::Surface1);
-		c[ImGuiCol_SeparatorHovered]          = Rgb(mocha::Surface2);
-		c[ImGuiCol_SeparatorActive]           = Rgb(mocha::Overlay0);
-		c[ImGuiCol_ResizeGrip]                = Rgb(mocha::Surface1);
-		c[ImGuiCol_ResizeGripHovered]         = Rgb(mocha::Surface2);
-		c[ImGuiCol_ResizeGripActive]          = Rgb(mocha::Overlay0);
-		c[ImGuiCol_TabHovered]                = Rgb(mocha::Surface1);
-		c[ImGuiCol_Tab]                       = Rgb(mocha::Mantle);
-		c[ImGuiCol_TabSelected]               = Rgb(mocha::Surface0);
-		c[ImGuiCol_TabSelectedOverline]       = Rgb(mocha::Lavender);
-		c[ImGuiCol_TabDimmed]                 = Rgb(mocha::Mantle);
-		c[ImGuiCol_TabDimmedSelected]         = Rgb(mocha::Surface0);
-		c[ImGuiCol_TabDimmedSelectedOverline] = Rgb(mocha::Surface1);
-		c[ImGuiCol_InputTextCursor]           = Rgb(mocha::Rosewater);
-		c[ImGuiCol_TableHeaderBg]             = Rgb(mocha::Surface0);
-		c[ImGuiCol_TableBorderStrong]         = Rgb(mocha::Surface1);
-		c[ImGuiCol_TableBorderLight]          = Rgb(mocha::Surface0);
+		c[ImGuiCol_FrameBg]                   = Rgb(palette::BgInput);
+		c[ImGuiCol_FrameBgHovered]            = Rgb(palette::BgHover);
+		c[ImGuiCol_FrameBgActive]             = Rgb(palette::BgActive);
+		c[ImGuiCol_TitleBg]                   = Rgb(palette::BgHeader);
+		c[ImGuiCol_TitleBgActive]             = Rgb(palette::BgHeader);
+		c[ImGuiCol_TitleBgCollapsed]          = Rgb(palette::BgHeader);
+		c[ImGuiCol_MenuBarBg]                 = Rgb(palette::BgHeader);
+		c[ImGuiCol_ScrollbarBg]               = ImVec4(0, 0, 0, 0);
+		c[ImGuiCol_ScrollbarGrab]             = Rgb(palette::BorderLight);
+		c[ImGuiCol_ScrollbarGrabHovered]      = Rgb(palette::BorderFocus);
+		c[ImGuiCol_ScrollbarGrabActive]       = Rgb(palette::TextMuted);
+		c[ImGuiCol_CheckMark]                 = Rgb(palette::AccentCyan);
+		c[ImGuiCol_CheckboxSelectedBg]        = Rgb(palette::BgInput);
+		c[ImGuiCol_SliderGrab]                = Rgb(palette::AccentCyan);
+		c[ImGuiCol_SliderGrabActive]          = Rgb(palette::AccentCyan);
+		c[ImGuiCol_Button]                    = Rgb(palette::BgCard);
+		c[ImGuiCol_ButtonHovered]             = Rgb(palette::BgHover);
+		c[ImGuiCol_ButtonActive]              = Rgb(palette::BgActive);
+		c[ImGuiCol_Header]                    = Rgb(palette::BgHover);
+		c[ImGuiCol_HeaderHovered]             = Rgb(palette::BgActive);
+		c[ImGuiCol_HeaderActive]              = Rgb(palette::BorderFocus);
+		c[ImGuiCol_Separator]                 = Rgb(palette::BorderSubtle);
+		c[ImGuiCol_SeparatorHovered]          = Rgb(palette::BorderLight);
+		c[ImGuiCol_SeparatorActive]           = Rgb(palette::BorderFocus);
+		c[ImGuiCol_ResizeGrip]                = ImVec4(0, 0, 0, 0);
+		c[ImGuiCol_ResizeGripHovered]         = ImVec4(0, 0, 0, 0);
+		c[ImGuiCol_ResizeGripActive]          = ImVec4(0, 0, 0, 0);
+		c[ImGuiCol_TabHovered]                = Rgb(palette::BgHover);
+		c[ImGuiCol_Tab]                       = Rgb(palette::BgSurface);
+		c[ImGuiCol_TabSelected]               = Rgb(palette::BgHeader);
+		c[ImGuiCol_TabSelectedOverline]       = Rgb(palette::AccentCyan);
+		c[ImGuiCol_TabDimmed]                 = Rgb(palette::BgSurface);
+		c[ImGuiCol_TabDimmedSelected]         = Rgb(palette::BgHeader);
+		c[ImGuiCol_TabDimmedSelectedOverline] = Rgb(palette::BorderLight);
+		c[ImGuiCol_InputTextCursor]           = Rgb(palette::AccentCyan);
+		c[ImGuiCol_TableHeaderBg]             = Rgb(palette::BgHeader);
+		c[ImGuiCol_TableBorderStrong]         = Rgb(palette::BorderSubtle);
+		c[ImGuiCol_TableBorderLight]          = Rgb(palette::BorderSubtle, 0.4f);
 		c[ImGuiCol_TableRowBg]                = ImVec4(0, 0, 0, 0);
-		c[ImGuiCol_TableRowBgAlt]             = Rgb(mocha::Mantle, 0.6f);
-		c[ImGuiCol_TextLink]                  = Rgb(mocha::Blue);
-		c[ImGuiCol_TextSelectedBg]            = Rgb(mocha::Lavender, 0.35f);
-		c[ImGuiCol_TreeLines]                 = Rgb(mocha::Surface2);
-		c[ImGuiCol_DragDropTarget]            = Rgb(mocha::Lavender);
-		c[ImGuiCol_DragDropTargetBg]          = Rgb(mocha::Base, 0.5f);
-		c[ImGuiCol_UnsavedMarker]             = Rgb(mocha::Peach);
-		c[ImGuiCol_NavCursor]                 = Rgb(mocha::Lavender);
-		c[ImGuiCol_NavWindowingHighlight]     = Rgb(mocha::Text, 0.7f);
-		c[ImGuiCol_NavWindowingDimBg]         = ImVec4(0, 0, 0, 0.2f);
-		c[ImGuiCol_ModalWindowDimBg]          = ImVec4(0, 0, 0, 0.65f);
-		c[ImGuiCol_PlotLines]                 = Rgb(mocha::Blue);
-		c[ImGuiCol_PlotLinesHovered]          = Rgb(mocha::Sky);
-		c[ImGuiCol_PlotHistogram]             = Rgb(mocha::Green);
-		c[ImGuiCol_PlotHistogramHovered]      = Rgb(mocha::Teal);
+		c[ImGuiCol_TableRowBgAlt]             = Rgb(palette::BgDeep, 0.35f);
+		c[ImGuiCol_TextLink]                  = Rgb(palette::AccentCyan);
+		c[ImGuiCol_TextSelectedBg]            = Rgb(palette::AccentCyan, 0.25f);
+		c[ImGuiCol_NavCursor]                 = Rgb(palette::AccentCyan);
+		c[ImGuiCol_ModalWindowDimBg]          = ImVec4(0.04f, 0.05f, 0.07f, 0.75f);
 
 		s.ScaleAllSizes(dpiScale);
+	}
+	// ---- 精致干练的 UI 小型组件库 ----------------------------------------------
+
+	// 状态胶囊（Badge）：圆角纯色小底色 + 语义文字
+	void RenderBadge(const char *text, unsigned fgColor, unsigned bgColor, float dpiScale)
+	{
+		const ImVec2 textSize = ImGui::CalcTextSize(text);
+		const ImVec2 padding(7.0f * dpiScale, 3.0f * dpiScale);
+		const ImVec2 pos = ImGui::GetCursorScreenPos();
+		const ImVec2 min = pos;
+		const ImVec2 max = ImVec2(pos.x + textSize.x + padding.x * 2.0f, pos.y + textSize.y + padding.y * 2.0f);
+
+		const ImU32 bgU32 = (bgColor & 0xFFFFFF00) ? bgColor : ((bgColor << 8) | 0xFF);
+		const ImU32 fgU32 = (fgColor & 0xFFFFFF00) ? fgColor : ((fgColor << 8) | 0xFF);
+
+		ImDrawList *drawList = ImGui::GetWindowDrawList();
+		drawList->AddRectFilled(min, max, bgU32, 4.0f * dpiScale);
+		drawList->AddText(ImVec2(min.x + padding.x, min.y + padding.y), fgU32, text);
+
+		ImGui::Dummy(ImVec2(textSize.x + padding.x * 2.0f, textSize.y + padding.y * 2.0f));
+	}
+
+	// 状态圆点指示灯（带柔和外光晕感）
+	void RenderStatusDot(unsigned color, float radius = 3.5f)
+	{
+		const float lineHeight = ImGui::GetTextLineHeight();
+		const ImVec2 pos = ImGui::GetCursorScreenPos();
+		const ImVec2 center(pos.x + radius + 2.0f, pos.y + lineHeight * 0.5f);
+
+		const ImU32 colU32 = (color & 0xFFFFFF00) ? color : ((color << 8) | 0xFF);
+		const ImU32 haloU32 = (colU32 & 0x00FFFFFF) | 0x33000000;
+
+		ImDrawList *drawList = ImGui::GetWindowDrawList();
+		drawList->AddCircleFilled(center, radius + 2.0f, haloU32);
+		drawList->AddCircleFilled(center, radius, colU32);
+
+		ImGui::Dummy(ImVec2(radius * 2.0f + 6.0f, lineHeight));
+	}
+
+	// 区块分节小标题（精炼优雅，不再是一整行刺目的彩色）
+	void RenderSectionHeader(const char *title, const char *subtext = nullptr)
+	{
+		ImGui::Spacing();
+		ImGui::TextColored(Rgb(palette::TextMain), "%s", title);
+		if (subtext != nullptr && subtext[0] != '\0')
+		{
+			ImGui::SameLine();
+			ImGui::TextColored(Rgb(palette::TextDark), "· %s", subtext);
+		}
+		ImGui::Spacing();
 	}
 
 	// ---- D3D9 设备管理 ----------------------------------------------------------
@@ -706,7 +820,7 @@ namespace
 	{
 		const ImGuiIO &io = ImGui::GetIO();
 
-		// 名单文件动态加载：文件一变就重载（按钮在"目标探测"标题行）
+		// 名单文件动态加载：文件一变就重载
 		TickTargetsReload(app, ImGui::GetTime());
 
 		ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -718,47 +832,80 @@ namespace
 			ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
 			ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-		ImGui::TextColored(ImVec4(0.9f, 0.9f, 1.0f, 1.0f), "IceMelt");
-		ImGui::SameLine();
-		ImGui::TextDisabled("—— 裸盘级冻结解除");
-
-		ImGui::Spacing();
-		ImGui::Separator();
-		ImGui::Spacing();
-
-		// 左右 1:1：左 = 可用宽度的一半（扣掉中间那道 ItemSpacing）
-		const float paneGap = ImGui::GetStyle().ItemSpacing.x;
-		const float paneW   = (ImGui::GetContentRegionAvail().x - paneGap) * 0.5f;
-
-		// 左侧：系统信息、资产清单、目标探测
-		ImGui::BeginChild("LeftPane", ImVec2(paneW, 0), true);
+		// ---- 顶部导航与状态条 (Header & Status Bar) --------------------------------
 		{
-			ImGui::TextColored(Rgb(mocha::Lavender), "系统信息");
-			ImGui::Spacing();
-			ImGui::Text("操作系统: %s", app.osVersion.c_str());
-			ImGui::Text("提权状态: %s", app.elevated ? "已提权" : "未提权（按钮禁用）");
-			ImGui::TextWrapped("程序目录: %s", app.exeDirUtf8.c_str());
+			// 标题区
+			if (app.fontTitle != nullptr) ImGui::PushFont(app.fontTitle, 20.0f);
+			ImGui::TextColored(Rgb(palette::TextMain), "IceMelt");
+			if (app.fontTitle != nullptr) ImGui::PopFont();
+
+			ImGui::SameLine();
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextColored(Rgb(palette::TextDark), "%s", app.version.c_str());
+
+			ImGui::SameLine();
+			ImGui::TextColored(Rgb(palette::TextMuted), "—— 裸盘级冻结解除工具");
+
+			// 右侧状态胶囊（系统信息与提权状态）
+			const float rightMargin = 16.0f * app.dpiScale;
+			const char *elevText = app.elevated ? "已提权 (Admin)" : "未提权 (只读)";
+			const unsigned elevFg = app.elevated ? palette::SuccessGreen : palette::WarningAmber;
+			const unsigned elevBg = app.elevated ? 0x15281E : 0x2A2215;
+
+			const ImVec2 elevSize = ImGui::CalcTextSize(elevText);
+			const float badgePad = 12.0f * app.dpiScale;
+			const float totalBadgeW = elevSize.x + badgePad + 18.0f * app.dpiScale;
+
+			ImGui::SameLine(ImGui::GetWindowWidth() - totalBadgeW - rightMargin);
+			RenderStatusDot(elevFg, 3.5f * app.dpiScale);
+			ImGui::SameLine();
+			RenderBadge(elevText, elevFg, elevBg, app.dpiScale);
 
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::Spacing();
+		}
 
-			ImGui::TextColored(Rgb(mocha::Lavender), "运行期资产");
+		// ---- 左右分栏布局 -----------------------------------------------------------
+		const float paneGap = ImGui::GetStyle().ItemSpacing.x;
+		// 稍微将左栏比例定在 48%，右栏 52%，给日志和操作留出舒适空间
+		const float leftW = (ImGui::GetContentRegionAvail().x - paneGap) * 0.48f;
+
+		// ==== 左侧面板：运行期资产与目标探测 ==========================================
+		ImGui::BeginChild("LeftPane", ImVec2(leftW, 0), true);
+		{
+			// ---- 1. 系统与资产概览 ----
+			RenderSectionHeader("环境与资产", "本地运行时组件清点");
+
+			// 系统信息微卡片
+			ImGui::PushStyleColor(ImGuiCol_ChildBg, Rgb(palette::BgInput));
+			ImGui::BeginChild("SysInfoCard", ImVec2(0, 58.0f * app.dpiScale), true);
+			{
+				ImGui::TextColored(Rgb(palette::TextDark), "操作系统: ");
+				ImGui::SameLine();
+				ImGui::TextColored(Rgb(palette::TextMain), "%s", app.osVersion.c_str());
+
+				ImGui::TextColored(Rgb(palette::TextDark), "程序目录: ");
+				ImGui::SameLine();
+				ImGui::TextColored(Rgb(palette::TextMuted), "%s", app.exeDirUtf8.c_str());
+			}
+			ImGui::EndChild();
+			ImGui::PopStyleColor();
+
 			ImGui::Spacing();
-			// 每行两个资产（项目|状态|项目|状态）：8 项 4 行。只读清单不需要触摸尺寸，
-			// 而 1280x800@150% 这样的窗口里 8 行会把下面的目标表整块挤没。
-			ImGui::PushStyleVar(
-				ImGuiStyleVar_CellPadding,
-				ImVec2(12.0f * app.dpiScale, 4.0f * app.dpiScale));
+
+			// 资产表格（双列紧凑排布）
+			ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(8.0f * app.dpiScale, 4.0f * app.dpiScale));
 			{
 				constexpr int kPerRow = 2;
-				const int     rows = (static_cast<int>(app.assets.size()) + kPerRow - 1) /
-						kPerRow;
-				if (ImGui::BeginTable(
-					"##Assets",
-					kPerRow * 2,
-					ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
+				const int rows = (static_cast<int>(app.assets.size()) + kPerRow - 1) / kPerRow;
+				if (ImGui::BeginTable("##Assets", kPerRow * 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
 				{
+					ImGui::TableSetupColumn("Item0", ImGuiTableColumnFlags_WidthStretch);
+					ImGui::TableSetupColumn("Status0", ImGuiTableColumnFlags_WidthFixed, 60.0f * app.dpiScale);
+					ImGui::TableSetupColumn("Item1", ImGuiTableColumnFlags_WidthStretch);
+					ImGui::TableSetupColumn("Status1", ImGuiTableColumnFlags_WidthFixed, 60.0f * app.dpiScale);
+
 					for (int r = 0; r < rows; ++r)
 					{
 						ImGui::TableNextRow();
@@ -773,15 +920,16 @@ namespace
 							}
 							const auto &a = app.assets[idx];
 							ImGui::TableNextColumn();
-							ImGui::Text("%s", a.label);
+							ImGui::AlignTextToFramePadding();
+							ImGui::TextColored(Rgb(palette::TextMain), "%s", a.label);
 							ImGui::TableNextColumn();
 							if (a.present)
 							{
-								ImGui::TextColored(Rgb(mocha::Green), "present");
+								RenderBadge("就绪", palette::SuccessGreen, 0x162A1F, app.dpiScale);
 							}
 							else
 							{
-								ImGui::TextColored(Rgb(mocha::Red), "MISSING");
+								RenderBadge("缺失", palette::DangerRed, 0x2C181B, app.dpiScale);
 							}
 						}
 					}
@@ -794,9 +942,9 @@ namespace
 			ImGui::Separator();
 			ImGui::Spacing();
 
-			ImGui::TextColored(Rgb(mocha::Lavender), "目标探测（只读）");
-			ImGui::Spacing();
-			// 标题一行、操作一行（左对齐）；按钮同排的来源文字按 frame 高度对齐基线
+			// ---- 2. 目标探测 ----
+			RenderSectionHeader("目标探测", "驱动与注册表服务项");
+
 			if (ImGui::Button("重新加载名单"))
 			{
 				RefreshTargets(app, icemelt::ExeDir(), true);
@@ -805,31 +953,28 @@ namespace
 			ImGui::AlignTextToFramePadding();
 			if (app.targetsFile.empty())
 			{
-				ImGui::TextDisabled("内置默认（未找到 targets.txt）");
+				RenderBadge("内置默认 (未找到 targets.txt)", palette::TextDark, palette::NeutralPill, app.dpiScale);
 			}
 			else
 			{
-				ImGui::TextDisabled(
-					"%s",
-					icemelt::Narrow(app.targetsFile.filename().wstring()).c_str());
+				const std::string fn = icemelt::Narrow(app.targetsFile.filename().wstring());
+				RenderBadge(fn.c_str(), palette::AccentCyan, palette::NeutralPill, app.dpiScale);
 				if (ImGui::IsItemHovered())
 				{
-					ImGui::SetTooltip(
-						"%s",
-						icemelt::Narrow(app.targetsFile.wstring()).c_str());
+					ImGui::SetTooltip("%s", icemelt::Narrow(app.targetsFile.wstring()).c_str());
 				}
 			}
+
 			ImGui::Spacing();
-			// 高度吃掉剩余空间：内容与容器等高 → 左栏不出现多余滚动条。
-			// slack 是固定开销（表格外围边框等推算不到的部分），用「上次施加量 + 本次残余」
-			// 迭代到不动点；直接拿实测值反馈会两帧振荡（0 → 75 → 0 → …）。
-			static float slack   = 0.0f;
-			const float  applied = slack;
-			const float  availY  = ImGui::GetContentRegionAvail().y - ImGui::GetStyle().
-					ItemSpacing.y;
-			const float minH     = 170.0f * app.dpiScale;
-			const bool  clamped  = (availY - applied) < minH;
+
+			// 目标清单自适应高度表格
+			static float slack = 0.0f;
+			const float applied = slack;
+			const float availY = ImGui::GetContentRegionAvail().y - ImGui::GetStyle().ItemSpacing.y;
+			const float minH = 160.0f * app.dpiScale;
+			const bool clamped = (availY - applied) < minH;
 			const float targetsH = clamped ? minH : (availY - applied);
+
 			if (ImGui::BeginTable(
 				"##Targets",
 				3,
@@ -837,117 +982,170 @@ namespace
 				ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit,
 				ImVec2(0, targetsH)))
 			{
-				// 名称/标签列宽随内容（避免中文被裁），状态列吃余量并折行
-				ImGui::TableSetupColumn("名称");
-				ImGui::TableSetupColumn("标签");
+				ImGui::TableSetupColumn("名称", ImGuiTableColumnFlags_WidthFixed, 90.0f * app.dpiScale);
+				ImGui::TableSetupColumn("标签", ImGuiTableColumnFlags_WidthFixed, 100.0f * app.dpiScale);
 				ImGui::TableSetupColumn("状态", ImGuiTableColumnFlags_WidthStretch);
 				ImGui::TableSetupScrollFreeze(0, 1);
 				ImGui::TableHeadersRow();
+
 				for (const auto &t: app.targets)
 				{
 					ImGui::TableNextRow();
 					ImGui::TableNextColumn();
-					ImGui::Text("%s", t.name.c_str());
+					ImGui::TextColored(Rgb(palette::TextMain), "%s", t.name.c_str());
+
 					ImGui::TableNextColumn();
-					ImGui::Text("%s", t.label.c_str());
+					ImGui::TextColored(Rgb(palette::TextMuted), "%s", t.label.c_str());
+
 					ImGui::TableNextColumn();
 					if (t.present)
 					{
-						ImGui::TextColored(Rgb(mocha::Peach), "%s", t.status.c_str());
+						RenderBadge("存在", palette::WarningAmber, 0x2A2215, app.dpiScale);
+						ImGui::SameLine();
+						ImGui::TextColored(Rgb(palette::WarningAmber), "%s", t.status.c_str());
 					}
 					else
 					{
-						ImGui::TextDisabled("%s", t.status.c_str());
+						ImGui::TextColored(Rgb(palette::TextDark), "未探测到");
 					}
 				}
 				ImGui::EndTable();
 			}
-			// 实测残余溢出：迭代到不动点（被 min 高度夹住时不再累积，避免无界增长）
 			if (!clamped) slack = applied + ImGui::GetScrollMaxY();
 		}
 		ImGui::EndChild();
 
 		ImGui::SameLine();
 
-		// 右侧：动作按钮、日志视图
+		// ==== 右侧面板：操作与控制台日志 ============================================
 		ImGui::BeginChild("RightPane", ImVec2(0, 0), true);
 		{
-			ImGui::TextColored(Rgb(mocha::Lavender), "动作");
-			ImGui::Spacing();
+			// ---- 1. 任务动作区域 ----
+			RenderSectionHeader("操作控制", "解冻管线与任务分发");
 
-			const bool  canAct = app.elevated && !app.running;
-			const float btnH   = 56.0f * app.dpiScale; // 触摸目标：整行可点
+			const bool canAct = app.elevated && !app.running;
+			const float actionBtnH = 36.0f * app.dpiScale; // 干练现代的标准操作按钮高度
 
 			ImGui::BeginDisabled(!canAct);
 
-			if (ImGui::Button("预检扫描 (--preflight)", ImVec2(-FLT_MIN, btnH)))
+			// 常规动作：预检扫描 与 只读预演 并排
+			const float halfW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+
+			if (ImGui::Button("预检扫描 (--preflight)", ImVec2(halfW, actionBtnH)))
 			{
 				StartJob(app, JobKind::Preflight);
 			}
-			ImGui::TextDisabled("装驱动 + 四层探针读写校验（只在带快照的 VM 里跑）");
-			ImGui::Spacing();
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip("装载驱动并运行四层探针读写校验（请务必在已创建快照的虚拟机中测试）");
+			}
 
-			if (ImGui::Button("只读预演 (--dry-run)", ImVec2(-FLT_MIN, btnH)))
+			ImGui::SameLine();
+
+			if (ImGui::Button("只读预演 (--dry-run)", ImVec2(halfW, actionBtnH)))
 			{
 				StartJob(app, JobKind::DryRun);
 			}
-			ImGui::TextDisabled("全链路预演，不写裸盘");
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip("执行全链路预演逻辑，不产生任何裸盘写入");
+			}
+
 			ImGui::Spacing();
 
-			ImGui::PushStyleColor(ImGuiCol_Button, Rgb(mocha::Red));
-			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Rgb(mocha::Rosewater));
-			ImGui::PushStyleColor(ImGuiCol_ButtonActive, Rgb(mocha::Maroon));
-			ImGui::PushStyleColor(ImGuiCol_Text, Rgb(mocha::Crust));
-			if (ImGui::Button("执行 MELT (--melt)", ImVec2(-FLT_MIN, btnH)))
+			// 危险操作：MELT
+			const bool isMeltActive = canAct;
+			if (isMeltActive)
+			{
+				ImGui::PushStyleColor(ImGuiCol_Button, Rgb(0x421D24));
+				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Rgb(0x5E2833));
+				ImGui::PushStyleColor(ImGuiCol_ButtonActive, Rgb(0x782F3E));
+				ImGui::PushStyleColor(ImGuiCol_Text, Rgb(palette::DangerRed));
+				ImGui::PushStyleColor(ImGuiCol_Border, Rgb(palette::DangerRed, 0.4f));
+			}
+
+			if (ImGui::Button("执行 MELT 离线解除 (--melt)", ImVec2(-FLT_MIN, 40.0f * app.dpiScale)))
 			{
 				StartJob(app, JobKind::Melt);
 			}
-			ImGui::PopStyleColor(4);
-			ImGui::TextDisabled("写回 hive 并置 dirty 标记");
+
+			if (isMeltActive)
+			{
+				ImGui::PopStyleColor(5);
+			}
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip("写回离线 SYSTEM Hive 并置 dirty 标记，触发系统自修复解冻流程");
+			}
 
 			ImGui::EndDisabled();
 
 			ImGui::Spacing();
-			ImGui::Separator();
-			ImGui::Spacing();
 
+			// 运行状态与结果条
+			ImGui::AlignTextToFramePadding();
 			if (app.running)
 			{
-				ImGui::TextColored(Rgb(mocha::Yellow), "运行中: %s", JobName(app.kind));
+				RenderStatusDot(palette::WarningAmber, 3.5f * app.dpiScale);
+				ImGui::SameLine();
+				RenderBadge("执行中", palette::WarningAmber, 0x2A2215, app.dpiScale);
+				ImGui::SameLine();
+				ImGui::TextColored(Rgb(palette::TextMain), "正在运行: %s", JobName(app.kind));
 			}
 			else if (app.lastKind != JobKind::None)
 			{
 				if (app.lastOk)
 				{
-					ImGui::TextColored(
-						Rgb(mocha::Green),
-						"上次任务: %s (成功)",
-						JobName(app.lastKind));
+					RenderStatusDot(palette::SuccessGreen, 3.5f * app.dpiScale);
+					ImGui::SameLine();
+					RenderBadge("成功", palette::SuccessGreen, 0x162A1F, app.dpiScale);
 				}
 				else
 				{
-					ImGui::TextColored(
-						Rgb(mocha::Red),
-						"上次任务: %s (失败)",
-						JobName(app.lastKind));
+					RenderStatusDot(palette::DangerRed, 3.5f * app.dpiScale);
+					ImGui::SameLine();
+					RenderBadge("失败", palette::DangerRed, 0x2C181B, app.dpiScale);
 				}
+				ImGui::SameLine();
+				ImGui::TextColored(Rgb(palette::TextMain), "%s 完成", JobName(app.lastKind));
+
 				if (app.lastWroteDisk)
 				{
 					ImGui::SameLine();
-					ImGui::TextColored(Rgb(mocha::Maroon), "[已动过裸盘]");
+					RenderBadge("已写入裸盘", palette::DangerRed, 0x36161B, app.dpiScale);
 				}
+			}
+			else
+			{
+				RenderStatusDot(palette::TextDark, 3.5f * app.dpiScale);
+				ImGui::SameLine();
+				ImGui::TextColored(Rgb(palette::TextDark), "就绪，等待下发任务");
 			}
 
 			ImGui::Spacing();
-			ImGui::TextColored(Rgb(mocha::Lavender), "日志");
+			ImGui::Separator();
 			ImGui::Spacing();
 
+			// ---- 2. 日志控制台终端 ----
+			RenderSectionHeader("输出终端", "实时执行日志与取证输出");
+
+			ImGui::SameLine(ImGui::GetWindowWidth() * 0.5f - 110.0f * app.dpiScale);
+			ImGui::Checkbox("自动滚动", &app.follow);
+			ImGui::SameLine();
+			if (ImGui::Button("清空"))
+			{
+				app.lines.clear();
+			}
+
+			ImGui::PushStyleColor(ImGuiCol_ChildBg, Rgb(palette::BgDeep));
 			ImGui::BeginChild(
 				"##Log",
 				ImVec2(0, 0),
 				true,
 				ImGuiWindowFlags_HorizontalScrollbar);
 			{
+				if (app.fontMono != nullptr) ImGui::PushFont(app.fontMono, 13.5f);
+
 				for (const auto &line: app.lines)
 				{
 					ImGui::TextColored(
@@ -955,19 +1153,22 @@ namespace
 						"%s",
 						line.c_str());
 				}
+
+				if (app.fontMono != nullptr) ImGui::PopFont();
+
 				if (app.follow && !app.lines.empty())
 				{
 					ImGui::SetScrollHereY(1.0f);
-					app.follow = false;
 				}
 			}
 			ImGui::EndChild();
+			ImGui::PopStyleColor();
 		}
 		ImGui::EndChild();
 
 		ImGui::End();
 
-		// confirm 模态框
+		// confirm 模态框（统一采用现代干练的弹窗规范）
 		if (app.confirmOpen)
 		{
 			ImGui::OpenPopup("确认写入");
@@ -976,40 +1177,53 @@ namespace
 				nullptr,
 				ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove))
 			{
-				ImGui::TextColored(Rgb(mocha::Yellow), "即将写入裸盘。请确认以下动作：");
+				RenderSectionHeader("危险操作确认", "请仔细核对即将执行的裸盘写入项");
+				ImGui::TextColored(Rgb(palette::WarningAmber), "此操作不可逆！以下项目将被写入目标磁盘：");
 				ImGui::Spacing();
+
+				ImGui::PushStyleColor(ImGuiCol_ChildBg, Rgb(palette::BgInput));
+				ImGui::BeginChild("ConfirmItemsBox", ImVec2(460.0f * app.dpiScale, 120.0f * app.dpiScale), true);
 				for (const auto &item: app.confirmItems)
 				{
 					ImGui::BulletText("%s", item.c_str());
 				}
+				ImGui::EndChild();
+				ImGui::PopStyleColor();
+
 				ImGui::Spacing();
-				ImGui::Separator();
+				ImGui::TextColored(Rgb(palette::TextMuted), "请输入 ");
+				ImGui::SameLine();
+				ImGui::TextColored(Rgb(palette::DangerRed), "MELT");
+				ImGui::SameLine();
+				ImGui::TextColored(Rgb(palette::TextMuted), " 并确认以继续：");
 				ImGui::Spacing();
-				ImGui::Text("键入 MELT 并点击确认以继续，或点击取消。");
-				ImGui::Spacing();
-				ImGui::SetNextItemWidth(360.0f * app.dpiScale);
+
+				ImGui::SetNextItemWidth(460.0f * app.dpiScale);
 				ImGui::InputText(
 					"##ConfirmInput",
 					app.confirmBuf,
 					sizeof(app.confirmBuf));
 				ImGui::Spacing();
+				ImGui::Separator();
+				ImGui::Spacing();
 
-				const bool  match    = (std::strcmp(app.confirmBuf, "MELT") == 0);
-				const float modalBtn = 52.0f * app.dpiScale;
+				const bool match = (std::strcmp(app.confirmBuf, "MELT") == 0);
+				const float modalBtnW = 120.0f * app.dpiScale;
+				const float modalBtnH = 34.0f * app.dpiScale;
 
 				if (match)
 				{
-					ImGui::PushStyleColor(ImGuiCol_Button, Rgb(mocha::Red));
-					ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Rgb(mocha::Rosewater));
-					ImGui::PushStyleColor(ImGuiCol_ButtonActive, Rgb(mocha::Maroon));
-					ImGui::PushStyleColor(ImGuiCol_Text, Rgb(mocha::Crust));
+					ImGui::PushStyleColor(ImGuiCol_Button, Rgb(0x421D24));
+					ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Rgb(0x5E2833));
+					ImGui::PushStyleColor(ImGuiCol_ButtonActive, Rgb(0x782F3E));
+					ImGui::PushStyleColor(ImGuiCol_Text, Rgb(palette::DangerRed));
 				}
 				else
 				{
 					ImGui::BeginDisabled();
 				}
 
-				if (ImGui::Button("确认", ImVec2(160 * app.dpiScale, modalBtn)))
+				if (ImGui::Button("确认写入", ImVec2(modalBtnW, modalBtnH)))
 				{
 					std::lock_guard<std::mutex> guard(app.shared.mu);
 					app.shared.confirmAnswer   = true;
@@ -1029,7 +1243,7 @@ namespace
 				}
 
 				ImGui::SameLine();
-				if (ImGui::Button("取消", ImVec2(160 * app.dpiScale, modalBtn)))
+				if (ImGui::Button("取消", ImVec2(modalBtnW, modalBtnH)))
 				{
 					std::lock_guard<std::mutex> guard(app.shared.mu);
 					app.shared.confirmAnswer   = false;
@@ -1103,44 +1317,74 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
 	// 布局是固定单窗口，不需要持久化；默认会在**工作目录**写出 imgui.ini
 	io.IniFilename = nullptr;
 
-	ApplyCatppuccinMocha(mainScale);
+	ApplyModernDarkTheme(mainScale);
 	ImGui::GetStyle().FontScaleDpi = mainScale;
 
 	ImGui_ImplWin32_Init(hwnd);
 	ImGui_ImplDX9_Init(g_pd3dDevice);
 
-	// CJK 字体：1.92 起为动态字形加载（DX9 后端已置 ImGuiBackendFlags_RendererHasTextures），
-	// 因此**不需要**预烘焙 glyph ranges —— 用到哪个字才加载哪个。字体目录按
-	// GetWindowsDirectoryW 取（系统盘不一定是 C:）。先探存在再加载：AddFontFromFileTTF
-	// 对缺失文件会走 IM_ASSERT_USER_ERROR，debug 构建下会中断。
+	// 字体配置：
+	// 1. 默认常规 UI 字体（微软雅黑 / 等，15px，紧凑干练）
+	// 2. 标题字体（18px）
+	// 3. 极客等宽终端字体（Consolas，用于日志区）
+	ImFont *fontRegular = nullptr;
+	ImFont *fontTitle   = nullptr;
+	ImFont *fontMono    = nullptr;
 	{
 		wchar_t winDir[MAX_PATH] = {};
 		::GetWindowsDirectoryW(winDir, MAX_PATH);
-		const std::wstring fontsDir      = std::wstring(winDir) + L"\\Fonts\\";
-		const wchar_t *    kCandidates[] = {
+		const std::wstring fontsDir = std::wstring(winDir) + L"\\Fonts\\";
+
+		const wchar_t *kCandidates[] = {
 			L"msyh.ttc",
 			L"msyh.ttf",
 			L"Deng.ttf",
 			L"simhei.ttf",
 			L"simsun.ttc"
 		};
+
+		std::string foundUiFont;
 		for (const wchar_t *name: kCandidates)
 		{
 			const fs::path candidate = fs::path(fontsDir) / name;
 			if (!icemelt::PathIsRegularFile(candidate)) continue;
-			if (io.Fonts->AddFontFromFileTTF(
-				icemelt::Narrow(candidate.wstring()).c_str(),
-				18.0f) != nullptr)
-				break;
+			foundUiFont = icemelt::Narrow(candidate.wstring());
+			break;
 		}
-		// 全部缺失时回落内置字体（仅 ASCII）：界面仍可用，中文显示为占位符。
+
+		if (!foundUiFont.empty())
+		{
+			fontRegular = io.Fonts->AddFontFromFileTTF(foundUiFont.c_str(), 15.0f);
+			fontTitle   = io.Fonts->AddFontFromFileTTF(foundUiFont.c_str(), 19.0f);
+		}
+
+		const fs::path consolasPath = fs::path(fontsDir) / L"consola.ttf";
+		if (icemelt::PathIsRegularFile(consolasPath) && !foundUiFont.empty())
+		{
+			fontMono = io.Fonts->AddFontFromFileTTF(
+				icemelt::Narrow(consolasPath.wstring()).c_str(),
+				14.0f);
+			ImFontConfig mergeCfg;
+			mergeCfg.MergeMode = true;
+			io.Fonts->AddFontFromFileTTF(
+				foundUiFont.c_str(),
+				14.0f,
+				&mergeCfg);
+		}
+		else if (fontRegular != nullptr)
+		{
+			fontMono = fontRegular;
+		}
 	}
 
 	// 初始化 App 状态
 	App app;
 	app.hwnd              = hwnd;
 	app.dpiScale          = mainScale;
+	app.fontMono          = fontMono;
+	app.fontTitle         = fontTitle;
 	app.elevated          = icemelt::IsProcessElevated();
+	app.version           = VersionString();
 	app.osVersion         = WindowsVersionString();
 	const fs::path exeDir = icemelt::ExeDir();
 	app.exeDirUtf8        = icemelt::Narrow(exeDir.wstring());
